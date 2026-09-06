@@ -577,12 +577,7 @@ fn particle_without_effects_uses_the_backend_native_draw_boundary() {
                 y: OrderedFloat(0.0),
                 z: OrderedFloat(0.0),
             },
-            gravity: crate::model::property::Vec3 {
-                x: OrderedFloat(0.0),
-                y: OrderedFloat(0.0),
-                z: OrderedFloat(0.0),
-            },
-            drag: OrderedFloat(0.0),
+            forces: Vec::new(),
             size_min: OrderedFloat(1.0),
             size_max: OrderedFloat(1.0),
             color: Color::white(),

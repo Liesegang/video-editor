@@ -196,6 +196,7 @@ impl NativeNodeCatalogDescriptor {
                 NativeNodeFactory::Generator(_)
                     | NativeNodeFactory::Value(_)
                     | NativeNodeFactory::Data(_)
+                    | NativeNodeFactory::Color(ColorContent::ColorRamp)
                     | NativeNodeFactory::Merge
                     | NativeNodeFactory::SoundMerge
                     | NativeNodeFactory::NativeOperation

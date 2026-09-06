@@ -4,10 +4,12 @@
 )]
 
 use library::model::project::{NodeContainer, PortAddress, PortOwner};
+use library::model::property::{Property, PropertyValue, Vec3};
 use library::model::{
     Composition, NativeNodeFactory, NativeNodeRuntimeStatus, Node, NodeContent, Project,
     native_node_catalog, native_node_descriptor, native_node_descriptor_for_node,
 };
+use ordered_float::OrderedFloat;
 use uuid::Uuid;
 
 fn detached(catalog_id: &str) -> Node {
@@ -64,6 +66,57 @@ fn detached_catalog_factories_round_trip_to_their_stable_descriptor() {
 }
 
 #[test]
+fn particle_force_catalog_entries_are_executable_and_validate_physical_domains() {
+    for catalog_id in [
+        "native.particle.gravity-force",
+        "native.particle.drag-force",
+        "native.particle.turbulence",
+        "native.particle.vortex-force",
+        "native.particle.point-force",
+    ] {
+        assert_eq!(
+            native_node_descriptor(catalog_id)
+                .expect("force descriptor")
+                .runtime_status(),
+            NativeNodeRuntimeStatus::Implemented
+        );
+    }
+
+    let mut vortex = detached("native.particle.vortex-force");
+    vortex
+        .set_property(
+            "axis".to_string(),
+            Property::constant(PropertyValue::Vec3(Vec3 {
+                x: OrderedFloat(0.0),
+                y: OrderedFloat(0.0),
+                z: OrderedFloat(0.0),
+            })),
+        )
+        .expect("declared axis");
+    let error = native_node_descriptor("native.particle.vortex-force")
+        .unwrap()
+        .validate_native_properties(vortex.properties())
+        .expect_err("zero vortex axis");
+    assert!(error.contains("non-zero"), "{error}");
+
+    let mut turbulence = detached("native.particle.turbulence");
+    turbulence
+        .set_property(
+            "octaves".to_string(),
+            Property::constant(PropertyValue::Integer(5)),
+        )
+        .expect("declared octaves");
+    let error = native_node_descriptor("native.particle.turbulence")
+        .unwrap()
+        .validate_native_properties(turbulence.properties())
+        .expect_err("bounded turbulence octaves");
+    assert!(
+        error.contains("Octaves") || error.contains("octaves"),
+        "{error}"
+    );
+}
+
+#[test]
 fn particle_and_mograph_typed_graphs_survive_project_save_load() {
     let mut project = Project::new("typed native placeholder graph");
     let (composition, track) = Composition::new("main", 1920, 1080, 30.0, 10.0);
@@ -81,13 +134,21 @@ fn particle_and_mograph_typed_graphs_survive_project_save_load() {
         composition_id,
         "native.particle.gravity-force",
     );
+    let turbulence = add(&mut project, composition_id, "native.particle.turbulence");
+    let drag = add(&mut project, composition_id, "native.particle.drag-force");
+    let vortex = add(&mut project, composition_id, "native.particle.vortex-force");
+    let point = add(&mut project, composition_id, "native.particle.point-force");
     let sprite = add(
         &mut project,
         composition_id,
         "native.particle.sprite-renderer",
     );
     connect(&mut project, emitter, "particles", gravity, "particles");
-    connect(&mut project, gravity, "particles", sprite, "particles");
+    connect(&mut project, gravity, "particles", turbulence, "particles");
+    connect(&mut project, turbulence, "particles", drag, "particles");
+    connect(&mut project, drag, "particles", vortex, "particles");
+    connect(&mut project, vortex, "particles", point, "particles");
+    connect(&mut project, point, "particles", sprite, "particles");
 
     let camera = add(&mut project, composition_id, "native.3d.camera");
     let object = add(&mut project, composition_id, "native.3d.mesh-instance");

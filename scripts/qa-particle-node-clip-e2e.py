@@ -1,6 +1,15 @@
 #!/usr/bin/env python3
 """Verify the production Particle System authoring path end to end."""
 
+from qa_particle_force_support import (
+    assert_same_frame_particle_delta as _assert_same_frame_particle_delta,
+    constant_property as _constant_property,
+    edit_turbulence_and_assert_history as _edit_turbulence_and_assert_history,
+    parameter as _parameter,
+    reveal_inspector_control as _reveal_inspector_control,
+    wait_particle_preview as _wait_particle_preview,
+)
+from qa_automation_support import history_shortcut as _press_history_shortcut
 from qa_support import (
     QaFailure,
     activate_dock_tab,
@@ -32,6 +41,11 @@ PUBLISHED_PARAMETERS = [
     "Birth Size Min",
     "Birth Size Max",
     "Gravity",
+    "Turbulence Strength",
+    "Turbulence Frequency",
+    "Turbulence Octaves",
+    "Turbulence Evolution",
+    "Turbulence Seed",
     "Drag",
     "Color",
 ]
@@ -41,6 +55,7 @@ PARTICLE_CATALOG_IDS = {
     "native.particle.shape-location",
     "native.particle.initialize",
     "native.particle.gravity-force",
+    "native.particle.turbulence",
     "native.particle.drag-force",
     "native.particle.sprite-renderer",
 }
@@ -118,56 +133,6 @@ def _active_definition(state):
     if definition is None:
         raise QaFailure("Node Editor document points at a missing Module Definition")
     return document, definition_id, definition
-
-
-def _wait_particle_preview(client, revision, frame):
-    def rendered():
-        state = client.state()
-        preview = state["editor"]["preview"]
-        if (
-            state["editor"].get("error") is None
-            and preview.get("rendered_revision") == revision
-            and preview.get("rendered_frame") == frame
-            and int(preview.get("nontransparent_pixels") or 0) > 0
-            and preview.get("pixel_hash")
-        ):
-            return state
-        return None
-
-    return client.wait_until(
-        "nontransparent Particle preview for the current revision and frame",
-        rendered,
-        timeout=30.0,
-    )
-
-
-def _assert_same_frame_particle_delta(baseline, edited):
-    if baseline.get("rendered_frame") != edited.get("rendered_frame"):
-        raise QaFailure("Particle parameter comparison did not use one exact frame")
-    if not baseline.get("pixel_hash") or not edited.get("pixel_hash"):
-        raise QaFailure("Particle parameter comparison has no rendered pixel hash")
-    if int(baseline.get("nontransparent_pixels") or 0) <= 0:
-        raise QaFailure("Particle comparison baseline has no visible rendered pixels")
-    if int(edited.get("nontransparent_pixels") or 0) <= 0:
-        raise QaFailure("Particle parameter edit removed all visible rendered pixels")
-    if baseline["pixel_hash"] == edited["pixel_hash"]:
-        raise QaFailure(
-            "editing only the Particle instance did not change same-frame Preview pixels"
-        )
-
-
-def _press_history_shortcut(client, redo=False):
-    client.key("z", True, command=True, shift=redo)
-    client.key("z", False, command=True, shift=redo)
-
-
-def _reveal_inspector_control(client, control_id):
-    for _ in range(8):
-        component = _component(client.component_snapshot(), control_id)
-        if component is not None and _is_interactable(component):
-            return client.wait_component_settled(control_id)[1]
-        client.scroll_component("inspector.scroll_area", delta_x=0.0, delta_y=-220.0)
-    raise QaFailure("could not reveal Inspector control " + control_id)
 
 
 def _edit_seed_and_assert_history(client, instance_id, parameters, baseline_state):
@@ -331,8 +296,8 @@ def _assert_open_particle_definition(
     if native_ids != PARTICLE_CATALOG_IDS:
         raise QaFailure("production Node Editor opened the wrong Particle topology")
     output_ids = _module_output_node_ids(opened_definition)
-    if len(nodes) != 7 or len(output_ids) != 1:
-        raise QaFailure("Particle Node Editor omitted its six Nodes or Output terminal")
+    if len(nodes) != 8 or len(output_ids) != 1:
+        raise QaFailure("Particle Node Editor omitted its seven Nodes or Output terminal")
     for node_id in nodes:
         component = _wait_registered_component(client, "node_editor.node:" + node_id)
         metadata = component.get("metadata") or {}
@@ -488,8 +453,8 @@ def _create_unpublished_emitter_and_assert_locked_rate(
     restored = client.wait_until("one Undo restoring the Particle topology", emitter_undone)
     restored_graph = restored["project"]["module_definitions"][definition_id]["graph"]
     if (
-        len(restored_graph["nodes"]) != 7
-        or len(restored_graph["connections"]) != 6
+        len(restored_graph["nodes"]) != 8
+        or len(restored_graph["connections"]) != 7
         or restored["history"].get("can_redo") is not True
     ):
         raise QaFailure("Particle Emitter creation was not one Undo boundary")
@@ -523,6 +488,33 @@ def _create_unpublished_emitter_and_assert_locked_rate(
             "can_redo": restored["history"].get("can_redo"),
         },
     }
+
+
+def _assert_force_catalog_entries(client):
+    evidence = {}
+    for query, component_id in (
+        ("turbulence", "node_editor.menu.create.particle_turbulence"),
+        ("vortex force", "node_editor.menu.create.particle_vortex_force"),
+        ("point force", "node_editor.menu.create.particle_point_force"),
+    ):
+        point = find_clear_canvas_point(
+            client.component_snapshot(),
+            NODE_EDITOR_CANVAS_ID,
+            ("node_editor.node:", "node_editor.node_header:"),
+        )
+        client.inject(
+            "click", {**point, "button": "secondary", "coordinate_space": "points"}
+        )
+        client.wait_component_settled("node_editor.menu.search")
+        client.click_component("node_editor.menu.search")
+        client.inject("text", {"text": query})
+        _, entry = client.wait_component_settled(component_id)
+        if entry.get("enabled") is not True:
+            raise QaFailure(query + " is not executable in the production Node catalog")
+        evidence[query] = entry
+        client.key("escape", True)
+        client.key("escape", False)
+    return evidence
 
 
 def _assert_inspector_capabilities(client, instance_id, parameters):
@@ -684,10 +676,19 @@ def run_suite(client):
         raise QaFailure("Particle Definition is not private to its Timeline Item")
     graph = definition.get("graph") or {}
     parameters = (definition.get("interface") or {}).get("parameters") or []
-    if len(graph.get("nodes") or {}) != 7 or len(graph.get("connections") or []) != 6:
-        raise QaFailure("Particle Definition omitted its authoritative seven-node topology")
+    if len(graph.get("nodes") or {}) != 8 or len(graph.get("connections") or []) != 7:
+        raise QaFailure("Particle Definition omitted its authoritative eight-node topology")
     if [parameter.get("name") for parameter in parameters] != PUBLISHED_PARAMETERS:
         raise QaFailure("Particle Definition omitted its curated published parameters")
+    turbulence = _parameter(parameters, "Turbulence Strength")
+    turbulence_node = graph["nodes"][turbulence["target"]["node_id"]]
+    turbulence_strength = _constant_property(turbulence_node, "strength")
+    if (
+        _native_catalog_id(turbulence_node) != "native.particle.turbulence"
+        or not isinstance(turbulence_strength, (int, float))
+        or float(turbulence_strength) != 0.0
+    ):
+        raise QaFailure("Particle factory did not install neutral executable Turbulence")
 
     if item.get("name") != "Particle System":
         raise QaFailure("Particle Timeline item has an unexpected production label")
@@ -758,9 +759,23 @@ def run_suite(client):
     active_before_edit = _wait_particle_preview(
         client, final["history"]["revision"], active_frame
     )
+    turbulence_edit = _edit_turbulence_and_assert_history(
+        client,
+        item_id,
+        instance_id,
+        definition_id,
+        parameters,
+        active_before_edit,
+    )
+    activate_dock_tab(client, TIMELINE_TAB_ID, "Timeline", "Particle source selection")
+    client.click_component("timeline.item:" + item_id)
+    activate_dock_tab(client, INSPECTOR_TAB_ID, "Inspector", "Particle Inspector")
+    active_before_seed = _wait_particle_preview(
+        client, client.state()["history"]["revision"], active_frame
+    )
     activate_dock_tab(client, INSPECTOR_TAB_ID, "Inspector", "Particle Inspector")
     parameter_edit = _edit_seed_and_assert_history(
-        client, instance_id, parameters, active_before_edit
+        client, instance_id, parameters, active_before_seed
     )
     before_open_definition = client.state()["project"]["module_definitions"][definition_id]
     if before_open_definition != definition:
@@ -771,6 +786,7 @@ def run_suite(client):
             client, item_id, instance_id, definition_id, before_open_definition
         )
     )
+    force_catalog = _assert_force_catalog_entries(client)
     node_editor_evidence = _create_unpublished_emitter_and_assert_locked_rate(
         client,
         definition_id,
@@ -790,6 +806,7 @@ def run_suite(client):
         "rendered_item": rendered_item,
         "inspector_controls": inspector_controls,
         "parameter_edit": parameter_edit,
+        "turbulence_edit": turbulence_edit,
         "preview": {
             "baseline": baseline_preview,
             "active": active_preview,
@@ -805,6 +822,7 @@ def run_suite(client):
             "canvas": node_canvas,
             "native_catalog_ids": native_catalog_ids,
             "output_node_id": output_node_id,
+            "force_catalog": force_catalog,
             "unpublished_emitter": node_editor_evidence,
         },
         "history": completed["history"],

@@ -2,7 +2,7 @@ use ordered_float::OrderedFloat;
 
 use super::*;
 use crate::model::frame::color::Color;
-use crate::model::frame::particle::ParticleEmitterShape;
+use crate::model::frame::particle::{ParticleEmitterShape, ParticleForce};
 
 fn vec3(x: f64, y: f64, z: f64) -> Vec3 {
     Vec3 {
@@ -25,8 +25,14 @@ fn parameters() -> ParticleSceneParameters {
         emitter_surface_only: false,
         velocity_min: vec3(-1.0, -2.0, -3.0),
         velocity_max: vec3(1.0, 2.0, 3.0),
-        gravity: vec3(0.0, 180.0, 0.0),
-        drag: OrderedFloat(0.15),
+        forces: vec![
+            ParticleForce::Gravity {
+                acceleration: vec3(0.0, 180.0, 0.0),
+            },
+            ParticleForce::Drag {
+                coefficient: OrderedFloat(0.15),
+            },
+        ],
         size_min: OrderedFloat(6.0),
         size_max: OrderedFloat(18.0),
         color: Color {
@@ -68,10 +74,18 @@ fn render_only_color_does_not_invalidate_simulation_history() {
     );
 
     let mut changed_force = first.clone();
-    changed_force.gravity = vec3(0.0, 200.0, 0.0);
+    changed_force.forces[0] = ParticleForce::Gravity {
+        acceleration: vec3(0.0, 200.0, 0.0),
+    };
     assert_ne!(
         stable_parameter_hash(&first),
         stable_parameter_hash(&changed_force)
+    );
+    let mut reordered = first.clone();
+    reordered.forces.reverse();
+    assert_ne!(
+        stable_parameter_hash(&first),
+        stable_parameter_hash(&reordered)
     );
 
     let mut changed_emitter_shape = first.clone();

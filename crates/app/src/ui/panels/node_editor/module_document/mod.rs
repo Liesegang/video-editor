@@ -26,6 +26,7 @@ use crate::state::node_editor::{
 mod clipboard;
 mod clock;
 mod context_menu;
+mod data_leaf;
 mod host;
 mod interface;
 mod layout;

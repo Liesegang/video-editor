@@ -10,7 +10,9 @@ use crate::ui::widgets::property_mode::{
     property_for_mode, property_mode_control_for_state, toggled_keyframe_property,
     PropertyModeAction, PropertyModeState,
 };
-use crate::ui::widgets::property_value_editor::{property_value_editor, PropertyValueEditorSpec};
+use crate::ui::widgets::property_value_editor::{
+    property_ui_kind, property_value_editor, PropertyValueEditorSpec,
+};
 
 #[allow(
     clippy::too_many_arguments,
@@ -167,6 +169,8 @@ pub(super) fn show_property_input(
             "dynamic_value_disabled_reason": dynamic_value_disabled_reason,
             "current_time": context.time,
             "evaluation_diagnostic": diagnostic,
+            "editor_kind": definition.map(|definition| property_ui_kind(definition.ui_type())),
+            "value": value,
         })),
     );
     (response, action)

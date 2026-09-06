@@ -83,6 +83,41 @@ pub struct GradientValue {
     stops: Vec<GradientStop>,
 }
 
+impl Default for GradientValue {
+    fn default() -> Self {
+        Self {
+            geometry: GradientGeometry::Linear {
+                start: Vec2 {
+                    x: OrderedFloat(0.0),
+                    y: OrderedFloat(0.5),
+                },
+                end: Vec2 {
+                    x: OrderedFloat(1.0),
+                    y: OrderedFloat(0.5),
+                },
+            },
+            spread: GradientSpread::Pad,
+            stops: vec![
+                GradientStop {
+                    offset: OrderedFloat(0.0),
+                    color: ColorValue::from_straight_srgba8(&crate::model::frame::color::Color {
+                        r: 0,
+                        g: 0,
+                        b: 0,
+                        a: 255,
+                    }),
+                },
+                GradientStop {
+                    offset: OrderedFloat(1.0),
+                    color: ColorValue::from_straight_srgba8(
+                        &crate::model::frame::color::Color::white(),
+                    ),
+                },
+            ],
+        }
+    }
+}
+
 impl GradientValue {
     pub fn new(
         geometry: GradientGeometry,
@@ -406,6 +441,33 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<GradientValue>(&encoded).unwrap(),
             value
+        );
+    }
+
+    #[test]
+    fn shared_gradient_default_preserves_the_bundled_black_to_white_ramp() {
+        let value = GradientValue::default();
+        assert_eq!(
+            value.geometry(),
+            GradientGeometry::Linear {
+                start: point(0.0, 0.5),
+                end: point(1.0, 0.5),
+            }
+        );
+        assert_eq!(value.spread(), GradientSpread::Pad);
+        assert_eq!(value.stops().len(), 2);
+        assert_eq!(
+            value.stops()[0].color(),
+            &ColorValue::from_straight_srgba8(&crate::model::frame::color::Color {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 255,
+            })
+        );
+        assert_eq!(
+            value.stops()[1].color(),
+            &ColorValue::from_straight_srgba8(&crate::model::frame::color::Color::white())
         );
     }
 

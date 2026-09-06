@@ -72,6 +72,42 @@ Color:
       side: Right
       exposure: Graph
       multiplicity: Single
+Gradient:
+  category: Data
+  catalog_status: native
+  catalog_id: native.data.gradient
+  runtime_status: implemented
+  model: Data.Gradient
+  description: Reusable typed Gradient value with managed color stops, geometry, and spread
+  outputs:
+    - name: value
+      key: value
+      label: Value
+      type: Gradient
+      side: Right
+      exposure: Graph
+      multiplicity: Single
+Color Ramp:
+  category: Color
+  catalog_status: native
+  catalog_id: native.color.ramp
+  runtime_status: implemented
+  model: Color.ColorRamp
+  description: Sample a Gradient by scalar factor in linear-sRGB; explicit ramp sampling is independent of spatial geometry
+  inputs:
+    - name: gradient
+      key: gradient
+      label: Gradient
+      type: Gradient
+    - name: factor
+      key: factor
+      label: Factor
+      type: Number
+  outputs:
+    - name: color
+      key: color
+      label: Color
+      type: Color
 Compose Color:
   category: Color
   catalog_status: native
@@ -273,13 +309,6 @@ YUV Image:
   outputs:
      - name: output
        type: YUV Image
-Gradient:
-  category: Data
-  catalog_status: design-needed
-  description: Color gradient (Color Ramp)
-  outputs:
-     - name: output
-       type: Gradient
 Curve:
   category: Data
   catalog_status: design-needed
@@ -2460,7 +2489,7 @@ Point Force:
   category: Particles
   catalog_status: native
   catalog_id: native.particle.point-force
-  runtime_status: design-needed
+  runtime_status: implemented
   description: Attract or repel particles
   inputs:
     - name: particles
@@ -2480,11 +2509,13 @@ Vortex Force:
   category: Particles
   catalog_status: native
   catalog_id: native.particle.vortex-force
-  runtime_status: design-needed
+  runtime_status: implemented
   inputs:
     - name: particles
       type: ParticleSystem
     - name: axis
+      type: Vector3
+    - name: center
       type: Vector3
     - name: strength
       type: Scalar
@@ -2513,15 +2544,19 @@ Turbulence:
   category: Particles
   catalog_status: native
   catalog_id: native.particle.turbulence
-  runtime_status: design-needed
+  runtime_status: implemented
   inputs:
     - name: particles
       type: ParticleSystem
-    - name: frequency
-      type: Scalar
     - name: strength
       type: Scalar
-    - name: octave
+    - name: frequency
+      type: Scalar
+    - name: octaves
+      type: Integer
+    - name: evolution
+      type: Scalar
+    - name: seed
       type: Integer
   outputs:
     - name: particles

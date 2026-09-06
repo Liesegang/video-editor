@@ -3,7 +3,20 @@
 //! Authored strings never enter these sources. Module graph compilation only
 //! selects this fixed ABI and supplies validated uniforms.
 
-pub(super) const PARTICLE_COMPUTE: &str = r#"#version 430 core
+pub(super) fn particle_compute_source() -> String {
+    PARTICLE_COMPUTE
+        .replacen(
+            "#version 430 core",
+            &format!(
+                "#version 430 core\n#define MAX_PARTICLE_FORCES {}",
+                crate::model::frame::particle::PARTICLE_MAX_FORCES
+            ),
+            1,
+        )
+        .replace("// PARTICLE_FORCE_FUNCTIONS", super::forces::FORCE_GLSL)
+}
+
+const PARTICLE_COMPUTE: &str = r#"#version 430 core
 layout(local_size_x = 64) in;
 
 struct Particle {
@@ -30,8 +43,6 @@ uniform vec3 uEmitterSize;
 uniform bool uEmitterSurfaceOnly;
 uniform vec3 uVelocityMin;
 uniform vec3 uVelocityMax;
-uniform vec3 uGravity;
-uniform float uDrag;
 uniform float uSizeMin;
 uniform float uSizeMax;
 
@@ -83,6 +94,8 @@ vec3 emitter_position(uint serial) {
     }
     return uEmitterPosition;
 }
+
+// PARTICLE_FORCE_FUNCTIONS
 
 void spawn(inout Particle particle, uint serial) {
     vec3 random_velocity = vec3(
@@ -140,8 +153,7 @@ void main() {
             if (particle.position_age.w >= particle.velocity_lifetime.w) {
                 particle.position_age.w = -1.0;
             } else {
-                particle.velocity_lifetime.xyz += uGravity * STEP_SECONDS;
-                particle.velocity_lifetime.xyz /= 1.0 + uDrag * STEP_SECONDS;
+                apply_forces(particle.position_age.xyz, particle.velocity_lifetime.xyz, step);
                 particle.position_age.xyz += particle.velocity_lifetime.xyz * STEP_SECONDS;
             }
         }

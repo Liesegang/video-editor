@@ -12,7 +12,9 @@ use serde::{Deserialize, Serialize};
 use crate::model::frame::color::Color;
 use crate::model::path::{FillRule, PathValue};
 use crate::model::project::connection::DATA_VALUE_PROPERTY;
-use crate::model::property::{ColorValue, PropertyDefinition, PropertyUiType, PropertyValue};
+use crate::model::property::{
+    ColorValue, GradientValue, PropertyDefinition, PropertyUiType, PropertyValue,
+};
 
 static COLOR_PROPERTY_DEFINITIONS: LazyLock<[PropertyDefinition; 1]> = LazyLock::new(|| {
     [PropertyDefinition::new(
@@ -37,19 +39,30 @@ static PATH_PROPERTY_DEFINITIONS: LazyLock<[PropertyDefinition; 1]> = LazyLock::
     )]
 });
 
+static GRADIENT_PROPERTY_DEFINITIONS: LazyLock<[PropertyDefinition; 1]> = LazyLock::new(|| {
+    [PropertyDefinition::new(
+        DATA_VALUE_PROPERTY,
+        PropertyUiType::Gradient,
+        "Value",
+        PropertyValue::Gradient(GradientValue::default()),
+    )]
+});
+
 /// Stable persisted identity for canonical authored data sources.
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum DataContent {
     Color,
+    Gradient,
     Path,
 }
 
 impl DataContent {
-    pub const ALL: [Self; 2] = [Self::Color, Self::Path];
+    pub const ALL: [Self; 3] = [Self::Color, Self::Gradient, Self::Path];
 
     pub const fn catalog_id(self) -> &'static str {
         match self {
             Self::Color => "native.data.color",
+            Self::Gradient => "native.data.gradient",
             Self::Path => "native.data.path",
         }
     }
@@ -57,6 +70,7 @@ impl DataContent {
     pub const fn label(self) -> &'static str {
         match self {
             Self::Color => "Color",
+            Self::Gradient => "Gradient",
             Self::Path => "Path",
         }
     }
@@ -64,6 +78,7 @@ impl DataContent {
     pub fn property_definitions(self) -> &'static [PropertyDefinition] {
         match self {
             Self::Color => COLOR_PROPERTY_DEFINITIONS.as_slice(),
+            Self::Gradient => GRADIENT_PROPERTY_DEFINITIONS.as_slice(),
             Self::Path => PATH_PROPERTY_DEFINITIONS.as_slice(),
         }
     }
@@ -71,7 +86,9 @@ impl DataContent {
     pub const fn accepts_value(self, value: &PropertyValue) -> bool {
         matches!(
             (self, value),
-            (Self::Color, PropertyValue::ColorValue(_)) | (Self::Path, PropertyValue::Path(_))
+            (Self::Color, PropertyValue::ColorValue(_))
+                | (Self::Gradient, PropertyValue::Gradient(_))
+                | (Self::Path, PropertyValue::Path(_))
         )
     }
 }

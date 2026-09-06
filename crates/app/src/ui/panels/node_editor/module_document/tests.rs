@@ -11,6 +11,7 @@ use library::model::frame::color::Color;
 use library::model::project::{
     PortDataType, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, SOUND_INPUT_PORT,
 };
+use library::model::DataContent;
 use std::sync::{Arc, Mutex};
 
 use super::viewer::{ModuleNodeViewer, ModuleSurfaceCapture};
@@ -170,6 +171,65 @@ fn module_surface_keeps_timeline_graph_expansion_out_of_the_document() {
         state.canvas,
         pan_zoom_ui::CanvasState::uniform(egui::Vec2::ZERO, 1.0)
     );
+}
+
+#[test]
+fn every_typed_data_leaf_exposes_its_canonical_value_in_the_node_body() {
+    let plugins = PluginManager::default();
+    let (mut definition, ordinary_source_id, _) = fixture(&plugins);
+    let mut data_ids = Vec::new();
+    for data in DataContent::ALL {
+        let node = Node::new_data(data.label(), data);
+        let id = node.id;
+        let (key, property) = data_leaf::value_property(&node)
+            .expect("factory-complete Data leaf has its canonical property");
+        assert_eq!(
+            key,
+            library::model::project::connection::DATA_VALUE_PROPERTY
+        );
+        assert!(matches!(
+            (data, property.value()),
+            (DataContent::Color, Some(PropertyValue::ColorValue(_)))
+                | (DataContent::Gradient, Some(PropertyValue::Gradient(_)))
+                | (DataContent::Path, Some(PropertyValue::Path(_)))
+        ));
+        let contract = ModuleNodePortContract::resolve(&node).expect("typed Data port contract");
+        assert!(
+            contract
+                .ports
+                .iter()
+                .all(|port| port.direction != PortDirection::Input),
+            "editable Data values must not be represented by a fake input port"
+        );
+        definition.graph.nodes.insert(id, node);
+        data_ids.push(id);
+    }
+    assert!(data_leaf::TIMELINE_AUTHORING.is_err());
+
+    let mut parameter_fixture = ParameterHostFixture::new(&definition);
+    let selected = HashSet::new();
+    let mut actions = Vec::new();
+    let mut transform = egui::emath::TSTransform::IDENTITY;
+    let mut clip = egui::Rect::EVERYTHING;
+    let palette = ProjectPalette::default();
+    let mut viewer = ModuleNodeViewer {
+        definition: &definition,
+        assets: &[],
+        palette: &palette,
+        plugins: &plugins,
+        property_context: property_context(),
+        parameter_host: &mut parameter_fixture.host(),
+        selected_nodes: &selected,
+        actions: &mut actions,
+        canvas_transform: egui::emath::TSTransform::IDENTITY,
+        to_global: &mut transform,
+        canvas_clip: &mut clip,
+        capture: Arc::new(Mutex::new(ModuleSurfaceCapture::default())),
+    };
+    for id in data_ids {
+        assert!(SnarlViewer::has_body(&mut viewer, &id));
+    }
+    assert!(!SnarlViewer::has_body(&mut viewer, &ordinary_source_id));
 }
 
 #[test]

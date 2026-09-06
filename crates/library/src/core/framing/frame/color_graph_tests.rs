@@ -5,14 +5,19 @@ use ordered_float::OrderedFloat;
 use uuid::Uuid;
 
 use super::FrameEvaluator;
+use crate::model::project::connection::DATA_VALUE_OUTPUT_PORT;
 use crate::model::project::{
     DURATION_PORT, EvalOutput, NodeContainer, PortAddress, PortOwner, Project, TIME_PORT,
 };
-use crate::model::property::{ColorSpaceRef, ColorValue, Keyframe, Property, PropertyValue};
+use crate::model::property::{
+    ColorSpaceRef, ColorValue, GradientGeometry, GradientSpread, GradientStop, GradientValue,
+    Keyframe, Property, PropertyValue, Vec2,
+};
 use crate::model::{
     COLOR_ALPHA_PORT, COLOR_BLUE_PORT, COLOR_GREEN_PORT, COLOR_MIX_FACTOR_PORT,
-    COLOR_MIX_LEFT_PORT, COLOR_MIX_RIGHT_PORT, COLOR_RED_PORT, COLOR_SPACE_PORT,
-    COLOR_TARGET_SPACE_PORT, COLOR_VALUE_PORT, Clip, ColorContent, Composition, Node,
+    COLOR_MIX_LEFT_PORT, COLOR_MIX_RIGHT_PORT, COLOR_RAMP_FACTOR_PORT, COLOR_RAMP_GRADIENT_PORT,
+    COLOR_RED_PORT, COLOR_SPACE_PORT, COLOR_TARGET_SPACE_PORT, COLOR_VALUE_PORT, Clip,
+    ColorContent, Composition, DataContent, Node,
 };
 use crate::plugin::PluginManager;
 
@@ -91,6 +96,122 @@ fn compose_node(space: &str, rgba: [f64; 4]) -> Node {
         set(&mut node, key, PropertyValue::Number(OrderedFloat(value)));
     }
     node
+}
+
+fn point(x: f64, y: f64) -> Vec2 {
+    Vec2 {
+        x: OrderedFloat(x),
+        y: OrderedFloat(y),
+    }
+}
+
+fn test_gradient(spread: GradientSpread) -> GradientValue {
+    GradientValue::new(
+        GradientGeometry::Linear {
+            start: point(0.0, 0.5),
+            end: point(1.0, 0.5),
+        },
+        spread,
+        vec![
+            GradientStop::new(
+                0.0,
+                ColorValue::new(ColorSpaceRef::linear_srgb(), [0.0, 0.2, 0.4, 0.25]).unwrap(),
+            )
+            .unwrap(),
+            GradientStop::new(
+                1.0,
+                ColorValue::new(ColorSpaceRef::linear_srgb(), [1.0, 0.6, 0.0, 0.75]).unwrap(),
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap()
+}
+
+fn assert_linear_color_near(actual: EvalOutput<PropertyValue>, expected: [f64; 4]) {
+    let EvalOutput::Produced(PropertyValue::ColorValue(actual)) = actual else {
+        panic!("Color Ramp must produce a canonical ColorValue");
+    };
+    assert_eq!(actual.color_space(), &ColorSpaceRef::linear_srgb());
+    for (actual, expected) in actual.rgba().into_iter().zip(expected) {
+        assert!(
+            (actual - expected).abs() <= 1.0e-12,
+            "{actual} != {expected}"
+        );
+    }
+}
+
+#[test]
+fn color_ramp_samples_connected_gradient_and_factor_after_project_reload() {
+    let mut fixture = ColorFixture::new();
+    let gradient = test_gradient(GradientSpread::Repeat);
+    let mut source = Node::new_data("Gradient", DataContent::Gradient);
+    set(
+        &mut source,
+        crate::model::project::connection::DATA_VALUE_PROPERTY,
+        PropertyValue::Gradient(gradient),
+    );
+    let source_id = fixture.add(source);
+    let ramp_id = fixture.add(Node::new_color("Color Ramp", ColorContent::ColorRamp));
+    fixture.connect(
+        source_id,
+        DATA_VALUE_OUTPUT_PORT,
+        ramp_id,
+        COLOR_RAMP_GRADIENT_PORT,
+    );
+    fixture
+        .project
+        .connect_ports(
+            PortAddress::new(PortOwner::Clip(fixture.clip_id), TIME_PORT),
+            PortAddress::new(PortOwner::Node(ramp_id), COLOR_RAMP_FACTOR_PORT),
+        )
+        .unwrap();
+    assert!(fixture.project.validate_connections().is_empty());
+
+    assert_linear_color_near(
+        fixture.evaluate(ramp_id, COLOR_VALUE_PORT, 0.25),
+        [0.25, 0.3, 0.3, 0.375],
+    );
+    fixture.project = Project::load(&fixture.project.save().unwrap()).unwrap();
+    assert_linear_color_near(
+        fixture.evaluate(ramp_id, COLOR_VALUE_PORT, 0.25),
+        [0.25, 0.3, 0.3, 0.375],
+    );
+}
+
+#[test]
+fn color_ramp_uses_spread_for_unbounded_factor_and_fails_closed() {
+    let mut fixture = ColorFixture::new();
+    let mut ramp = Node::new_color("Color Ramp", ColorContent::ColorRamp);
+    set(
+        &mut ramp,
+        COLOR_RAMP_GRADIENT_PORT,
+        PropertyValue::Gradient(test_gradient(GradientSpread::Reflect)),
+    );
+    set(
+        &mut ramp,
+        COLOR_RAMP_FACTOR_PORT,
+        PropertyValue::Number(OrderedFloat(1.75)),
+    );
+    let ramp_id = fixture.add(ramp);
+    assert_linear_color_near(
+        fixture.evaluate(ramp_id, COLOR_VALUE_PORT, 0.5),
+        [0.25, 0.3, 0.3, 0.375],
+    );
+
+    let ramp = fixture.project.get_node_mut(ramp_id).unwrap();
+    assert!(!ramp.supports_bypass());
+    ramp.bypassed = true;
+    assert_eq!(
+        fixture.evaluate(ramp_id, COLOR_VALUE_PORT, 0.5),
+        EvalOutput::NoOutput
+    );
+    fixture.project.get_node_mut(ramp_id).unwrap().bypassed = false;
+    fixture.project.get_node_mut(ramp_id).unwrap().enabled = false;
+    assert_eq!(
+        fixture.evaluate(ramp_id, COLOR_VALUE_PORT, 0.5),
+        EvalOutput::NoOutput
+    );
 }
 
 #[test]

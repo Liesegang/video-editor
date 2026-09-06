@@ -13,8 +13,25 @@ const PATH_OUTPUT: &[PortSpec] = &[PortSpec::single(
     "Value",
     PortDataType::Path,
 )];
+const GRADIENT_OUTPUT: &[PortSpec] = &[PortSpec::single(
+    DATA_VALUE_OUTPUT_PORT,
+    "Value",
+    PortDataType::Gradient,
+)];
 
 const SPECS: &[DescriptorSpec] = &[
+    DescriptorSpec::implemented(
+        DescriptorIdentity::new(
+            "native.data.gradient",
+            "Gradient",
+            "Data",
+            "node_editor.menu.create.data:gradient",
+            &["gradient", "ramp", "stops", "color", "data", "value"],
+        ),
+        NativeNodeFactory::Data(DataContent::Gradient),
+        &[],
+        GRADIENT_OUTPUT,
+    ),
     DescriptorSpec::implemented(
         DescriptorIdentity::new(
             "native.data.color",

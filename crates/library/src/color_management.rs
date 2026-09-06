@@ -14,6 +14,10 @@ use ruvie_color_management::{
     LINEAR_SRGB_SPACE_ID, SRGB_SPACE_ID,
 };
 
+mod gradient;
+
+pub use gradient::{GradientSampleError, sample_gradient, sample_gradient_at};
+
 pub use ruvie_color_management::{
     AlphaRepresentation, ColorPipelineContract, ComponentStorage, TARGET_COLOR_PIPELINE,
 };

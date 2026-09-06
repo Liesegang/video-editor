@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::model::frame::color::Color;
 use crate::model::property::{
-    ColorSpaceRef, ColorValue, PropertyDefinition, PropertyUiType, PropertyValue,
+    ColorSpaceRef, ColorValue, GradientValue, PropertyDefinition, PropertyUiType, PropertyValue,
 };
 
 pub const COLOR_SPACE_PORT: &str = "space";
@@ -25,6 +25,8 @@ pub const COLOR_MIX_LEFT_PORT: &str = "a";
 pub const COLOR_MIX_RIGHT_PORT: &str = "b";
 pub const COLOR_MIX_FACTOR_PORT: &str = "factor";
 pub const COLOR_TARGET_SPACE_PORT: &str = "target_space";
+pub const COLOR_RAMP_GRADIENT_PORT: &str = "gradient";
+pub const COLOR_RAMP_FACTOR_PORT: &str = "factor";
 
 fn number_definition(name: &str, label: &str, default: f64) -> PropertyDefinition {
     PropertyDefinition::new(
@@ -156,6 +158,30 @@ static CONVERT_SPACE_PROPERTY_DEFINITIONS: LazyLock<[PropertyDefinition; 2]> =
         ]
     });
 
+static COLOR_RAMP_PROPERTY_DEFINITIONS: LazyLock<[PropertyDefinition; 2]> = LazyLock::new(|| {
+    [
+        PropertyDefinition::new(
+            COLOR_RAMP_GRADIENT_PORT,
+            PropertyUiType::Gradient,
+            "Gradient",
+            PropertyValue::Gradient(GradientValue::default()),
+        ),
+        PropertyDefinition::new(
+            COLOR_RAMP_FACTOR_PORT,
+            PropertyUiType::Float {
+                min: -10.0,
+                max: 10.0,
+                step: 0.01,
+                suffix: String::new(),
+                min_hard_limit: false,
+                max_hard_limit: false,
+            },
+            "Factor",
+            PropertyValue::Number(OrderedFloat(0.5)),
+        ),
+    ]
+});
+
 /// Stable persisted identity for lossless first-party Color operations.
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ColorContent {
@@ -163,10 +189,17 @@ pub enum ColorContent {
     Split,
     Mix,
     ConvertSpace,
+    ColorRamp,
 }
 
 impl ColorContent {
-    pub const ALL: [Self; 4] = [Self::Compose, Self::Split, Self::Mix, Self::ConvertSpace];
+    pub const ALL: [Self; 5] = [
+        Self::Compose,
+        Self::Split,
+        Self::Mix,
+        Self::ConvertSpace,
+        Self::ColorRamp,
+    ];
 
     pub const fn catalog_id(self) -> &'static str {
         match self {
@@ -174,6 +207,7 @@ impl ColorContent {
             Self::Split => "native.color.split",
             Self::Mix => "native.color.mix",
             Self::ConvertSpace => "native.color.convert_space",
+            Self::ColorRamp => "native.color.ramp",
         }
     }
 
@@ -183,6 +217,7 @@ impl ColorContent {
             Self::Split => "Split Color",
             Self::Mix => "Mix Color",
             Self::ConvertSpace => "Convert Color Space",
+            Self::ColorRamp => "Color Ramp",
         }
     }
 
@@ -192,6 +227,7 @@ impl ColorContent {
             Self::Split => SPLIT_PROPERTY_DEFINITIONS.as_slice(),
             Self::Mix => MIX_PROPERTY_DEFINITIONS.as_slice(),
             Self::ConvertSpace => CONVERT_SPACE_PROPERTY_DEFINITIONS.as_slice(),
+            Self::ColorRamp => COLOR_RAMP_PROPERTY_DEFINITIONS.as_slice(),
         }
     }
 

@@ -16,19 +16,19 @@ use crate::model::authoring::{
 };
 use crate::model::authoring::{ModuleConnection, ModuleConnectionId};
 use crate::model::frame::entity::{FrameContent, FrameGroupKind, FrameItem};
-use crate::model::frame::particle::{ParticleEmitterShape, ParticleSceneFrame};
+use crate::model::frame::particle::{ParticleEmitterShape, ParticleForce, ParticleSceneFrame};
 use crate::model::node::{Node, NodeContent};
 use crate::model::project::property::{PropertyMap, PropertyValue};
 use crate::model::project::{IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT};
 use crate::plugin::PluginManager;
 
-struct ParticleFixture {
-    project: AuthoringProject,
-    definition_id: ModuleDefinitionId,
-    output_id: ModuleOutputId,
-    item_ids: Vec<TimelineItemId>,
-    instance_ids: Vec<ModuleInstanceId>,
-    emission_rate: crate::model::authoring::PublishedParameterId,
+pub(super) struct ParticleFixture {
+    pub(super) project: AuthoringProject,
+    pub(super) definition_id: ModuleDefinitionId,
+    pub(super) output_id: ModuleOutputId,
+    pub(super) item_ids: Vec<TimelineItemId>,
+    pub(super) instance_ids: Vec<ModuleInstanceId>,
+    pub(super) emission_rate: crate::model::authoring::PublishedParameterId,
 }
 
 fn seconds(value: i64) -> MediaTime {
@@ -43,7 +43,7 @@ fn zero_vec3() -> crate::model::property::Vec3 {
     }
 }
 
-fn particle_fixture(count: usize) -> ParticleFixture {
+pub(super) fn particle_fixture(count: usize) -> ParticleFixture {
     let mut project = AuthoringProject::new(
         "Particle runtime",
         320,
@@ -107,7 +107,7 @@ fn particle_fixture(count: usize) -> ParticleFixture {
     }
 }
 
-fn connection(
+pub(super) fn connection(
     from_node: uuid::Uuid,
     from_port: &str,
     to_node: uuid::Uuid,
@@ -159,7 +159,7 @@ fn group_by_source(
     })
 }
 
-fn particle_renderer_and_output(fixture: &ParticleFixture) -> (uuid::Uuid, uuid::Uuid) {
+pub(super) fn particle_renderer_and_output(fixture: &ParticleFixture) -> (uuid::Uuid, uuid::Uuid) {
     let definition = &fixture.project.module_definitions[&fixture.definition_id];
     let renderer_id = definition
         .graph
@@ -181,7 +181,7 @@ fn particle_renderer_and_output(fixture: &ParticleFixture) -> (uuid::Uuid, uuid:
     (renderer_id, output_node_id)
 }
 
-fn particle_node_id(fixture: &ParticleFixture, catalog_id: &str) -> uuid::Uuid {
+pub(super) fn particle_node_id(fixture: &ParticleFixture, catalog_id: &str) -> uuid::Uuid {
     fixture.project.module_definitions[&fixture.definition_id]
         .graph
         .nodes
@@ -196,7 +196,7 @@ fn particle_node_id(fixture: &ParticleFixture, catalog_id: &str) -> uuid::Uuid {
         .id
 }
 
-fn particle_scenes(items: &[FrameItem]) -> Vec<&ParticleSceneFrame> {
+pub(super) fn particle_scenes(items: &[FrameItem]) -> Vec<&ParticleSceneFrame> {
     let mut scenes = Vec::new();
     for item in items {
         match item {
@@ -411,7 +411,24 @@ fn authored_particle_clip_parameters_reach_the_scene_command() {
     assert_eq!(scene.parameters.emitter_position, expected_emitter_position);
     assert_eq!(scene.parameters.emitter_radius, OrderedFloat(84.0));
     assert!(scene.parameters.emitter_surface_only);
-    assert_eq!(scene.parameters.gravity, expected_gravity);
+    assert_eq!(
+        scene.parameters.forces,
+        vec![
+            ParticleForce::Gravity {
+                acceleration: expected_gravity,
+            },
+            ParticleForce::Turbulence {
+                strength: OrderedFloat(0.0),
+                frequency: OrderedFloat(0.01),
+                octaves: 1,
+                evolution: OrderedFloat(0.0),
+                seed: 1,
+            },
+            ParticleForce::Drag {
+                coefficient: OrderedFloat(0.15),
+            },
+        ]
+    );
     assert_eq!(scene.parameters.color, color);
 }
 
@@ -480,7 +497,14 @@ fn implemented_particle_modifiers_are_optional_in_canonical_order() {
     let particle =
         &plan.module_definitions[&fixture.definition_id].particle_renderers[&renderer_id];
     assert_eq!(particle.shape_location_node_id, None);
-    assert_eq!(particle.drag_node_id, None);
+    assert_eq!(
+        particle
+            .force_nodes
+            .iter()
+            .map(|force| force.node_id)
+            .collect::<Vec<_>>(),
+        vec![gravity_id]
+    );
     let frame = evaluate_render_plan_frame(
         &fixture.project,
         &plan,
@@ -493,7 +517,16 @@ fn implemented_particle_modifiers_are_optional_in_canonical_order() {
     let parameters = &particle_scenes(&frame.items)[0].parameters;
     assert_eq!(parameters.emitter_shape, ParticleEmitterShape::Point);
     assert_eq!(parameters.emitter_position, zero_vec3());
-    assert_eq!(parameters.drag, OrderedFloat(0.0));
+    assert_eq!(
+        parameters.forces,
+        vec![ParticleForce::Gravity {
+            acceleration: crate::model::property::Vec3 {
+                x: OrderedFloat(0.0),
+                y: OrderedFloat(180.0),
+                z: OrderedFloat(0.0),
+            },
+        }]
+    );
 }
 
 #[test]
@@ -762,10 +795,20 @@ fn bypassed_particle_modifiers_use_neutral_stage_values() {
                 assert_eq!(scene.parameters.size_min, OrderedFloat(1.0));
                 assert_eq!(scene.parameters.size_max, OrderedFloat(1.0));
             }
-            Stage::Gravity => {
-                assert_eq!(scene.parameters.gravity, zero_vec3());
-            }
-            Stage::Drag => assert_eq!(scene.parameters.drag, OrderedFloat(0.0)),
+            Stage::Gravity => assert!(
+                scene
+                    .parameters
+                    .forces
+                    .iter()
+                    .all(|force| !matches!(force, ParticleForce::Gravity { .. }))
+            ),
+            Stage::Drag => assert!(
+                scene
+                    .parameters
+                    .forces
+                    .iter()
+                    .all(|force| !matches!(force, ParticleForce::Drag { .. }))
+            ),
         }
     }
 }

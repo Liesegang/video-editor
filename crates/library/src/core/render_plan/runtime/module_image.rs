@@ -11,7 +11,9 @@ use crate::model::frame::entity::{
     FrameTransition, FrameTransitionKind, FrameTransitionSource, NormalizedProgress16,
 };
 use crate::model::node::{
-    TRANSITION_IMAGE_INPUT_NODE_ID, TRANSITION_IMAGE_MIX_NODE_ID, TRANSITION_PROGRESS_INPUT_NODE_ID,
+    COLOR_RAMP_FACTOR_PORT, COLOR_RAMP_GRADIENT_PORT, COLOR_VALUE_PORT, ColorContent,
+    TRANSITION_IMAGE_INPUT_NODE_ID, TRANSITION_IMAGE_MIX_NODE_ID,
+    TRANSITION_PROGRESS_INPUT_NODE_ID,
 };
 use crate::model::project::{
     TRANSITION_FROM_INPUT_PORT, TRANSITION_PROGRESS_INPUT_PORT, TRANSITION_TO_INPUT_PORT,
@@ -761,6 +763,29 @@ impl ModuleImageRuntime<'_> {
             }
             NodeContent::Data(_) if source.port == DATA_VALUE_OUTPUT_PORT => {
                 self.value_input(node.id, DATA_VALUE_PROPERTY)
+            }
+            NodeContent::Color(ColorContent::ColorRamp) if source.port == COLOR_VALUE_PORT => {
+                let gradient = self.value_input(node.id, COLOR_RAMP_GRADIENT_PORT)?;
+                let factor = self.value_input(node.id, COLOR_RAMP_FACTOR_PORT)?;
+                let (Some(PropertyValue::Gradient(gradient)), Some(factor)) = (gradient, factor)
+                else {
+                    return Ok(None);
+                };
+                let factor = match factor {
+                    PropertyValue::Number(value) => value.into_inner(),
+                    PropertyValue::Integer(value) => value as f64,
+                    _ => return Ok(None),
+                };
+                match crate::color_management::sample_gradient_at(&gradient, factor) {
+                    Ok(color) => Ok(Some(PropertyValue::ColorValue(color))),
+                    Err(error) => {
+                        log::debug!(
+                            "Gradient sampling on Module Node {} produced no output: {error}",
+                            node.id
+                        );
+                        Ok(None)
+                    }
+                }
             }
             NodeContent::Value(operation) if source.port == NUMBER_RESULT_OUTPUT_PORT => {
                 let left = self.value_input(node.id, operation.primary_input())?;

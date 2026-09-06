@@ -23,15 +23,87 @@ fn seconds(value: i64) -> MediaTime {
 #[test]
 fn factory_builds_one_private_typed_chain_and_mandatory_output() {
     let result = ParticleNodeClipFactory::create("GPU Particles").expect("factory");
-    assert_eq!(result.definition.graph.nodes.len(), 7);
-    assert_eq!(result.definition.graph.connections.len(), 6);
+    assert_eq!(result.definition.graph.nodes.len(), 8);
+    assert_eq!(result.definition.graph.connections.len(), 7);
     assert_eq!(result.definition.outputs().count(), 1);
-    assert_eq!(result.definition.interface.parameters.len(), 16);
+    assert_eq!(result.definition.interface.parameters.len(), 21);
     assert_eq!(result.definition.sharing, ModuleDefinitionSharing::Private);
     result
         .definition
         .validate()
         .expect("valid particle topology");
+}
+
+#[test]
+fn factory_inserts_a_neutral_turbulence_force_in_order_and_publishes_every_control() {
+    let result = ParticleNodeClipFactory::create("GPU Particles").expect("factory");
+    let parameter = |id| {
+        result
+            .definition
+            .interface
+            .parameters
+            .iter()
+            .find(|parameter| parameter.id == id)
+            .expect("published parameter")
+    };
+    let gravity_node = parameter(result.parameters.gravity).target.node_id;
+    let turbulence_node = parameter(result.parameters.turbulence_strength)
+        .target
+        .node_id;
+    let drag_node = parameter(result.parameters.drag).target.node_id;
+    assert!(
+        result
+            .definition
+            .graph
+            .connections
+            .iter()
+            .any(|connection| {
+                connection.from.node_id == gravity_node && connection.to.node_id == turbulence_node
+            })
+    );
+    assert!(
+        result
+            .definition
+            .graph
+            .connections
+            .iter()
+            .any(|connection| {
+                connection.from.node_id == turbulence_node && connection.to.node_id == drag_node
+            })
+    );
+
+    for (id, port, default) in [
+        (
+            result.parameters.turbulence_strength,
+            "strength",
+            PropertyValue::Number(OrderedFloat(0.0)),
+        ),
+        (
+            result.parameters.turbulence_frequency,
+            "frequency",
+            PropertyValue::Number(OrderedFloat(0.01)),
+        ),
+        (
+            result.parameters.turbulence_octaves,
+            "octaves",
+            PropertyValue::Integer(1),
+        ),
+        (
+            result.parameters.turbulence_evolution,
+            "evolution",
+            PropertyValue::Number(OrderedFloat(0.0)),
+        ),
+        (
+            result.parameters.turbulence_seed,
+            "seed",
+            PropertyValue::Integer(1),
+        ),
+    ] {
+        let parameter = parameter(id);
+        assert_eq!(parameter.target.node_id, turbulence_node);
+        assert_eq!(parameter.target.port, port);
+        assert_eq!(parameter.default_value, default);
+    }
 }
 
 #[test]
@@ -41,7 +113,10 @@ fn only_the_executable_particle_slice_is_enabled_in_the_catalog() {
         "native.particle.shape-location",
         "native.particle.initialize",
         "native.particle.gravity-force",
+        "native.particle.turbulence",
         "native.particle.drag-force",
+        "native.particle.vortex-force",
+        "native.particle.point-force",
         "native.particle.sprite-renderer",
     ] {
         assert_eq!(
@@ -77,6 +152,11 @@ fn particle_published_parameter_capabilities_follow_their_native_target_ports() 
         particle.parameters.size_min,
         particle.parameters.size_max,
         particle.parameters.gravity,
+        particle.parameters.turbulence_strength,
+        particle.parameters.turbulence_frequency,
+        particle.parameters.turbulence_octaves,
+        particle.parameters.turbulence_evolution,
+        particle.parameters.turbulence_seed,
         particle.parameters.drag,
     ] {
         assert!(matches!(

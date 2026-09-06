@@ -93,6 +93,7 @@ pub(super) fn property_row(
             capture_test_rect("mode", _mode.rect);
             capture_test_rect("value", value_edit.response.rect);
         }
+        value_edit.response
     });
     let mut metadata = serde_json::json!({
         "control_id": spec.control_id,
@@ -113,7 +114,7 @@ pub(super) fn property_row(
         Some(metadata),
     );
     PropertyRowResult {
-        response: row.response,
+        response: row.inner,
         changed,
         finished,
         mode_action,
@@ -587,6 +588,62 @@ mod tests {
     use ordered_float::OrderedFloat;
     use std::io;
 
+    fn secondary_pointer(position: egui::Pos2, pressed: bool) -> egui::Event {
+        egui::Event::PointerButton {
+            pos: position,
+            button: egui::PointerButton::Secondary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        }
+    }
+
+    fn render_context_menu_row(
+        context: &egui::Context,
+        events: Vec<egui::Event>,
+        frame: usize,
+        value: &mut PropertyValue,
+        menu_opened: &mut bool,
+    ) -> egui::Rect {
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 300.0));
+        let palette = ProjectPalette::default();
+        let mut response_rect = None;
+        drop(context.run(
+            egui::RawInput {
+                screen_rect: Some(screen),
+                time: Some(frame as f64 / 60.0),
+                events,
+                ..Default::default()
+            },
+            |context| {
+                egui::CentralPanel::default().show(context, |ui| {
+                    let result = property_row(
+                        ui,
+                        value,
+                        &palette,
+                        PropertyRowSpec {
+                            control_id: "test:reset",
+                            label: "Resettable",
+                            definition: None,
+                            suffix: "",
+                            speed: 0.1,
+                            mode_state: PropertyModeState::constant(0.0),
+                            allow_keyframe: true,
+                            keyframe_disabled_reason: None,
+                            allow_expression: false,
+                            pending_keyframe: None,
+                        },
+                    );
+                    response_rect = Some(result.response.rect);
+                    result.response.context_menu(|ui| {
+                        *menu_opened = true;
+                        ui.label("Reset to default");
+                    });
+                });
+            },
+        ));
+        response_rect.expect("property value response")
+    }
+
     #[test]
     fn property_row_orders_left_label_then_mode_then_value() -> Result<(), io::Error> {
         PROPERTY_ROW_TEST_RECTS.with(|rects| rects.borrow_mut().clear());
@@ -630,6 +687,42 @@ mod tests {
         assert!(label.right() <= mode.left());
         assert!(mode.right() <= value.left());
         Ok(())
+    }
+
+    #[test]
+    fn property_row_secondary_click_belongs_to_the_value_control() {
+        PROPERTY_ROW_TEST_RECTS.with(|rects| rects.borrow_mut().clear());
+        let context = egui::Context::default();
+        let mut value = PropertyValue::Number(OrderedFloat(1.0));
+        let mut menu_opened = false;
+        let response =
+            render_context_menu_row(&context, Vec::new(), 0, &mut value, &mut menu_opened);
+        let value_rect = test_rect("value").expect("value rect");
+        let label_rect = test_rect("label").expect("label rect");
+        assert_eq!(response, value_rect);
+        assert!(!response.intersects(label_rect));
+        assert!(!menu_opened);
+
+        let position = response.center();
+        render_context_menu_row(
+            &context,
+            vec![
+                egui::Event::PointerMoved(position),
+                secondary_pointer(position, true),
+            ],
+            1,
+            &mut value,
+            &mut menu_opened,
+        );
+        render_context_menu_row(
+            &context,
+            vec![secondary_pointer(position, false)],
+            2,
+            &mut value,
+            &mut menu_opened,
+        );
+        render_context_menu_row(&context, Vec::new(), 3, &mut value, &mut menu_opened);
+        assert!(menu_opened, "secondary-clicking the value must open Reset");
     }
 
     #[test]

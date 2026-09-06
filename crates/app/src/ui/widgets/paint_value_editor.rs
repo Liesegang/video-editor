@@ -1,6 +1,6 @@
 //! Typed Gradient and procedural Pattern controls shared by Inspector and Node properties.
 
-use egui::{Id, Popup, PopupCloseBehavior, Response, Ui};
+use egui::{Color32, Id, Mesh, Popup, PopupCloseBehavior, Response, Sense, StrokeKind, Ui};
 use egui_phosphor::regular as icons;
 use library::model::authoring::{Paint, ProjectPalette};
 use library::model::property::{
@@ -31,7 +31,7 @@ pub(crate) fn gradient_value_editor(
     value: &mut GradientValue,
     palette: &ProjectPalette,
 ) -> PaintValueEdit {
-    let response = ui.button(format!("Gradient  {} stops", value.stops().len()));
+    let response = gradient_preview_button(ui, value);
     let mut candidate = value.clone();
     let mut changed = false;
     let mut finished = false;
@@ -179,6 +179,79 @@ pub(crate) fn gradient_value_editor(
         changed,
         finished,
     }
+}
+
+fn gradient_preview_button(ui: &mut Ui, gradient: &GradientValue) -> Response {
+    const SEGMENTS: usize = 24;
+    const LABEL_WIDTH: f32 = 62.0;
+
+    let stop_count = gradient.stops().len();
+    let accessible_label = format!("Gradient, {stop_count} stops");
+    let desired_width = ui.available_width().clamp(96.0, 240.0);
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(desired_width, ui.spacing().interact_size.y),
+        Sense::click(),
+    );
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(
+            egui::WidgetType::Button,
+            response.enabled(),
+            &accessible_label,
+        )
+    });
+    if ui.is_rect_visible(rect) {
+        let visuals = ui.style().interact(&response);
+        ui.painter().rect(
+            rect,
+            3.0,
+            visuals.weak_bg_fill,
+            visuals.bg_stroke,
+            StrokeKind::Inside,
+        );
+        let inner = rect.shrink(3.0);
+        let ramp = egui::Rect::from_min_max(
+            inner.min,
+            egui::pos2(
+                (inner.right() - LABEL_WIDTH).max(inner.left()),
+                inner.bottom(),
+            ),
+        );
+        if ramp.width() > 0.0 {
+            let mut mesh = Mesh::default();
+            for index in 0..=SEGMENTS {
+                let factor = index as f32 / SEGMENTS as f32;
+                let x = egui::lerp(ramp.left()..=ramp.right(), factor);
+                let color = gradient_preview_color(gradient, f64::from(factor))
+                    .unwrap_or(ui.visuals().error_fg_color);
+                mesh.colored_vertex(egui::pos2(x, ramp.top()), color);
+                mesh.colored_vertex(egui::pos2(x, ramp.bottom()), color);
+                if index < SEGMENTS {
+                    let vertex = index as u32 * 2;
+                    mesh.add_triangle(vertex, vertex + 1, vertex + 2);
+                    mesh.add_triangle(vertex + 1, vertex + 2, vertex + 3);
+                }
+            }
+            ui.painter().add(egui::Shape::mesh(mesh));
+            ui.painter()
+                .rect_stroke(ramp, 1.0, visuals.bg_stroke, StrokeKind::Inside);
+        }
+        ui.painter().text(
+            egui::pos2(inner.right(), inner.center().y),
+            egui::Align2::RIGHT_CENTER,
+            format!("{stop_count} stops"),
+            egui::TextStyle::Small.resolve(ui.style()),
+            visuals.text_color(),
+        );
+    }
+    response.on_hover_text("Edit gradient")
+}
+
+fn gradient_preview_color(gradient: &GradientValue, factor: f64) -> Option<Color32> {
+    let sampled = library::color_management::sample_gradient_at(gradient, factor).ok()?;
+    let color = library::color_management::to_renderer_srgba8(&sampled).ok()?;
+    Some(Color32::from_rgba_unmultiplied(
+        color.r, color.g, color.b, color.a,
+    ))
 }
 
 pub(crate) fn pattern_value_editor(
@@ -448,5 +521,28 @@ fn suggested_paint_name(palette: &ProjectPalette, base: &str) -> String {
             return candidate;
         }
         suffix += 1;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{gradient_preview_color, Color32, GradientValue};
+
+    #[test]
+    fn default_gradient_preview_uses_the_managed_display_terminal() {
+        let gradient = GradientValue::default();
+        assert_eq!(
+            gradient_preview_color(&gradient, 0.0),
+            Some(Color32::from_rgb(0, 0, 0))
+        );
+        assert_eq!(
+            gradient_preview_color(&gradient, 0.5),
+            Some(Color32::from_rgb(188, 188, 188)),
+            "linear-light midpoint must not become encoded-space 128"
+        );
+        assert_eq!(
+            gradient_preview_color(&gradient, 1.0),
+            Some(Color32::from_rgb(255, 255, 255))
+        );
     }
 }

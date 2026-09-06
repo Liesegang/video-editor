@@ -176,6 +176,9 @@ fn particle_catalog_advertises_bypass_only_for_type_preserving_modifiers() {
         "native.particle.initialize",
         "native.particle.gravity-force",
         "native.particle.drag-force",
+        "native.particle.turbulence",
+        "native.particle.vortex-force",
+        "native.particle.point-force",
     ] {
         let node = Node::new_catalog_node(catalog_id).expect("implemented Particle modifier");
         assert!(node.supports_bypass(), "{catalog_id}");
@@ -397,6 +400,21 @@ fn every_color_catalog_factory_initializes_typed_defaults_and_roundtrips() {
             .and_then(Property::value),
         Some(&PropertyValue::String("linear-srgb".to_string()))
     );
+    let ramp = Node::new_catalog_node(ColorContent::ColorRamp.catalog_id()).unwrap();
+    assert_eq!(
+        ramp.properties()
+            .get(COLOR_RAMP_GRADIENT_PORT)
+            .and_then(Property::value),
+        Some(&PropertyValue::Gradient(
+            crate::model::property::GradientValue::default()
+        ))
+    );
+    assert_eq!(
+        ramp.properties()
+            .get(COLOR_RAMP_FACTOR_PORT)
+            .and_then(Property::value),
+        Some(&PropertyValue::Number(OrderedFloat(0.5)))
+    );
 }
 
 #[test]
@@ -421,6 +439,7 @@ fn every_data_catalog_factory_is_complete_typed_and_roundtrips_losslessly() {
                 && port.data_type
                     == match data {
                         DataContent::Color => PortDataType::Color,
+                        DataContent::Gradient => PortDataType::Gradient,
                         DataContent::Path => PortDataType::Path,
                     }
         }));
@@ -443,6 +462,10 @@ fn every_data_catalog_factory_is_complete_typed_and_roundtrips_losslessly() {
     assert_eq!(
         path,
         &PropertyValue::Path(PathValue::empty(FillRule::NonZero))
+    );
+    assert_eq!(
+        DataContent::Gradient.property_definitions()[0].default_value(),
+        &PropertyValue::Gradient(crate::model::property::GradientValue::default())
     );
     assert!(ColorValue::new(ColorSpaceRef::srgb(), [-1.0, 2.0, 3.0, 0.5]).is_ok());
 }
@@ -514,6 +537,14 @@ fn canonical_data_ui_types_reject_lossy_legacy_substitutions() {
 
 #[test]
 fn module_creation_capability_is_owned_by_semantic_catalog_factories() {
+    let color_ramp = native_node_descriptor(ColorContent::ColorRamp.catalog_id()).unwrap();
+    assert!(color_ramp.supports_general_module_creation());
+    assert!(
+        !native_node_descriptor(ColorContent::Mix.catalog_id())
+            .unwrap()
+            .supports_general_module_creation()
+    );
+
     let particle = native_node_descriptor("native.particle.emitter").unwrap();
     assert_eq!(particle.factory(), NativeNodeFactory::NativeOperation);
     assert!(particle.supports_general_module_creation());

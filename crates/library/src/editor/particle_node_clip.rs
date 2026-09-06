@@ -33,6 +33,11 @@ pub struct ParticlePublishedParameters {
     pub size_min: PublishedParameterId,
     pub size_max: PublishedParameterId,
     pub gravity: PublishedParameterId,
+    pub turbulence_strength: PublishedParameterId,
+    pub turbulence_frequency: PublishedParameterId,
+    pub turbulence_octaves: PublishedParameterId,
+    pub turbulence_evolution: PublishedParameterId,
+    pub turbulence_seed: PublishedParameterId,
     pub drag: PublishedParameterId,
     pub color: PublishedParameterId,
 }
@@ -93,20 +98,24 @@ impl ParticleNodeClipFactory {
         let mut gravity = Node::new_catalog_node(ParticleNodeRole::Gravity.catalog_id())
             .map_err(LibraryError::Validation)?;
         gravity.ui_position = [720.0, 140.0];
+        let mut turbulence = Node::new_catalog_node(ParticleNodeRole::Turbulence.catalog_id())
+            .map_err(LibraryError::Validation)?;
+        turbulence.ui_position = [960.0, 140.0];
         let mut drag = Node::new_catalog_node(ParticleNodeRole::Drag.catalog_id())
             .map_err(LibraryError::Validation)?;
-        drag.ui_position = [960.0, 140.0];
+        drag.ui_position = [1_200.0, 140.0];
         let mut renderer = Node::new_catalog_node(ParticleNodeRole::SpriteRenderer.catalog_id())
             .map_err(LibraryError::Validation)?;
-        renderer.ui_position = [1_200.0, 140.0];
+        renderer.ui_position = [1_440.0, 140.0];
         if let Some(output) = definition.graph.nodes.get_mut(&output_node_id) {
-            output.ui_position = [1_440.0, 140.0];
+            output.ui_position = [1_680.0, 140.0];
         }
 
         let emitter_id = emitter.id;
         let shape_location_id = shape_location.id;
         let initialize_id = initialize.id;
         let gravity_id = gravity.id;
+        let turbulence_id = turbulence.id;
         let drag_id = drag.id;
         let renderer_id = renderer.id;
         definition.graph.nodes.extend([
@@ -114,6 +123,7 @@ impl ParticleNodeClipFactory {
             (shape_location_id, shape_location),
             (initialize_id, initialize),
             (gravity_id, gravity),
+            (turbulence_id, turbulence),
             (drag_id, drag),
             (renderer_id, renderer),
         ]);
@@ -138,6 +148,12 @@ impl ParticleNodeClipFactory {
             ),
             connection(
                 gravity_id,
+                PARTICLE_SYSTEM_PORT,
+                turbulence_id,
+                PARTICLE_SYSTEM_PORT,
+            ),
+            connection(
+                turbulence_id,
                 PARTICLE_SYSTEM_PORT,
                 drag_id,
                 PARTICLE_SYSTEM_PORT,
@@ -254,6 +270,41 @@ impl ParticleNodeClipFactory {
             "Gravity",
             PortDataType::Vec3,
         )?;
+        let turbulence_strength = publish(
+            &mut definition,
+            turbulence_id,
+            "strength",
+            "Turbulence Strength",
+            PortDataType::Number,
+        )?;
+        let turbulence_frequency = publish(
+            &mut definition,
+            turbulence_id,
+            "frequency",
+            "Turbulence Frequency",
+            PortDataType::Number,
+        )?;
+        let turbulence_octaves = publish(
+            &mut definition,
+            turbulence_id,
+            "octaves",
+            "Turbulence Octaves",
+            PortDataType::Integer,
+        )?;
+        let turbulence_evolution = publish(
+            &mut definition,
+            turbulence_id,
+            "evolution",
+            "Turbulence Evolution",
+            PortDataType::Number,
+        )?;
+        let turbulence_seed = publish(
+            &mut definition,
+            turbulence_id,
+            "seed",
+            "Turbulence Seed",
+            PortDataType::Integer,
+        )?;
         let drag_parameter = publish(
             &mut definition,
             drag_id,
@@ -290,6 +341,11 @@ impl ParticleNodeClipFactory {
                 size_min,
                 size_max,
                 gravity: gravity_parameter,
+                turbulence_strength,
+                turbulence_frequency,
+                turbulence_octaves,
+                turbulence_evolution,
+                turbulence_seed,
                 drag: drag_parameter,
                 color,
             },

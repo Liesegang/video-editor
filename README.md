@@ -32,6 +32,20 @@ Choose **Make Independent Copy** on a Composition clip to disconnect it from the
 original shared contents. It remains an editable nested Timeline; any nested child
 templates stay linked. Prefabs are currently reusable within the same Project.
 
+### Reusable color ramps and GPU forces
+
+In a Node Clip, search the Node Editor's context menu for **Gradient** and
+**Color Ramp**. Connect a Gradient value to the ramp, then connect its Color
+output to a color input such as Solid. The scalar Factor selects a color;
+publish it to animate it with Timeline keyframes. Gradient values share the
+existing Inspector/Node editor and Palette, including color stops and spread.
+
+Particle Systems expose **Turbulence Strength** in the Inspector (zero by
+default). Their Node graphs also support ordered, repeated Gravity, Drag,
+Turbulence, Vortex, and Point forces, evaluated by the shared GPU compute
+runtime. Generic per-point custom attributes and lifetime-driven value graphs
+are still in development; the current Color Ramp evaluates once per frame.
+
 ## Repository layout
 
 All Cargo packages owned by the host application live under `crates/` and are

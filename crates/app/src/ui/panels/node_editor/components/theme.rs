@@ -170,6 +170,9 @@ pub(in crate::ui::panels::node_editor) fn node_icon_for_node<'a>(
         Some(NodeContent::Data(DataContent::Color)) => {
             NodeEditorIcon::new(icons::PALETTE, "Canonical color value")
         }
+        Some(NodeContent::Data(DataContent::Gradient)) => {
+            NodeEditorIcon::new(icons::PALETTE, "Reusable gradient value")
+        }
         Some(NodeContent::Data(DataContent::Path)) => {
             NodeEditorIcon::new(icons::WAVE_SINE, "Canonical path value")
         }

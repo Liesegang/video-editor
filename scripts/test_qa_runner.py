@@ -260,6 +260,7 @@ class QaRunnerTests(unittest.TestCase):
             "settings-dialog",
             "assets-timeline",
             "particle-node-clip",
+            "color-ramp",
             "inspector-asset-preview",
             "timeline-edit",
             "timeline-transition",

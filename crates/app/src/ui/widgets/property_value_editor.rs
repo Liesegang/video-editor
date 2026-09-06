@@ -222,7 +222,7 @@ pub(crate) fn property_value_editor(
     edit
 }
 
-fn property_ui_kind(ui_type: &PropertyUiType) -> &'static str {
+pub(crate) fn property_ui_kind(ui_type: &PropertyUiType) -> &'static str {
     match ui_type {
         PropertyUiType::Float { .. } => "float",
         PropertyUiType::Integer { .. } => "integer",

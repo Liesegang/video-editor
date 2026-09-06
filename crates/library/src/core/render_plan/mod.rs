@@ -23,6 +23,8 @@ pub use runtime::{
 #[cfg(test)]
 mod module_property_tests;
 #[cfg(test)]
+mod particle_force_tests;
+#[cfg(test)]
 mod particle_tests;
 #[cfg(test)]
 mod tests;

@@ -70,9 +70,9 @@ fn particle_library_drag_uses_the_authoritative_private_module_factory() {
     let instance = &after.module_instances[&invocation.instance_id];
     let definition = &after.module_definitions[&instance.definition_id];
     assert_eq!(definition.sharing, ModuleDefinitionSharing::Private);
-    assert_eq!(definition.graph.nodes.len(), 7);
-    assert_eq!(definition.graph.connections.len(), 6);
-    assert_eq!(definition.interface.parameters.len(), 16);
+    assert_eq!(definition.graph.nodes.len(), 8);
+    assert_eq!(definition.graph.connections.len(), 7);
+    assert_eq!(definition.interface.parameters.len(), 21);
 
     service.undo().expect("undo").expect("one creation edit");
     assert_eq!(

@@ -11,8 +11,9 @@ use crate::model::project::{EvalOutput, EvalResult, PortAddress, PortOwner};
 use crate::model::property::{ColorSpaceRef, ColorValue, PropertyValue};
 use crate::model::{
     COLOR_ALPHA_PORT, COLOR_BLUE_PORT, COLOR_GREEN_PORT, COLOR_MIX_FACTOR_PORT,
-    COLOR_MIX_LEFT_PORT, COLOR_MIX_RIGHT_PORT, COLOR_RED_PORT, COLOR_SPACE_PORT,
-    COLOR_TARGET_SPACE_PORT, COLOR_VALUE_PORT, ColorContent, Node, NodeContent,
+    COLOR_MIX_LEFT_PORT, COLOR_MIX_RIGHT_PORT, COLOR_RAMP_FACTOR_PORT, COLOR_RAMP_GRADIENT_PORT,
+    COLOR_RED_PORT, COLOR_SPACE_PORT, COLOR_TARGET_SPACE_PORT, COLOR_VALUE_PORT, ColorContent,
+    Node, NodeContent,
 };
 use crate::plugin::ResolvedNodeInputs;
 
@@ -58,6 +59,7 @@ impl FrameEvaluator<'_> {
             ColorContent::ConvertSpace => {
                 self.evaluate_convert_color_space(node, scope, global_time, path)
             }
+            ColorContent::ColorRamp => self.evaluate_color_ramp(node, scope, global_time, path),
         };
         path.remove(&owner);
         result
@@ -196,6 +198,37 @@ impl FrameEvaluator<'_> {
         }
     }
 
+    fn evaluate_color_ramp(
+        &self,
+        node: &Node,
+        scope: EvaluationScope,
+        global_time: f64,
+        path: &mut HashSet<PortOwner>,
+    ) -> EvalResult<PropertyValue> {
+        let gradient = match self.resolve_color_property_input(
+            node,
+            COLOR_RAMP_GRADIENT_PORT,
+            scope,
+            global_time,
+            path,
+        )? {
+            EvalOutput::Produced(PropertyValue::Gradient(gradient)) => gradient,
+            EvalOutput::Produced(_) | EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),
+        };
+        let Some(factor) =
+            self.resolve_color_number(node, COLOR_RAMP_FACTOR_PORT, scope, global_time, path)?
+        else {
+            return Ok(EvalOutput::NoOutput);
+        };
+        match crate::color_management::sample_gradient_at(&gradient, factor) {
+            Ok(color) => Ok(EvalOutput::Produced(PropertyValue::ColorValue(color))),
+            Err(error) => {
+                log::debug!("Color Ramp Node '{}' produced no output: {error}", node.id);
+                Ok(EvalOutput::NoOutput)
+            }
+        }
+    }
+
     fn resolve_color_number(
         &self,
         node: &Node,
@@ -276,9 +309,10 @@ impl FrameEvaluator<'_> {
 
 fn supports_output(operation: ColorContent, output: &str) -> bool {
     match operation {
-        ColorContent::Compose | ColorContent::Mix | ColorContent::ConvertSpace => {
-            output == COLOR_VALUE_PORT
-        }
+        ColorContent::Compose
+        | ColorContent::Mix
+        | ColorContent::ConvertSpace
+        | ColorContent::ColorRamp => output == COLOR_VALUE_PORT,
         ColorContent::Split => matches!(
             output,
             COLOR_SPACE_PORT

@@ -7,8 +7,8 @@ use crate::model::frame::color::Color;
 use crate::model::frame::draw_type::{DrawStyle, GradientStyle, GradientStyleStop, PatternStyle};
 use crate::model::frame::entity::StyleConfig;
 use crate::model::property::{
-    ColorValue, GradientGeometry, GradientSpread, GradientStop, GradientValue, PatternKind,
-    PatternValue, PropertyDefinition, PropertyUiType, PropertyValue, Vec2,
+    ColorValue, GradientValue, PatternKind, PatternValue, PropertyDefinition, PropertyUiType,
+    PropertyValue, Vec2,
 };
 use crate::plugin::{
     EvaluatedOperation, OperationDescriptor, OperationDescriptorError, Plugin, StylePlugin,
@@ -25,35 +25,6 @@ fn point(x: f64, y: f64) -> Vec2 {
         x: OrderedFloat(x),
         y: OrderedFloat(y),
     }
-}
-
-#[expect(
-    clippy::expect_used,
-    reason = "bundled literal Gradient defaults are checked here and by descriptor tests"
-)]
-fn default_gradient() -> GradientValue {
-    GradientValue::new(
-        GradientGeometry::Linear {
-            start: point(0.0, 0.5),
-            end: point(1.0, 0.5),
-        },
-        GradientSpread::Pad,
-        vec![
-            GradientStop::new(
-                0.0,
-                ColorValue::from_straight_srgba8(&Color {
-                    r: 0,
-                    g: 0,
-                    b: 0,
-                    a: 255,
-                }),
-            )
-            .expect("valid bundled Gradient stop"),
-            GradientStop::new(1.0, ColorValue::from_straight_srgba8(&Color::white()))
-                .expect("valid bundled Gradient stop"),
-        ],
-    )
-    .expect("valid bundled Gradient")
 }
 
 #[expect(
@@ -96,7 +67,7 @@ fn gradient_overlay_properties() -> Vec<PropertyDefinition> {
         "gradient",
         PropertyUiType::Gradient,
         "Gradient",
-        PropertyValue::Gradient(default_gradient()),
+        PropertyValue::Gradient(GradientValue::default()),
     )];
     properties.extend(common_overlay_properties());
     properties

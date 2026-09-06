@@ -7,8 +7,10 @@ use super::*;
 use crate::core::render_plan::CompiledParticleDefinition;
 use crate::model::authoring::ModuleOutputId;
 use crate::model::frame::particle::{
-    ParticleEmitterShape, ParticleSceneFrame, ParticleSceneParameters, SceneInvocationKey,
+    ParticleEmitterShape, ParticleForce, ParticleSceneFrame, ParticleSceneParameters,
+    SceneInvocationKey,
 };
+use crate::model::node::ParticleNodeRole;
 use crate::model::property::Vec3;
 
 impl ModuleImageRuntime<'_> {
@@ -26,14 +28,14 @@ impl ModuleImageRuntime<'_> {
             .shape_location_node_id
             .map(|node_id| self.particle_node_values(node_id))
             .transpose()?;
-        let gravity = particle
-            .gravity_node_id
-            .map(|node_id| self.particle_node_values(node_id))
-            .transpose()?;
-        let drag = particle
-            .drag_node_id
-            .map(|node_id| self.particle_node_values(node_id))
-            .transpose()?;
+        let forces = particle
+            .force_nodes
+            .iter()
+            .map(|force| {
+                self.particle_node_values(force.node_id)
+                    .and_then(|values| particle_force(force.role, &values))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let renderer_node = self.particle_node(particle.renderer_node_id)?;
         let renderer = self.node_values(&renderer_node)?;
         let capacity = required_u32(&emitter, "capacity", "Particle Emitter")?;
@@ -93,8 +95,7 @@ impl ModuleImageRuntime<'_> {
                 "Birth Attributes",
                 neutral_vec3(),
             )?,
-            gravity: optional_vec3(gravity.as_ref(), "force", "Gravity Force", neutral_vec3())?,
-            drag: optional_f32(drag.as_ref(), "coefficient", "Drag Force", 0.0, "drag")?,
+            forces,
             size_min: optional_f32(
                 initialize.as_ref(),
                 "size_min",
@@ -182,6 +183,44 @@ fn neutral_vec3() -> Vec3 {
     }
 }
 
+fn particle_force(
+    role: ParticleNodeRole,
+    values: &HashMap<String, PropertyValue>,
+) -> Result<ParticleForce, LibraryError> {
+    match role {
+        ParticleNodeRole::Gravity => Ok(ParticleForce::Gravity {
+            acceleration: required_vec3(values, "force", "Gravity Force")?,
+        }),
+        ParticleNodeRole::Drag => Ok(ParticleForce::Drag {
+            coefficient: required_f32(values, "coefficient", "Drag Force", "drag")?,
+        }),
+        ParticleNodeRole::Turbulence => Ok(ParticleForce::Turbulence {
+            strength: required_f32(values, "strength", "Turbulence", "turbulence strength")?,
+            frequency: required_f32(values, "frequency", "Turbulence", "turbulence frequency")?,
+            octaves: required_u32(values, "octaves", "Turbulence")?,
+            evolution: required_f32(values, "evolution", "Turbulence", "turbulence evolution")?,
+            seed: required_u32(values, "seed", "Turbulence")?,
+        }),
+        ParticleNodeRole::Vortex => Ok(ParticleForce::Vortex {
+            axis: required_vec3(values, "axis", "Vortex Force")?,
+            center: required_vec3(values, "center", "Vortex Force")?,
+            strength: required_f32(values, "strength", "Vortex Force", "vortex strength")?,
+        }),
+        ParticleNodeRole::Point => Ok(ParticleForce::Point {
+            target: required_vec3(values, "target", "Point Force")?,
+            strength: required_f32(values, "strength", "Point Force", "point force strength")?,
+            radius: required_f32(values, "radius", "Point Force", "point force radius")?,
+            falloff: required_f32(values, "falloff", "Point Force", "point force falloff")?,
+        }),
+        ParticleNodeRole::Emitter
+        | ParticleNodeRole::ShapeLocation
+        | ParticleNodeRole::Initialize
+        | ParticleNodeRole::SpriteRenderer => Err(LibraryError::Validation(format!(
+            "Particle executable contains non-force role {role:?} in its force list"
+        ))),
+    }
+}
+
 fn optional_emitter_shape(
     values: Option<&HashMap<String, PropertyValue>>,
 ) -> Result<ParticleEmitterShape, LibraryError> {
@@ -236,6 +275,15 @@ fn optional_f32(
         values.map_or(Ok(neutral), |values| required_number(values, key, owner))?,
         label,
     )
+}
+
+fn required_f32(
+    values: &HashMap<String, PropertyValue>,
+    key: &str,
+    owner: &str,
+    label: &str,
+) -> Result<OrderedFloat<f32>, LibraryError> {
+    finite_f32(required_number(values, key, owner)?, label)
 }
 
 fn finite_f32(value: f64, label: &str) -> Result<OrderedFloat<f32>, LibraryError> {

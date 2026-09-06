@@ -61,7 +61,7 @@ pub(super) struct ModuleNodeViewer<'a, 'host> {
 }
 
 impl ModuleNodeViewer<'_, '_> {
-    fn node(&self, snarl: &Snarl<Uuid>, node_id: egui_snarl::NodeId) -> Option<&Node> {
+    pub(super) fn node(&self, snarl: &Snarl<Uuid>, node_id: egui_snarl::NodeId) -> Option<&Node> {
         snarl
             .get_node(node_id)
             .and_then(|id| self.definition.graph.nodes.get(id))
@@ -83,7 +83,7 @@ impl ModuleNodeViewer<'_, '_> {
             .nth(index)
     }
 
-    fn capture_response(&self, response: &egui::Response) {
+    pub(super) fn capture_response(&self, response: &egui::Response) {
         if let Ok(mut capture) = self.capture.lock() {
             capture.record_response(response);
         }
@@ -415,6 +415,26 @@ impl SnarlViewer<Uuid> for ModuleNodeViewer<'_, '_> {
                     .filter(|port| port.direction == PortDirection::Output)
                     .count()
             })
+    }
+
+    fn has_body(&mut self, node_id: &Uuid) -> bool {
+        self.definition
+            .graph
+            .nodes
+            .get(node_id)
+            .and_then(super::data_leaf::value_property)
+            .is_some()
+    }
+
+    fn show_body(
+        &mut self,
+        node_id: egui_snarl::NodeId,
+        _inputs: &[InPin],
+        _outputs: &[OutPin],
+        ui: &mut egui::Ui,
+        snarl: &mut Snarl<Uuid>,
+    ) {
+        super::data_leaf::show_value(self, node_id, _inputs, _outputs, ui, snarl);
     }
 
     fn show_input(

@@ -1,5 +1,6 @@
 //! Stateful GPU execution boundary shared by preview and export renderers.
 
+mod forces;
 mod gl_backend;
 mod shaders;
 
@@ -601,8 +602,7 @@ fn stable_parameter_hash(parameters: &ParticleSceneParameters) -> u64 {
     parameters.emitter_surface_only.hash(&mut hasher);
     parameters.velocity_min.hash(&mut hasher);
     parameters.velocity_max.hash(&mut hasher);
-    parameters.gravity.hash(&mut hasher);
-    parameters.drag.hash(&mut hasher);
+    parameters.forces.hash(&mut hasher);
     parameters.size_min.hash(&mut hasher);
     parameters.size_max.hash(&mut hasher);
     hasher.finish()
@@ -731,7 +731,7 @@ fn simulate_particles(
     })?;
     let velocity_min = vec3_f32(request.parameters.velocity_min, "minimum velocity")?;
     let velocity_max = vec3_f32(request.parameters.velocity_max, "maximum velocity")?;
-    let gravity = vec3_f32(request.parameters.gravity, "gravity")?;
+    let force_uniforms = forces::ForceUniformData::new(&request.parameters.forces)?;
     let emitter_position = vec3_f32(request.parameters.emitter_position, "emitter position")?;
     let emitter_size = vec3_f32(request.parameters.emitter_size, "emitter size")?;
     let emitter_shape = match request.parameters.emitter_shape {
@@ -791,16 +791,7 @@ fn simulate_particles(
             velocity_max[1],
             velocity_max[2],
         );
-        gl.uniform_3_f32(
-            Some(&pipeline.compute.gravity),
-            gravity[0],
-            gravity[1],
-            gravity[2],
-        );
-        gl.uniform_1_f32(
-            Some(&pipeline.compute.drag),
-            request.parameters.drag.into_inner(),
-        );
+        force_uniforms.upload(gl, &pipeline.compute.forces);
         gl.uniform_1_f32(
             Some(&pipeline.compute.size_min),
             request.parameters.size_min.into_inner(),

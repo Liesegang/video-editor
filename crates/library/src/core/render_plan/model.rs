@@ -137,12 +137,19 @@ pub struct CompiledParticleDefinition {
     /// absent here and the runtime applies the neutral value for that stage.
     pub shape_location_node_id: Option<uuid::Uuid>,
     pub initialize_node_id: Option<uuid::Uuid>,
-    pub gravity_node_id: Option<uuid::Uuid>,
-    pub drag_node_id: Option<uuid::Uuid>,
+    /// Authored force stages in their exact upstream-to-downstream execution
+    /// order. Repeated force kinds remain distinct executable stages.
+    pub(crate) force_nodes: Vec<CompiledParticleForce>,
     pub renderer_node_id: uuid::Uuid,
     /// Stable Module-owned mutable state slot. Runtime keys combine it with
     /// InstancePath and ModuleInstanceId before allocating any buffer.
     pub state_slot_id: uuid::Uuid,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct CompiledParticleForce {
+    pub node_id: uuid::Uuid,
+    pub role: crate::model::node::ParticleNodeRole,
 }
 
 #[derive(Clone, PartialEq, Debug)]

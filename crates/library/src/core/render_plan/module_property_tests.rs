@@ -328,3 +328,159 @@ fn module_transform_keeps_translate_and_scale_axes_independent() {
     assert_eq!((transform.position.x, transform.position.y), (17.0, 29.0));
     assert_eq!((transform.scale.x, transform.scale.y), (0.5, 1.25));
 }
+
+fn color_ramp_project(animated: bool) -> (AuthoringProject, ModuleInstanceId, uuid::Uuid) {
+    use crate::model::authoring::{
+        AutomationKeyframe, AutomationTrack, PublishedParameter, PublishedParameterId,
+    };
+    use crate::model::node::{
+        COLOR_RAMP_FACTOR_PORT, COLOR_RAMP_GRADIENT_PORT, COLOR_VALUE_PORT, ColorContent,
+        DataContent, Node,
+    };
+    use crate::model::project::connection::{DATA_VALUE_OUTPUT_PORT, PortDataType};
+
+    let gradient = Node::new_data("Shared Gradient", DataContent::Gradient);
+    let ramp = Node::new_color("Color Ramp", ColorContent::ColorRamp);
+    let solid = test_generator_node(
+        "Ramp Consumer",
+        GeneratorNodeRequest::Solid {
+            color: Color::white(),
+        },
+    );
+    let (gradient_id, ramp_id, solid_id) = (gradient.id, ramp.id, solid.id);
+    let (mut definition, output_id) =
+        ModuleDefinition::new_image("Reusable Color Ramp", ModuleDefinitionSharing::Private);
+    let output = definition.output(output_id).unwrap();
+    definition.graph.connections.extend([
+        connection(
+            gradient_id,
+            DATA_VALUE_OUTPUT_PORT,
+            ramp_id,
+            COLOR_RAMP_GRADIENT_PORT,
+        ),
+        connection(ramp_id, COLOR_VALUE_PORT, solid_id, "color"),
+        connection(
+            solid_id,
+            IMAGE_OUTPUT_PORT,
+            output.node_id,
+            IMAGE_INPUT_PORT,
+        ),
+    ]);
+    definition
+        .graph
+        .nodes
+        .extend([(gradient_id, gradient), (ramp_id, ramp), (solid_id, solid)]);
+    let parameter_id = PublishedParameterId::new();
+    if animated {
+        definition.interface.parameters.push(PublishedParameter {
+            id: parameter_id,
+            name: "Factor".into(),
+            data_type: PortDataType::Number,
+            default_value: PropertyValue::from(0.5),
+            target: ModulePortAddress {
+                node_id: ramp_id,
+                port: COLOR_RAMP_FACTOR_PORT.into(),
+            },
+        });
+    }
+    let (mut project, instance_id) = project_with_module(definition, output_id);
+    if animated {
+        let item = project.items.values_mut().next().unwrap();
+        let SourceRef::Module(invocation) = &mut item.source else {
+            panic!("Node Clip")
+        };
+        invocation.automation_tracks.insert(
+            parameter_id,
+            AutomationTrack {
+                keyframes: vec![
+                    AutomationKeyframe::new(
+                        seconds(0),
+                        PropertyValue::from(0.0),
+                        Default::default(),
+                    ),
+                    AutomationKeyframe::new(
+                        seconds(1),
+                        PropertyValue::from(1.0),
+                        Default::default(),
+                    ),
+                ],
+            },
+        );
+        project.validate().unwrap();
+    }
+    (project, instance_id, ramp_id)
+}
+
+#[test]
+fn module_color_ramp_keyframes_reach_real_pixels_and_survive_reload() {
+    use crate::cache::CacheManager;
+    use crate::editor::{RenderDestination, RenderService};
+    use crate::rendering::renderer::RenderOutput;
+    use crate::rendering::skia_renderer::SkiaRenderer;
+
+    let (project, _, _) = color_ramp_project(true);
+    let encoded = serde_json::to_string(&project).unwrap();
+    let loaded: AuthoringProject = serde_json::from_str(&encoded).unwrap();
+    loaded.validate().unwrap();
+    assert_eq!(loaded, project);
+    for project in [&project, &loaded] {
+        let plan = RenderPlanCompiler::compile(project).unwrap();
+        let plugins = Arc::new(PluginManager::default());
+        let cache = Arc::new(CacheManager::new());
+        let renderer =
+            SkiaRenderer::new(320, 180, Color::black(), false, None, Some(cache.clone())).unwrap();
+        let mut service = RenderService::new(renderer, plugins.clone(), cache);
+        // Linear-light black/white interpolation produces display-sRGB 188,
+        // not the encoded-space midpoint 128. Both clocks and color identity
+        // must survive the compiled graph and the existing terminal processor.
+        for (frame_number, expected) in [(0, 0), (15, 188), (30, 255), (15, 188)] {
+            let frame =
+                evaluate_render_plan_frame(project, &plan, &plugins, frame_number, 1.0, None)
+                    .unwrap();
+            let output = service
+                .render_authoring_frame(project, &frame, RenderDestination::Preview)
+                .unwrap();
+            let RenderOutput::Image(image) = output else {
+                panic!("Color Ramp Preview must reach the managed terminal Image");
+            };
+            let offset = (90 * 320 + 160) * 4;
+            assert_eq!(
+                &image.data[offset..offset + 4],
+                &[expected, expected, expected, 255]
+            );
+        }
+    }
+}
+
+#[test]
+fn module_color_ramp_factor_edit_undo_preserves_the_shared_gradient_value() {
+    use crate::model::node::COLOR_RAMP_FACTOR_PORT;
+    let (project, instance_id, ramp_id) = color_ramp_project(false);
+    let original = project.clone();
+    let service = TimelineEditorService::new(project).unwrap();
+    service
+        .set_instance_module_node_property(
+            instance_id,
+            ramp_id,
+            COLOR_RAMP_FACTOR_PORT.into(),
+            Property::constant(PropertyValue::from(0.25)),
+        )
+        .unwrap();
+    let edited = service.snapshot().unwrap();
+    let definition_id = edited.module_instances[&instance_id].definition_id;
+    let original_definition = &original.module_definitions[&definition_id];
+    let definition = &edited.module_definitions[&definition_id];
+    for (node_id, node) in &original_definition.graph.nodes {
+        if *node_id != ramp_id {
+            assert_eq!(&definition.graph.nodes[node_id], node);
+        }
+    }
+    assert_eq!(
+        edited.items, original.items,
+        "Color edits must not modify Timeline placement"
+    );
+    let plan = RenderPlanCompiler::compile(&edited).unwrap();
+    evaluate_render_plan_frame(&edited, &plan, &PluginManager::default(), 0, 1.0, None).unwrap();
+    service.undo().unwrap();
+    assert_eq!(service.snapshot().unwrap().as_ref(), &original);
+}

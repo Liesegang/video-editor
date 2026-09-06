@@ -661,8 +661,14 @@ fn particle_scene(target_step: u64) -> ParticleSceneFrame {
             emitter_surface_only: false,
             velocity_min: particle_vec3(-40.0, -120.0, -20.0),
             velocity_max: particle_vec3(40.0, -80.0, 20.0),
-            gravity: particle_vec3(0.0, 100.0, 0.0),
-            drag: OrderedFloat(0.1),
+            forces: vec![
+                crate::model::frame::particle::ParticleForce::Gravity {
+                    acceleration: particle_vec3(0.0, 100.0, 0.0),
+                },
+                crate::model::frame::particle::ParticleForce::Drag {
+                    coefficient: OrderedFloat(0.1),
+                },
+            ],
             size_min: OrderedFloat(4.0),
             size_max: OrderedFloat(10.0),
             color: Color {
@@ -761,8 +767,7 @@ fn gpu_particle_seek_and_independent_renderer_are_deterministic() {
     shaped_emitter.parameters.emission_rate = OrderedFloat(120.0);
     shaped_emitter.parameters.velocity_min = particle_vec3(0.0, 0.0, 0.0);
     shaped_emitter.parameters.velocity_max = particle_vec3(0.0, 0.0, 0.0);
-    shaped_emitter.parameters.gravity = particle_vec3(0.0, 0.0, 0.0);
-    shaped_emitter.parameters.drag = OrderedFloat(0.0);
+    shaped_emitter.parameters.forces.clear();
     shaped_emitter.parameters.size_min = OrderedFloat(4.0);
     shaped_emitter.parameters.size_max = OrderedFloat(4.0);
     shaped_emitter.parameters.color = Color::white();
@@ -840,8 +845,7 @@ fn gpu_particle_seek_and_independent_renderer_are_deterministic() {
     translucent_overlap.parameters.emission_rate = OrderedFloat(120.0);
     translucent_overlap.parameters.velocity_min = particle_vec3(0.0, 0.0, -120.0);
     translucent_overlap.parameters.velocity_max = particle_vec3(0.0, 0.0, -120.0);
-    translucent_overlap.parameters.gravity = particle_vec3(0.0, 0.0, 0.0);
-    translucent_overlap.parameters.drag = OrderedFloat(0.0);
+    translucent_overlap.parameters.forces.clear();
     translucent_overlap.parameters.size_min = OrderedFloat(32.0);
     translucent_overlap.parameters.size_max = OrderedFloat(32.0);
     translucent_overlap.parameters.color = Color {
@@ -863,8 +867,7 @@ fn gpu_particle_seek_and_independent_renderer_are_deterministic() {
     stretched_scene.parameters.emission_rate = OrderedFloat(120.0);
     stretched_scene.parameters.velocity_min = particle_vec3(0.0, 0.0, 0.0);
     stretched_scene.parameters.velocity_max = particle_vec3(0.0, 0.0, 0.0);
-    stretched_scene.parameters.gravity = particle_vec3(0.0, 0.0, 0.0);
-    stretched_scene.parameters.drag = OrderedFloat(0.0);
+    stretched_scene.parameters.forces.clear();
     stretched_scene.parameters.size_min = OrderedFloat(32.0);
     stretched_scene.parameters.size_max = OrderedFloat(32.0);
     stretched_scene.parameters.color = Color::white();
@@ -892,8 +895,7 @@ fn gpu_particle_seek_and_independent_renderer_are_deterministic() {
     perspective_scene.parameters.emission_rate = OrderedFloat(1.0);
     perspective_scene.parameters.velocity_min = particle_vec3(0.0, 0.0, 144.0);
     perspective_scene.parameters.velocity_max = particle_vec3(0.0, 0.0, 144.0);
-    perspective_scene.parameters.gravity = particle_vec3(0.0, 0.0, 0.0);
-    perspective_scene.parameters.drag = OrderedFloat(0.0);
+    perspective_scene.parameters.forces.clear();
     perspective_scene.parameters.size_min = OrderedFloat(48.0);
     perspective_scene.parameters.size_max = OrderedFloat(48.0);
     perspective_scene.parameters.color = Color::white();

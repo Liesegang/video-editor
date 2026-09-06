@@ -3,9 +3,10 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::model::authoring::{ModuleDefinition, ModulePortAddress};
+use crate::model::frame::particle::PARTICLE_MAX_FORCES;
 use crate::model::node::{Node, NodeContent, PARTICLE_SYSTEM_PORT, ParticleNodeRole};
 
-use super::CompiledParticleDefinition;
+use super::{CompiledParticleDefinition, CompiledParticleForce};
 
 pub(super) fn compile_particle_renderers(
     definition: &ModuleDefinition,
@@ -40,15 +41,15 @@ struct ParticleStages {
     emitter: Option<uuid::Uuid>,
     shape_location: Option<uuid::Uuid>,
     initialize: Option<uuid::Uuid>,
-    gravity: Option<uuid::Uuid>,
-    drag: Option<uuid::Uuid>,
+    forces: Vec<CompiledParticleForce>,
 }
 
-/// Compile the implemented typed stages while allowing omitted modifiers
-/// (for example Emitter -> Gravity -> Sprite). Incomplete, disabled,
-/// unsupported, duplicate, or out-of-order chains are a stable no-image
-/// result while the Node Editor is being rewired; they never turn a
-/// model-valid Project into a RenderPlan compilation failure.
+/// Compile the implemented typed stages while allowing omitted modifiers and
+/// repeated force kinds (for example Emitter -> Gravity -> Drag -> Gravity ->
+/// Sprite). Incomplete, disabled, unsupported, duplicate singleton, or
+/// out-of-order chains are a stable no-image result while the Node Editor is
+/// being rewired; they never turn a model-valid Project into a RenderPlan
+/// compilation failure.
 fn compile_particle_chain(
     definition: &ModuleDefinition,
     renderer_node_id: uuid::Uuid,
@@ -56,22 +57,49 @@ fn compile_particle_chain(
     let mut stages = ParticleStages::default();
     let mut downstream_rank = ParticleNodeRole::SpriteRenderer.execution_rank();
     let mut downstream_node_id = renderer_node_id;
+    let mut visited = HashSet::from([renderer_node_id]);
+    let mut force_count = 0_usize;
     loop {
         let node = single_particle_source(definition, downstream_node_id)?;
+        if !visited.insert(node.id) {
+            return None;
+        }
         if !node.enabled {
             return None;
         }
         let role = native_role(node)?;
-        if role == ParticleNodeRole::SpriteRenderer || role.execution_rank() >= downstream_rank {
+        let rank = role.execution_rank();
+        let repeated_force = role.is_force() && rank == downstream_rank;
+        if role == ParticleNodeRole::SpriteRenderer
+            || rank > downstream_rank
+            || (rank == downstream_rank && !repeated_force)
+        {
             return None;
         }
-        downstream_rank = role.execution_rank();
+        downstream_rank = rank;
+        if role.is_force() {
+            force_count += 1;
+            if force_count > PARTICLE_MAX_FORCES {
+                return None;
+            }
+            if !node.bypassed {
+                stages.forces.push(CompiledParticleForce {
+                    node_id: node.id,
+                    role,
+                });
+            }
+            downstream_node_id = node.id;
+            continue;
+        }
         let slot = match role {
             ParticleNodeRole::Emitter => &mut stages.emitter,
             ParticleNodeRole::ShapeLocation => &mut stages.shape_location,
             ParticleNodeRole::Initialize => &mut stages.initialize,
-            ParticleNodeRole::Gravity => &mut stages.gravity,
-            ParticleNodeRole::Drag => &mut stages.drag,
+            ParticleNodeRole::Gravity
+            | ParticleNodeRole::Drag
+            | ParticleNodeRole::Turbulence
+            | ParticleNodeRole::Vortex
+            | ParticleNodeRole::Point => return None,
             ParticleNodeRole::SpriteRenderer => return None,
         };
         if slot.is_some() {
@@ -89,12 +117,12 @@ fn compile_particle_chain(
         }
         downstream_node_id = node.id;
     }
+    stages.forces.reverse();
     Some(CompiledParticleDefinition {
         emitter_node_id: stages.emitter?,
         shape_location_node_id: stages.shape_location,
         initialize_node_id: stages.initialize,
-        gravity_node_id: stages.gravity,
-        drag_node_id: stages.drag,
+        force_nodes: stages.forces,
         renderer_node_id,
         // A fused executable is owned by this concrete renderer chain. Two
         // branches from one Emitter must never evict each other's SSBO state.
@@ -155,7 +183,7 @@ mod tests {
             .expect("particle executable");
         assert_eq!(particle.state_slot_id, particle.renderer_node_id);
         assert_eq!(compiled.particle_renderers.len(), 1);
-        assert_eq!(compiled.nodes.len(), 6);
+        assert_eq!(compiled.nodes.len(), 7);
     }
 
     #[test]

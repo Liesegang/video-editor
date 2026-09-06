@@ -347,13 +347,15 @@ mod tests {
             "native.particle.initialize",
             "native.particle.gravity-force",
             "native.particle.drag-force",
+            "native.particle.turbulence",
+            "native.particle.vortex-force",
+            "native.particle.point-force",
             "native.particle.sprite-renderer",
         ] {
             assert!(native_ids.contains(&available), "missing {available}");
         }
         for unavailable in [
             "native.particle.spawn-burst",
-            "native.particle.vortex-force",
             "native.particle.mesh-renderer",
             "native.model.source",
         ] {

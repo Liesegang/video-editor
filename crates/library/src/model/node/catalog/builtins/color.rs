@@ -1,7 +1,7 @@
 use super::super::super::{
     COLOR_ALPHA_PORT, COLOR_BLUE_PORT, COLOR_GREEN_PORT, COLOR_MIX_FACTOR_PORT,
-    COLOR_MIX_LEFT_PORT, COLOR_MIX_RIGHT_PORT, COLOR_RED_PORT, COLOR_SPACE_PORT,
-    COLOR_TARGET_SPACE_PORT, COLOR_VALUE_PORT, ColorContent,
+    COLOR_MIX_LEFT_PORT, COLOR_MIX_RIGHT_PORT, COLOR_RAMP_FACTOR_PORT, COLOR_RAMP_GRADIENT_PORT,
+    COLOR_RED_PORT, COLOR_SPACE_PORT, COLOR_TARGET_SPACE_PORT, COLOR_VALUE_PORT, ColorContent,
 };
 use super::super::descriptor::{DescriptorIdentity, DescriptorSpec, NativeNodeFactory, PortSpec};
 use crate::model::project::{PortDataType, TIME_PORT};
@@ -45,8 +45,24 @@ const CONVERT_SPACE_INPUTS: &[PortSpec] = &[
         PortDataType::String,
     ),
 ];
+const COLOR_RAMP_INPUTS: &[PortSpec] = &[
+    PortSpec::single(COLOR_RAMP_GRADIENT_PORT, "Gradient", PortDataType::Gradient),
+    PortSpec::single(COLOR_RAMP_FACTOR_PORT, "Factor", PortDataType::Number),
+];
 
 const SPECS: &[DescriptorSpec] = &[
+    DescriptorSpec::implemented(
+        DescriptorIdentity::new(
+            "native.color.ramp",
+            "Color Ramp",
+            "Color",
+            "node_editor.menu.create.color:ramp",
+            &["color", "ramp", "gradient", "sample", "factor", "data"],
+        ),
+        NativeNodeFactory::Color(ColorContent::ColorRamp),
+        COLOR_RAMP_INPUTS,
+        COLOR_OUTPUT,
+    ),
     DescriptorSpec::implemented(
         DescriptorIdentity::new(
             "native.color.compose",

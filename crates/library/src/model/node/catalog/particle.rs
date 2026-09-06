@@ -1,15 +1,15 @@
 //! Typed Particle node contracts.
 //!
-//! Only the bounded Emitter -> Emitter Shape -> Birth Attributes -> Gravity
-//! -> Drag -> Sprite slice has a native runtime. Every other descriptor
-//! remains explicitly disabled.
+//! The bounded native slice owns emission, birth attributes, an ordered force
+//! stage, and sprite rendering. Descriptors outside that slice remain
+//! explicitly disabled.
 
 use ordered_float::OrderedFloat;
 
 use super::descriptor::{DescriptorIdentity, DescriptorSpec, PortSpec};
 use crate::model::frame::color::Color;
 use crate::model::frame::particle::{
-    validate_particle_cold_replay_budget, validate_particle_size_range,
+    ParticleForce, validate_particle_cold_replay_budget, validate_particle_size_range,
 };
 use crate::model::project::{IMAGE_OUTPUT_PORT, PortDataType};
 use crate::model::property::{
@@ -26,7 +26,10 @@ pub(crate) enum ParticleNodeRole {
     ShapeLocation,
     Initialize,
     Gravity,
+    Turbulence,
     Drag,
+    Vortex,
+    Point,
     SpriteRenderer,
 }
 
@@ -37,7 +40,10 @@ impl ParticleNodeRole {
             Self::ShapeLocation => "native.particle.shape-location",
             Self::Initialize => "native.particle.initialize",
             Self::Gravity => "native.particle.gravity-force",
+            Self::Turbulence => "native.particle.turbulence",
             Self::Drag => "native.particle.drag-force",
+            Self::Vortex => "native.particle.vortex-force",
+            Self::Point => "native.particle.point-force",
             Self::SpriteRenderer => "native.particle.sprite-renderer",
         }
     }
@@ -47,10 +53,16 @@ impl ParticleNodeRole {
             Self::Emitter => 0,
             Self::ShapeLocation => 1,
             Self::Initialize => 2,
-            Self::Gravity => 3,
-            Self::Drag => 4,
-            Self::SpriteRenderer => 5,
+            Self::Gravity | Self::Turbulence | Self::Drag | Self::Vortex | Self::Point => 3,
+            Self::SpriteRenderer => 4,
         }
+    }
+
+    pub(crate) const fn is_force(self) -> bool {
+        matches!(
+            self,
+            Self::Gravity | Self::Turbulence | Self::Drag | Self::Vortex | Self::Point
+        )
     }
 
     pub(crate) fn from_catalog_id(catalog_id: &str) -> Option<Self> {
@@ -59,7 +71,10 @@ impl ParticleNodeRole {
             Self::ShapeLocation,
             Self::Initialize,
             Self::Gravity,
+            Self::Turbulence,
             Self::Drag,
+            Self::Vortex,
+            Self::Point,
             Self::SpriteRenderer,
         ]
         .into_iter()
@@ -128,6 +143,7 @@ const POINT_FORCE_INPUTS: &[PortSpec] = &[
 const VORTEX_INPUTS: &[PortSpec] = &[
     PARTICLE,
     PortSpec::single("axis", "Axis", PortDataType::Vec3),
+    PortSpec::single("center", "Center", PortDataType::Vec3),
     PortSpec::single("strength", "Strength", PortDataType::Number),
 ];
 const VECTOR_FIELD_INPUTS: &[PortSpec] = &[
@@ -138,9 +154,11 @@ const VECTOR_FIELD_INPUTS: &[PortSpec] = &[
 ];
 const TURBULENCE_INPUTS: &[PortSpec] = &[
     PARTICLE,
-    PortSpec::single("frequency", "Frequency", PortDataType::Number),
     PortSpec::single("strength", "Strength", PortDataType::Number),
-    PortSpec::single("octave", "Octave", PortDataType::Integer),
+    PortSpec::single("frequency", "Frequency", PortDataType::Number),
+    PortSpec::single("octaves", "Octaves", PortDataType::Integer),
+    PortSpec::single("evolution", "Evolution", PortDataType::Number),
+    PortSpec::single("seed", "Seed", PortDataType::Integer),
 ];
 const COLOR_OVER_LIFE_INPUTS: &[PortSpec] = &[
     PARTICLE,
@@ -174,6 +192,10 @@ const SHAPE_LOCATION_CONSTANT_ONLY_INPUTS: &[&str] =
     &["shape", "position", "radius", "size", "surface_only"];
 const GRAVITY_CONSTANT_ONLY_INPUTS: &[&str] = &["force"];
 const DRAG_CONSTANT_ONLY_INPUTS: &[&str] = &["coefficient"];
+const TURBULENCE_CONSTANT_ONLY_INPUTS: &[&str] =
+    &["strength", "frequency", "octaves", "evolution", "seed"];
+const VORTEX_CONSTANT_ONLY_INPUTS: &[&str] = &["axis", "center", "strength"];
+const POINT_FORCE_CONSTANT_ONLY_INPUTS: &[&str] = &["target", "strength", "radius", "falloff"];
 const MESH_RENDERER_INPUTS: &[PortSpec] = &[
     PARTICLE,
     PortSpec::single("mesh", "Mesh", PortDataType::Asset),
@@ -258,7 +280,22 @@ const SPECS: &[DescriptorSpec] = &[
         PARTICLE_OUTPUT,
         gravity_properties,
     )
+    .validate_property_set(validate_gravity_property_set)
     .constant_only_inputs(GRAVITY_CONSTANT_ONLY_INPUTS, PARTICLE_FIXED_STEP_REASON),
+    DescriptorSpec::implemented_native(
+        DescriptorIdentity::new(
+            ParticleNodeRole::Turbulence.catalog_id(),
+            "Turbulence",
+            "Particles",
+            "node_editor.menu.create.particle_turbulence",
+            &["particle", "turbulence", "noise", "force", "gpu"],
+        ),
+        TURBULENCE_INPUTS,
+        PARTICLE_OUTPUT,
+        turbulence_properties,
+    )
+    .validate_property_set(validate_turbulence_property_set)
+    .constant_only_inputs(TURBULENCE_CONSTANT_ONLY_INPUTS, PARTICLE_FIXED_STEP_REASON),
     DescriptorSpec::implemented_native(
         DescriptorIdentity::new(
             ParticleNodeRole::Drag.catalog_id(),
@@ -271,33 +308,41 @@ const SPECS: &[DescriptorSpec] = &[
         PARTICLE_OUTPUT,
         drag_properties,
     )
+    .validate_property_set(validate_drag_property_set)
     .constant_only_inputs(DRAG_CONSTANT_ONLY_INPUTS, PARTICLE_FIXED_STEP_REASON),
-    DescriptorSpec::placeholder(
-        "native.particle.point-force",
-        "Point Force",
-        "Particles",
+    DescriptorSpec::implemented_native(
+        DescriptorIdentity::new(
+            ParticleNodeRole::Point.catalog_id(),
+            "Point Force",
+            "Particles",
+            "node_editor.menu.create.particle_point_force",
+            &["particle", "point", "attract", "repel", "force", "gpu"],
+        ),
         POINT_FORCE_INPUTS,
         PARTICLE_OUTPUT,
-    ),
-    DescriptorSpec::placeholder(
-        "native.particle.vortex-force",
-        "Vortex Force",
-        "Particles",
+        point_force_properties,
+    )
+    .validate_property_set(validate_point_force_property_set)
+    .constant_only_inputs(POINT_FORCE_CONSTANT_ONLY_INPUTS, PARTICLE_FIXED_STEP_REASON),
+    DescriptorSpec::implemented_native(
+        DescriptorIdentity::new(
+            ParticleNodeRole::Vortex.catalog_id(),
+            "Vortex Force",
+            "Particles",
+            "node_editor.menu.create.particle_vortex_force",
+            &["particle", "vortex", "axis", "force", "gpu"],
+        ),
         VORTEX_INPUTS,
         PARTICLE_OUTPUT,
-    ),
+        vortex_properties,
+    )
+    .validate_property_set(validate_vortex_property_set)
+    .constant_only_inputs(VORTEX_CONSTANT_ONLY_INPUTS, PARTICLE_FIXED_STEP_REASON),
     DescriptorSpec::placeholder(
         "native.particle.vector-field-force",
         "Vector Field Force",
         "Particles",
         VECTOR_FIELD_INPUTS,
-        PARTICLE_OUTPUT,
-    ),
-    DescriptorSpec::placeholder(
-        "native.particle.turbulence",
-        "Turbulence",
-        "Particles",
-        TURBULENCE_INPUTS,
         PARTICLE_OUTPUT,
     ),
     DescriptorSpec::placeholder(
@@ -467,6 +512,13 @@ fn gravity_properties() -> Vec<PropertyDefinition> {
     vec![vec3_property("force", "Force", [0.0, 180.0, 0.0], " px/s²")]
 }
 
+fn validate_gravity_property_set(properties: &PropertyMap) -> Result<(), String> {
+    ParticleForce::Gravity {
+        acceleration: required_vec3(properties, "Gravity Force", "force")?,
+    }
+    .validate()
+}
+
 fn drag_properties() -> Vec<PropertyDefinition> {
     vec![number_property(
         "coefficient",
@@ -476,6 +528,92 @@ fn drag_properties() -> Vec<PropertyDefinition> {
         0.15,
         "",
     )]
+}
+
+fn validate_drag_property_set(properties: &PropertyMap) -> Result<(), String> {
+    ParticleForce::Drag {
+        coefficient: OrderedFloat(required_number(properties, "Drag Force", "coefficient")? as f32),
+    }
+    .validate()
+}
+
+fn turbulence_properties() -> Vec<PropertyDefinition> {
+    vec![
+        number_property("strength", "Strength", 0.0, 100_000.0, 0.0, " px/s²"),
+        number_property("frequency", "Frequency", 0.000_01, 1.0, 0.01, " cells/px"),
+        integer_property("octaves", "Octaves", 1, 4, 1),
+        number_property("evolution", "Evolution", 0.0, 100.0, 0.0, " cells/s"),
+        integer_property("seed", "Seed", 0, i64::from(u32::MAX), 1),
+    ]
+}
+
+fn validate_turbulence_property_set(properties: &PropertyMap) -> Result<(), String> {
+    ParticleForce::Turbulence {
+        strength: OrderedFloat(required_number(properties, "Turbulence", "strength")? as f32),
+        frequency: OrderedFloat(required_number(properties, "Turbulence", "frequency")? as f32),
+        octaves: required_u32(properties, "Turbulence", "octaves")?,
+        evolution: OrderedFloat(required_number(properties, "Turbulence", "evolution")? as f32),
+        seed: required_u32(properties, "Turbulence", "seed")?,
+    }
+    .validate()
+}
+
+fn vortex_properties() -> Vec<PropertyDefinition> {
+    vec![
+        vec3_property("axis", "Axis", [0.0, 0.0, 1.0], ""),
+        vec3_property("center", "Center", [0.0, 0.0, 0.0], " px"),
+        number_property("strength", "Strength", -100_000.0, 100_000.0, 0.0, " px/s²"),
+    ]
+}
+
+fn validate_vortex_property_set(properties: &PropertyMap) -> Result<(), String> {
+    ParticleForce::Vortex {
+        axis: required_vec3(properties, "Vortex Force", "axis")?,
+        center: required_vec3(properties, "Vortex Force", "center")?,
+        strength: OrderedFloat(required_number(properties, "Vortex Force", "strength")? as f32),
+    }
+    .validate()
+}
+
+fn point_force_properties() -> Vec<PropertyDefinition> {
+    vec![
+        vec3_property("target", "Target", [0.0, 0.0, 0.0], " px"),
+        number_property("strength", "Strength", -100_000.0, 100_000.0, 0.0, " px/s²"),
+        number_property("radius", "Radius", 0.000_01, 1_000_000.0, 100.0, " px"),
+        number_property("falloff", "Falloff", 0.0, 16.0, 2.0, ""),
+    ]
+}
+
+fn validate_point_force_property_set(properties: &PropertyMap) -> Result<(), String> {
+    ParticleForce::Point {
+        target: required_vec3(properties, "Point Force", "target")?,
+        strength: OrderedFloat(required_number(properties, "Point Force", "strength")? as f32),
+        radius: OrderedFloat(required_number(properties, "Point Force", "radius")? as f32),
+        falloff: OrderedFloat(required_number(properties, "Point Force", "falloff")? as f32),
+    }
+    .validate()
+}
+
+fn required_number(properties: &PropertyMap, node: &str, key: &str) -> Result<f64, String> {
+    match properties.get(key).and_then(|property| property.value()) {
+        Some(PropertyValue::Number(value)) => Ok(value.into_inner()),
+        _ => Err(format!("{node} requires a numeric '{key}' Property")),
+    }
+}
+
+fn required_u32(properties: &PropertyMap, node: &str, key: &str) -> Result<u32, String> {
+    match properties.get(key).and_then(|property| property.value()) {
+        Some(PropertyValue::Integer(value)) => u32::try_from(*value)
+            .map_err(|_| format!("{node} '{key}' does not fit the runtime range")),
+        _ => Err(format!("{node} requires an integer '{key}' Property")),
+    }
+}
+
+fn required_vec3(properties: &PropertyMap, node: &str, key: &str) -> Result<Vec3, String> {
+    match properties.get(key).and_then(|property| property.value()) {
+        Some(PropertyValue::Vec3(value)) => Ok(*value),
+        _ => Err(format!("{node} requires a Vec3 '{key}' Property")),
+    }
 }
 
 fn sprite_properties() -> Vec<PropertyDefinition> {

@@ -5,7 +5,8 @@ use glow::HasContext;
 
 use crate::error::LibraryError;
 
-use super::shaders::{PARTICLE_COMPUTE, PARTICLE_FRAGMENT, PARTICLE_VERTEX};
+use super::forces::ForceUniformLocations;
+use super::shaders::{PARTICLE_FRAGMENT, PARTICLE_VERTEX, particle_compute_source};
 
 pub(super) const PARTICLE_STRIDE_BYTES: u64 = 48;
 pub(super) const PARTICLE_WORKGROUP_SIZE: u32 = 64;
@@ -63,8 +64,7 @@ pub(super) struct ComputeUniforms {
     pub emitter_surface_only: glow::UniformLocation,
     pub velocity_min: glow::UniformLocation,
     pub velocity_max: glow::UniformLocation,
-    pub gravity: glow::UniformLocation,
-    pub drag: glow::UniformLocation,
+    pub forces: ForceUniformLocations,
     pub size_min: glow::UniformLocation,
     pub size_max: glow::UniformLocation,
 }
@@ -91,8 +91,9 @@ pub(super) struct ParticlePipeline {
 
 impl ParticlePipeline {
     pub fn create(gl: &glow::Context, last_used: u64) -> Result<Self, LibraryError> {
+        let compute_source = particle_compute_source();
         let compute_program =
-            link_program(gl, &[(glow::COMPUTE_SHADER, PARTICLE_COMPUTE)], "compute")?;
+            link_program(gl, &[(glow::COMPUTE_SHADER, &compute_source)], "compute")?;
         let render_program = match link_program(
             gl,
             &[
@@ -146,8 +147,7 @@ impl ParticlePipeline {
                     )?,
                     velocity_min: required_uniform(gl, compute_program, "uVelocityMin")?,
                     velocity_max: required_uniform(gl, compute_program, "uVelocityMax")?,
-                    gravity: required_uniform(gl, compute_program, "uGravity")?,
-                    drag: required_uniform(gl, compute_program, "uDrag")?,
+                    forces: ForceUniformLocations::new(gl, compute_program)?,
                     size_min: required_uniform(gl, compute_program, "uSizeMin")?,
                     size_max: required_uniform(gl, compute_program, "uSizeMax")?,
                 },
@@ -199,7 +199,7 @@ impl ParticlePipeline {
     }
 }
 
-fn required_uniform(
+pub(super) fn required_uniform(
     gl: &glow::Context,
     program: glow::Program,
     name: &str,
