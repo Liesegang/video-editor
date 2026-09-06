@@ -79,8 +79,16 @@ field in producer-local coordinates, before the Sprite transform; capture it
 with **Store Vec3 Attribute**. Typed Attribute outputs can feed later Stores
 without changing their type. Integer attributes preserve exact signed 32-bit
 values, and Color attributes use working-linear color through the GPU path.
-Arithmetic Nodes currently operate on Number fields; Vector/Integer field
-arithmetic and implicit per-point type conversions are not supported.
+The ordinary Add, Subtract, Multiply, Divide, and Fmod Nodes work on Number
+and Vec2/3/4 fields. A scalar broadcasts to every vector component; two
+vectors must have the same dimension. **Length** returns the magnitude of a
+vector (or the absolute value of a scalar), both for ordinary values and
+per-point fields. For example, Position → Multiply → Store Vec3 Attribute →
+Length → Divide → Color Ramp produces distance-based Point colors. Capturing
+or calculating a position attribute does not move the source points.
+Frame-uniform inputs retain their shared editors, published parameters, and
+Timeline keyframes. Integer field arithmetic and implicit per-point type
+conversions are not supported.
 
 Attributes are computed on the GPU at each rendered frame (after simulation
 for particles). They are not yet accumulated across simulation steps.

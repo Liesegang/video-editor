@@ -179,3 +179,100 @@ fn typed_color_export_compiles_the_attribute_into_the_shared_point_program() {
 fn authoring_typed_color_point_png_export_matches_preview_and_is_nontransparent() {
     assert_point_png_export_matches_preview(typed_color_export_project());
 }
+
+fn vector_fields_export_project() -> Arc<AuthoringProject> {
+    use crate::model::node::NUMERIC_LENGTH_CATALOG_ID;
+    use crate::model::property::{Property, PropertyValue, Vec3};
+
+    let mut project = typed_color_export_project().as_ref().clone();
+    let definition = project.module_definitions.values_mut().next().unwrap();
+    let find_catalog = |id: &str| {
+        definition.graph.nodes.values().find(|node| {
+            matches!(node.content(), NodeContent::NativeOperation(operation) if operation.catalog_id == id)
+        }).unwrap().id
+    };
+    let grid = find_catalog(PointNodeRole::Grid.catalog_id());
+    let info = find_catalog(PointNodeRole::Info.catalog_id());
+    let color =
+        find_catalog(PointNodeRole::StoreAttribute(PointAttributeElementType::Color).catalog_id());
+    let ramp = definition
+        .graph
+        .nodes
+        .values()
+        .find(|node| matches!(node.content(), NodeContent::Color(ColorContent::ColorRamp)))
+        .unwrap()
+        .id;
+    let mut scale = Node::new_multiply("Spatial scale");
+    scale
+        .set_property(
+            "b".into(),
+            Property::constant(PropertyValue::Vec3(Vec3 {
+                x: 0.01.into(),
+                y: 0.02.into(),
+                z: 0.03.into(),
+            })),
+        )
+        .unwrap();
+    let position = Node::new_catalog_node(
+        PointNodeRole::StoreAttribute(PointAttributeElementType::Vec3).catalog_id(),
+    )
+    .unwrap();
+    let length = Node::new_catalog_node(NUMERIC_LENGTH_CATALOG_ID).unwrap();
+    let (scale_id, position_id, length_id) = (scale.id, position.id, length.id);
+    for node in [scale, position, length] {
+        definition.graph.nodes.insert(node.id, node);
+    }
+    definition.graph.connections.retain(|edge| {
+        !(edge.to.node_id == color && edge.to.port == "points"
+            || edge.from.node_id == info && edge.to.node_id == ramp)
+    });
+    for (source, output, target, input) in [
+        (grid, "points", position_id, "points"),
+        (info, "position", scale_id, "a"),
+        (scale_id, "result", position_id, "value"),
+        (position_id, "points", color, "points"),
+        (position_id, "attribute", length_id, "value"),
+        (length_id, "result", ramp, "factor"),
+    ] {
+        definition.graph.connections.push(ModuleConnection {
+            id: ModuleConnectionId::new(),
+            from: ModulePortAddress {
+                node_id: source,
+                port: output.into(),
+            },
+            to: ModulePortAddress {
+                node_id: target,
+                port: input.into(),
+            },
+            order: 0,
+            blend_mode: crate::model::BlendMode::Normal,
+        });
+    }
+    definition.topology_revision += 1;
+    project.validate().unwrap();
+    Arc::new(project)
+}
+
+#[test]
+fn vector_fields_export_uses_the_shared_numeric_point_program() {
+    let project = vector_fields_export_project();
+    let plan = RenderPlanCompiler::compile(&project).unwrap();
+    let definition = plan.module_definitions.values().next().unwrap();
+    let renderer = definition.point_renderers.values().next().unwrap();
+    let program = renderer.point_program.as_ref().unwrap();
+    assert_eq!(
+        program.schema.attributes()[0].element_type(),
+        PointAttributeElementType::Vec3
+    );
+    assert!(program.instructions.iter().any(|instruction| matches!(
+        instruction,
+        crate::core::render_plan::CompiledPointInstruction::Length { .. }
+    )));
+}
+
+#[cfg(all(feature = "gl", target_os = "windows"))]
+#[test]
+#[ignore = "requires an idle desktop OpenGL 4.3 GPU"]
+fn authoring_vector_fields_point_png_export_matches_preview_and_is_nontransparent() {
+    assert_point_png_export_matches_preview(vector_fields_export_project());
+}

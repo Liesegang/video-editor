@@ -484,6 +484,19 @@ Divide:
   outputs:
     - name: result
       type: Scalar/Vector
+Length:
+  parent: Math
+  category: Math
+  catalog_status: native
+  catalog_id: native.numeric.length
+  runtime_status: implemented
+  description: Scalar absolute value or Euclidean vector magnitude; shared uniform and per-point evaluation
+  inputs:
+    - name: value
+      type: Scalar/Vector
+  outputs:
+    - name: result
+      type: Number
 Power:
   parent: Math
   category: Math

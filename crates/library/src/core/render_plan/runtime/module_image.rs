@@ -12,8 +12,8 @@ use crate::model::frame::entity::{
 };
 use crate::model::node::{
     COLOR_RAMP_FACTOR_PORT, COLOR_RAMP_GRADIENT_PORT, COLOR_VALUE_PORT, ColorContent,
-    TRANSITION_IMAGE_INPUT_NODE_ID, TRANSITION_IMAGE_MIX_NODE_ID,
-    TRANSITION_PROGRESS_INPUT_NODE_ID,
+    NUMERIC_LENGTH_CATALOG_ID, NUMERIC_LENGTH_INPUT_PORT, TRANSITION_IMAGE_INPUT_NODE_ID,
+    TRANSITION_IMAGE_MIX_NODE_ID, TRANSITION_PROGRESS_INPUT_NODE_ID,
 };
 use crate::model::project::{
     TRANSITION_FROM_INPUT_PORT, TRANSITION_PROGRESS_INPUT_PORT, TRANSITION_TO_INPUT_PORT,
@@ -755,6 +755,22 @@ impl ModuleImageRuntime<'_> {
             return self.value_input(node.id, input);
         }
         match node.content {
+            NodeContent::NativeOperation(operation)
+                if operation.catalog_id == NUMERIC_LENGTH_CATALOG_ID
+                    && source.port == NUMBER_RESULT_OUTPUT_PORT =>
+            {
+                let Some(value) = self.value_input(node.id, NUMERIC_LENGTH_INPUT_PORT)? else {
+                    return Ok(None);
+                };
+                crate::model::numeric::evaluate_numeric_length(&value)
+                    .map(Some)
+                    .map_err(|error| {
+                        LibraryError::Render(format!(
+                            "Numeric Length Module Node {} failed: {error:?}",
+                            node.id
+                        ))
+                    })
+            }
             NodeContent::NativeOperation(operation)
                 if operation.catalog_id == TRANSITION_PROGRESS_INPUT_NODE_ID
                     && source.port == NUMBER_RESULT_OUTPUT_PORT =>

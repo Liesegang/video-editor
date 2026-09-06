@@ -26,6 +26,39 @@ pub(crate) enum NumericEvaluationError {
     NonFiniteResult,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum NumericShape {
+    Scalar,
+    Vec2,
+    Vec3,
+    Vec4,
+}
+
+impl NumericShape {
+    pub(crate) const fn dimension(self) -> usize {
+        match self {
+            Self::Scalar => 1,
+            Self::Vec2 => 2,
+            Self::Vec3 => 3,
+            Self::Vec4 => 4,
+        }
+    }
+
+    /// The authoritative scalar-broadcast rule shared by frame-wide and
+    /// per-Point numeric evaluation.
+    pub(crate) fn broadcast_result(self, other: Self) -> Result<Self, NumericEvaluationError> {
+        match (self, other) {
+            (left, right) if left == right => Ok(left),
+            (Self::Scalar, right) => Ok(right),
+            (left, Self::Scalar) => Ok(left),
+            (left, right) => Err(NumericEvaluationError::DimensionMismatch {
+                left: left.dimension(),
+                right: right.dimension(),
+            }),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum NumericValue {
     Scalar(f64),
@@ -59,12 +92,12 @@ impl NumericValue {
         Ok(numeric)
     }
 
-    fn dimension(self) -> usize {
+    fn shape(self) -> NumericShape {
         match self {
-            Self::Scalar(_) => 1,
-            Self::Vec2(_) => 2,
-            Self::Vec3(_) => 3,
-            Self::Vec4(_) => 4,
+            Self::Scalar(_) => NumericShape::Scalar,
+            Self::Vec2(_) => NumericShape::Vec2,
+            Self::Vec3(_) => NumericShape::Vec3,
+            Self::Vec4(_) => NumericShape::Vec4,
         }
     }
 
@@ -84,6 +117,30 @@ impl NumericValue {
             Self::Vec3(values) => values[index],
             Self::Vec4(values) => values[index],
         }
+    }
+
+    fn stable_length(self) -> Result<f64, NumericEvaluationError> {
+        if let Self::Scalar(value) = self {
+            return Ok(value.abs());
+        }
+        let dimension = self.shape().dimension();
+        let scale = (0..dimension)
+            .map(|index| self.component(index).abs())
+            .fold(0.0, f64::max);
+        if scale == 0.0 {
+            return Ok(0.0);
+        }
+        let sum = (0..dimension)
+            .map(|index| {
+                let normalized = self.component(index) / scale;
+                normalized * normalized
+            })
+            .sum::<f64>();
+        let result = scale * sum.sqrt();
+        result
+            .is_finite()
+            .then_some(result)
+            .ok_or(NumericEvaluationError::NonFiniteResult)
     }
 
     fn from_components(dimension: usize, values: [f64; 4]) -> Result<Self, NumericEvaluationError> {
@@ -125,16 +182,7 @@ pub(crate) fn evaluate_numeric_binary(
 ) -> Result<PropertyValue, NumericEvaluationError> {
     let left = NumericValue::from_property(left)?;
     let right = NumericValue::from_property(right)?;
-    let left_dimension = left.dimension();
-    let right_dimension = right.dimension();
-    let dimension = match (left_dimension, right_dimension) {
-        (left, right) if left == right => left,
-        (1, right) => right,
-        (left, 1) => left,
-        (left, right) => {
-            return Err(NumericEvaluationError::DimensionMismatch { left, right });
-        }
-    };
+    let dimension = left.shape().broadcast_result(right.shape())?.dimension();
 
     let mut values = [0.0; 4];
     for (index, value) in values.iter_mut().take(dimension).enumerate() {
@@ -159,6 +207,15 @@ pub(crate) fn evaluate_numeric_binary(
         }
     }
     Ok(NumericValue::from_components(dimension, values)?.into_property())
+}
+
+/// Evaluate the magnitude of a scalar or 2D/3D/4D vector without squaring
+/// large components before scaling. Scalar length is absolute value.
+pub(crate) fn evaluate_numeric_length(
+    value: &PropertyValue,
+) -> Result<PropertyValue, NumericEvaluationError> {
+    let value = NumericValue::from_property(value)?;
+    Ok(PropertyValue::Number(OrderedFloat(value.stable_length()?)))
 }
 
 #[cfg(test)]
@@ -256,6 +313,47 @@ mod tests {
                 &PropertyValue::Number(OrderedFloat(2.0)),
             ),
             Err(NumericEvaluationError::NonFiniteResult)
+        );
+    }
+
+    #[test]
+    fn shape_algebra_matches_runtime_broadcasting() {
+        assert_eq!(
+            NumericShape::Vec3.broadcast_result(NumericShape::Scalar),
+            Ok(NumericShape::Vec3)
+        );
+        assert_eq!(
+            NumericShape::Scalar.broadcast_result(NumericShape::Vec4),
+            Ok(NumericShape::Vec4)
+        );
+        assert_eq!(
+            NumericShape::Vec2.broadcast_result(NumericShape::Vec3),
+            Err(NumericEvaluationError::DimensionMismatch { left: 2, right: 3 })
+        );
+    }
+
+    #[test]
+    fn length_is_scalar_absolute_and_stably_scaled_vector_magnitude() {
+        assert_eq!(
+            evaluate_numeric_length(&PropertyValue::Number(OrderedFloat(-4.0))),
+            Ok(PropertyValue::Number(OrderedFloat(4.0)))
+        );
+        assert_eq!(
+            evaluate_numeric_length(&vec3(3.0, 4.0, 12.0)),
+            Ok(PropertyValue::Number(OrderedFloat(13.0)))
+        );
+        let large = f64::MAX / 2.0;
+        assert_eq!(
+            evaluate_numeric_length(&vec2(large, 0.0)),
+            Ok(PropertyValue::Number(OrderedFloat(large)))
+        );
+        assert_eq!(
+            evaluate_numeric_length(&vec2(f64::MAX, f64::MAX)),
+            Err(NumericEvaluationError::NonFiniteResult)
+        );
+        assert_eq!(
+            evaluate_numeric_length(&PropertyValue::Boolean(true)),
+            Err(NumericEvaluationError::NonNumeric)
         );
     }
 }

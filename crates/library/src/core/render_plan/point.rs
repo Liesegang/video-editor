@@ -4,12 +4,13 @@ use std::collections::{HashMap, HashSet};
 
 use super::{
     CompiledPointInstruction, CompiledPointProgram, CompiledPointRenderer, CompiledPointSource,
+    CompiledPointValueType,
 };
 use crate::model::authoring::{ModuleDefinition, ModulePortAddress};
 use crate::model::node::{
-    COLOR_RAMP_FACTOR_PORT, COLOR_RAMP_GRADIENT_PORT, COLOR_VALUE_PORT, ColorContent, Node,
-    NodeContent, PARTICLE_SYSTEM_PORT, POINT_ATTRIBUTE_OUTPUT_PORT, POINT_ATTRIBUTE_VALUE_PORT,
-    POINT_SOURCE_PORT, PointNodeRole,
+    COLOR_RAMP_FACTOR_PORT, COLOR_RAMP_GRADIENT_PORT, COLOR_VALUE_PORT, ColorContent,
+    NUMERIC_LENGTH_CATALOG_ID, NUMERIC_LENGTH_INPUT_PORT, Node, NodeContent, PARTICLE_SYSTEM_PORT,
+    POINT_ATTRIBUTE_OUTPUT_PORT, POINT_ATTRIBUTE_VALUE_PORT, POINT_SOURCE_PORT, PointNodeRole,
 };
 use crate::model::point::{
     POINT_MAX_INSTRUCTIONS, POINT_MAX_RAMPS, PointAttributeDefinition, PointAttributeElementType,
@@ -253,6 +254,11 @@ pub(super) fn validate_point_field_consumers(
             NodeContent::Color(ColorContent::ColorRamp) => {
                 connection.to.port == COLOR_RAMP_FACTOR_PORT
             }
+            NodeContent::NativeOperation(operation)
+                if operation.catalog_id == NUMERIC_LENGTH_CATALOG_ID =>
+            {
+                connection.to.port == NUMERIC_LENGTH_INPUT_PORT
+            }
             NodeContent::NativeOperation(_) => match point_role(target) {
                 Some(PointNodeRole::StoreAttribute(_)) => {
                     connection.to.port == POINT_ATTRIBUTE_VALUE_PORT
@@ -322,7 +328,7 @@ impl FieldDependencies {
 #[derive(Clone)]
 struct CompiledValue {
     register: u16,
-    element_type: PointAttributeElementType,
+    value_type: CompiledPointValueType,
     dependencies: FieldDependencies,
 }
 
@@ -331,7 +337,7 @@ struct PointProgramBuilder<'a> {
     schema: PointAttributeSchema,
     instructions: Vec<CompiledPointInstruction>,
     values: HashMap<ModulePortAddress, CompiledValue>,
-    uniforms: HashMap<(ModulePortAddress, PointAttributeElementType), CompiledValue>,
+    uniforms: HashMap<(ModulePortAddress, CompiledPointValueType), CompiledValue>,
     dependency_resolver: PointDependencyResolver<'a>,
     ramp_count: usize,
 }
@@ -356,29 +362,30 @@ impl<'a> PointProgramBuilder<'a> {
     fn compile_input(
         &mut self,
         target: &ModulePortAddress,
-        element_type: PointAttributeElementType,
+        value_type: impl Into<CompiledPointValueType>,
         context: &FieldContext<'_>,
     ) -> Result<CompiledValue, String> {
+        let value_type = value_type.into();
         let source = single_input_source(self.definition, target);
         if let Some(source) = source.as_ref()
             && self.depends_on_point(source)
         {
-            let value = self.compile_source(source, element_type, context)?;
-            require_input_type(&value, element_type, target)?;
+            let value = self.compile_source(source, value_type, context)?;
+            require_input_type(&value, value_type, target)?;
             return Ok(value);
         }
-        let key = (target.clone(), element_type);
+        let key = (target.clone(), value_type);
         if let Some(value) = self.uniforms.get(&key) {
             return Ok(value.clone());
         }
         let register = self.emit(CompiledPointInstruction::Uniform {
             node_id: target.node_id,
             port: target.port.clone(),
-            element_type,
+            value_type,
         })?;
         let value = CompiledValue {
             register,
-            element_type,
+            value_type,
             dependencies: FieldDependencies::default(),
         };
         self.uniforms.insert(key, value.clone());
@@ -388,7 +395,7 @@ impl<'a> PointProgramBuilder<'a> {
     fn compile_source(
         &mut self,
         source: &ModulePortAddress,
-        expected_type: PointAttributeElementType,
+        expected_type: CompiledPointValueType,
         context: &FieldContext<'_>,
     ) -> Result<CompiledValue, String> {
         if let Some(value) = self.values.get(source) {
@@ -419,6 +426,24 @@ impl<'a> PointProgramBuilder<'a> {
         }
 
         let value = match node.content() {
+            NodeContent::NativeOperation(operation)
+                if operation.catalog_id == NUMERIC_LENGTH_CATALOG_ID
+                    && source.port == NUMBER_RESULT_OUTPUT_PORT =>
+            {
+                let input = self.compile_input(
+                    &address(node.id, NUMERIC_LENGTH_INPUT_PORT),
+                    CompiledPointValueType::Numeric,
+                    context,
+                )?;
+                let register = self.emit(CompiledPointInstruction::Length {
+                    value: input.register,
+                })?;
+                CompiledValue {
+                    register,
+                    value_type: PointAttributeElementType::Number.into(),
+                    dependencies: input.dependencies,
+                }
+            }
             NodeContent::NativeOperation(_) => match point_role(&node) {
                 Some(PointNodeRole::Info) => self.compile_point_info(&node, source, context)?,
                 Some(PointNodeRole::StoreAttribute(_)) => {
@@ -431,16 +456,15 @@ impl<'a> PointProgramBuilder<'a> {
             NodeContent::Value(operation) if source.port == NUMBER_RESULT_OUTPUT_PORT => {
                 let left = self.compile_input(
                     &address(node.id, operation.primary_input()),
-                    PointAttributeElementType::Number,
+                    CompiledPointValueType::Numeric,
                     context,
                 )?;
                 let right = self.compile_input(
                     &address(node.id, operation.secondary_input()),
-                    PointAttributeElementType::Number,
+                    CompiledPointValueType::Numeric,
                     context,
                 )?;
-                require_type(&left, PointAttributeElementType::Number, node.id)?;
-                require_type(&right, PointAttributeElementType::Number, node.id)?;
+                let value_type = left.value_type.binary_result(right.value_type)?;
                 let mut dependencies = left.dependencies.clone();
                 dependencies.merge(&right.dependencies);
                 let register = self.emit(CompiledPointInstruction::Binary {
@@ -450,7 +474,7 @@ impl<'a> PointProgramBuilder<'a> {
                 })?;
                 CompiledValue {
                     register,
-                    element_type: PointAttributeElementType::Number,
+                    value_type,
                     dependencies,
                 }
             }
@@ -476,14 +500,13 @@ impl<'a> PointProgramBuilder<'a> {
                     PointAttributeElementType::Number,
                     context,
                 )?;
-                require_type(&factor, PointAttributeElementType::Number, node.id)?;
                 let register = self.emit(CompiledPointInstruction::ColorRamp {
                     gradient,
                     factor: factor.register,
                 })?;
                 CompiledValue {
                     register,
-                    element_type: PointAttributeElementType::Color,
+                    value_type: PointAttributeElementType::Color.into(),
                     dependencies: factor.dependencies,
                 }
             }
@@ -533,11 +556,12 @@ impl<'a> PointProgramBuilder<'a> {
         let register = self.emit(instruction)?;
         Ok(CompiledValue {
             register,
-            element_type: if source.port == POINT_POSITION_OUTPUT_PORT {
+            value_type: if source.port == POINT_POSITION_OUTPUT_PORT {
                 PointAttributeElementType::Vec3
             } else {
                 PointAttributeElementType::Number
-            },
+            }
+            .into(),
             dependencies,
         })
     }
@@ -575,7 +599,7 @@ impl<'a> PointProgramBuilder<'a> {
         })?;
         Ok(CompiledValue {
             register,
-            element_type,
+            value_type: element_type.into(),
             dependencies,
         })
     }
@@ -674,29 +698,15 @@ impl<'a> PointDependencyResolver<'a> {
     }
 }
 
-fn require_type(
-    value: &CompiledValue,
-    expected: PointAttributeElementType,
-    node_id: uuid::Uuid,
-) -> Result<(), String> {
-    if value.element_type != expected {
-        return Err(format!(
-            "Point field Node {node_id} requires {expected:?}, received {:?}",
-            value.element_type
-        ));
-    }
-    Ok(())
-}
-
 fn require_input_type(
     value: &CompiledValue,
-    expected: PointAttributeElementType,
+    expected: CompiledPointValueType,
     target: &ModulePortAddress,
 ) -> Result<(), String> {
-    if value.element_type != expected {
+    if !expected.compatible_with(value.value_type) {
         return Err(format!(
-            "Per-Point input {}:{} requires {expected:?}, received {:?}; implicit varying conversions are not supported",
-            target.node_id, target.port, value.element_type
+            "Per-Point input {}:{} requires {expected}, received {}; implicit varying conversions are not supported",
+            target.node_id, target.port, value.value_type
         ));
     }
     Ok(())

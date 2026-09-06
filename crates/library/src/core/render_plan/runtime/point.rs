@@ -8,6 +8,7 @@ use super::frame_values::{
 use super::*;
 use crate::core::render_plan::{
     CompiledPointInstruction, CompiledPointProgram, CompiledPointRenderer, CompiledPointSource,
+    CompiledPointValueType,
 };
 use crate::model::authoring::ModuleOutputId;
 use crate::model::frame::point::{
@@ -151,7 +152,7 @@ impl ModuleImageRuntime<'_> {
                     CompiledPointInstruction::Uniform {
                         node_id,
                         port,
-                        element_type,
+                        value_type,
                     } => {
                         let value = self.value_input(*node_id, port)?.ok_or_else(|| {
                             LibraryError::Validation(format!(
@@ -159,7 +160,7 @@ impl ModuleImageRuntime<'_> {
                             ))
                         })?;
                         PointInstruction::Constant {
-                            value: canonical_uniform(*element_type, value)?,
+                            value: canonical_uniform(*value_type, value)?,
                         }
                     }
                     CompiledPointInstruction::Age => PointInstruction::Age,
@@ -188,6 +189,9 @@ impl ModuleImageRuntime<'_> {
                         left: *left,
                         right: *right,
                     },
+                    CompiledPointInstruction::Length { value } => {
+                        PointInstruction::Length { value: *value }
+                    }
                     CompiledPointInstruction::ColorRamp { gradient, factor } => {
                         let index = if let Some(index) = ramp_addresses.get(gradient) {
                             *index
@@ -228,9 +232,24 @@ impl ModuleImageRuntime<'_> {
 }
 
 fn canonical_uniform(
-    kind: PointAttributeElementType,
+    value_type: impl Into<CompiledPointValueType>,
     value: PropertyValue,
 ) -> Result<PropertyValue, LibraryError> {
+    let kind = match value_type.into() {
+        CompiledPointValueType::Exact(kind) => kind,
+        CompiledPointValueType::Numeric => {
+            let kind = PointAttributeElementType::from_property_value(&value)
+                .map_err(LibraryError::Validation)?;
+            if kind == PointAttributeElementType::Integer {
+                // Uniform Numeric values use the existing numeric kernel's
+                // Integer-to-Number semantics, unlike varying Integer fields.
+                PointAttributeElementType::Number
+            } else {
+                kind.numeric_shape().map_err(LibraryError::Validation)?;
+                kind
+            }
+        }
+    };
     let value = match (kind, value) {
         (PointAttributeElementType::Number, PropertyValue::Integer(value)) => {
             PropertyValue::Number(OrderedFloat(value as f64))

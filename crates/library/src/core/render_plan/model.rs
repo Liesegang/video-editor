@@ -169,6 +169,56 @@ pub(crate) struct CompiledPointProgram {
     pub color_register: u16,
 }
 
+/// Compile-time constraint for a Point value. Numeric uniforms retain their
+/// scalar/vector dimension until the authoritative property evaluator samples
+/// the invocation. The sampled Point program contains only concrete types.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) enum CompiledPointValueType {
+    Exact(PointAttributeElementType),
+    Numeric,
+}
+
+impl From<PointAttributeElementType> for CompiledPointValueType {
+    fn from(value: PointAttributeElementType) -> Self {
+        Self::Exact(value)
+    }
+}
+
+impl CompiledPointValueType {
+    pub fn compatible_with(self, actual: Self) -> bool {
+        match (self, actual) {
+            (Self::Exact(expected), Self::Exact(actual)) => expected == actual,
+            (Self::Exact(kind), Self::Numeric) | (Self::Numeric, Self::Exact(kind)) => {
+                kind.numeric_shape().is_ok()
+            }
+            (Self::Numeric, Self::Numeric) => true,
+        }
+    }
+
+    pub fn binary_result(self, right: Self) -> Result<Self, String> {
+        match (self, right) {
+            (Self::Exact(left), Self::Exact(right)) => {
+                Ok(Self::Exact(left.numeric_binary_result(right)?))
+            }
+            _ if Self::Numeric.compatible_with(self) && Self::Numeric.compatible_with(right) => {
+                Ok(Self::Numeric)
+            }
+            _ => Err(format!(
+                "Point arithmetic requires numeric values, got {self} and {right}"
+            )),
+        }
+    }
+}
+
+impl std::fmt::Display for CompiledPointValueType {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Exact(kind) => write!(formatter, "{kind:?}"),
+            Self::Numeric => formatter.write_str("Number/Vec2/Vec3/Vec4"),
+        }
+    }
+}
+
 /// One typed instruction in the derived render-stage Point field program.
 /// Registers are instruction indices; authored constants and Published values
 /// remain input addresses so the existing frame evaluator stays authoritative.
@@ -177,7 +227,7 @@ pub(crate) enum CompiledPointInstruction {
     Uniform {
         node_id: uuid::Uuid,
         port: String,
-        element_type: PointAttributeElementType,
+        value_type: CompiledPointValueType,
     },
     Age,
     NormalizedAge,
@@ -196,6 +246,9 @@ pub(crate) enum CompiledPointInstruction {
         operation: NumericBinaryOperation,
         left: u16,
         right: u16,
+    },
+    Length {
+        value: u16,
     },
     ColorRamp {
         gradient: ModulePortAddress,

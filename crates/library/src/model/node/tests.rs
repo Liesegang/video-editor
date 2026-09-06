@@ -1,5 +1,5 @@
 use super::*;
-use crate::model::property::{KeyframeId, Property};
+use crate::model::property::{KeyframeId, Property, Vec3};
 use crate::plugin::PluginManager;
 
 fn operation_with_ports(ports: Vec<PortDefinition>) -> Node {
@@ -297,6 +297,41 @@ fn every_native_value_has_one_complete_unique_descriptor_contract() {
         );
         let _ = content.numeric_operation();
     }
+}
+
+#[test]
+fn numeric_length_catalog_uses_one_typed_native_contract() {
+    let descriptor = native_node_descriptor(NUMERIC_LENGTH_CATALOG_ID).unwrap();
+    assert_eq!(descriptor.label(), "Length");
+    assert_eq!(descriptor.category(), "Math");
+    assert_eq!(descriptor.qa_id(), "node_editor.menu.create.numeric:length");
+    assert_eq!(descriptor.factory(), NativeNodeFactory::NativeOperation);
+    let node = Node::new_catalog_node(NUMERIC_LENGTH_CATALOG_ID).unwrap();
+    assert!(matches!(
+        node.content(),
+        NodeContent::NativeOperation(operation)
+            if operation.catalog_id == NUMERIC_LENGTH_CATALOG_ID
+    ));
+    assert_eq!(
+        node.properties()
+            .get(NUMERIC_LENGTH_INPUT_PORT)
+            .and_then(Property::value),
+        Some(&PropertyValue::Vec3(Vec3 {
+            x: 0.0.into(),
+            y: 0.0.into(),
+            z: 0.0.into(),
+        }))
+    );
+    assert!(descriptor.ports().iter().any(|port| {
+        port.direction == PortDirection::Input
+            && port.key == NUMERIC_LENGTH_INPUT_PORT
+            && port.data_type == PortDataType::Numeric
+    }));
+    assert!(descriptor.ports().iter().any(|port| {
+        port.direction == PortDirection::Output
+            && port.key == NUMBER_RESULT_OUTPUT_PORT
+            && port.data_type == PortDataType::Number
+    }));
 }
 
 #[test]

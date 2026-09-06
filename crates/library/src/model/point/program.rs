@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::{NumericBinaryOperation, PointAttributeElementType, PointAttributeSchema};
+use crate::model::numeric::NumericShape;
 use crate::model::property::{GradientValue, PropertyValue};
 
 pub const POINT_MAX_INSTRUCTIONS: usize = 64;
@@ -36,6 +37,9 @@ pub enum PointInstruction {
         left: u16,
         right: u16,
     },
+    Length {
+        value: u16,
+    },
     ColorRamp {
         gradient: u16,
         factor: u16,
@@ -54,6 +58,13 @@ pub struct PointRenderProgram {
 
 impl PointRenderProgram {
     pub fn validate(&self) -> Result<(), String> {
+        self.register_types().map(drop)
+    }
+
+    /// Validate the complete program and return the concrete type of every
+    /// SSA register. GPU lowering consumes this result instead of maintaining
+    /// a second numeric broadcast/type-inference implementation.
+    pub(crate) fn register_types(&self) -> Result<Vec<PointAttributeElementType>, String> {
         self.schema.validate()?;
         if self.instructions.is_empty() || self.instructions.len() > POINT_MAX_INSTRUCTIONS {
             return Err(format!(
@@ -121,8 +132,13 @@ impl PointRenderProgram {
                     kind
                 }
                 PointInstruction::Binary { left, right, .. } => {
-                    require_register(&registers, *left, PointAttributeElementType::Number)?;
-                    require_register(&registers, *right, PointAttributeElementType::Number)?;
+                    PointAttributeElementType::numeric_binary_result(
+                        register_type(&registers, *left)?,
+                        register_type(&registers, *right)?,
+                    )?
+                }
+                PointInstruction::Length { value } => {
+                    register_type(&registers, *value)?.numeric_shape()?;
                     PointAttributeElementType::Number
                 }
                 PointInstruction::ColorRamp { gradient, factor } => {
@@ -142,8 +158,46 @@ impl PointRenderProgram {
             &registers,
             self.color_register,
             PointAttributeElementType::Color,
-        )
+        )?;
+        Ok(registers)
     }
+}
+
+impl PointAttributeElementType {
+    pub(crate) fn numeric_shape(self) -> Result<NumericShape, String> {
+        match self {
+            Self::Number => Ok(NumericShape::Scalar),
+            Self::Vec2 => Ok(NumericShape::Vec2),
+            Self::Vec3 => Ok(NumericShape::Vec3),
+            Self::Vec4 => Ok(NumericShape::Vec4),
+            Self::Integer | Self::Color => {
+                Err(format!("Point numeric operation does not accept {self:?}"))
+            }
+        }
+    }
+
+    pub(crate) fn numeric_binary_result(self, other: Self) -> Result<Self, String> {
+        let shape = self
+            .numeric_shape()?
+            .broadcast_result(other.numeric_shape()?)
+            .map_err(|error| format!("Point numeric operands are incompatible: {error:?}"))?;
+        Ok(match shape {
+            NumericShape::Scalar => Self::Number,
+            NumericShape::Vec2 => Self::Vec2,
+            NumericShape::Vec3 => Self::Vec3,
+            NumericShape::Vec4 => Self::Vec4,
+        })
+    }
+}
+
+fn register_type(
+    registers: &[PointAttributeElementType],
+    index: u16,
+) -> Result<PointAttributeElementType, String> {
+    registers
+        .get(usize::from(index))
+        .copied()
+        .ok_or_else(|| format!("Point register {index} must reference an earlier instruction"))
 }
 
 fn require_register(
@@ -151,13 +205,11 @@ fn require_register(
     index: u16,
     expected: PointAttributeElementType,
 ) -> Result<(), String> {
-    match registers.get(usize::from(index)) {
-        Some(actual) if *actual == expected => Ok(()),
-        Some(actual) => Err(format!(
+    match register_type(registers, index) {
+        Ok(actual) if actual == expected => Ok(()),
+        Ok(actual) => Err(format!(
             "Point register {index} requires {expected:?}, got {actual:?}"
         )),
-        None => Err(format!(
-            "Point register {index} must reference an earlier instruction"
-        )),
+        Err(error) => Err(error),
     }
 }

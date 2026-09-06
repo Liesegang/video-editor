@@ -320,3 +320,104 @@ fn point_constants_reject_untyped_strings_maps_and_encoded_colors() {
         );
     }
 }
+
+fn value_program(instructions: Vec<PointInstruction>, color_register: u16) -> PointRenderProgram {
+    PointRenderProgram {
+        schema: PointAttributeSchema::new(Vec::new()).unwrap(),
+        instructions,
+        ramps: Vec::new(),
+        color_register,
+    }
+}
+
+#[test]
+fn point_binary_uses_shared_vector_shape_and_scalar_broadcast_rules() {
+    let program = value_program(
+        vec![
+            PointInstruction::Constant {
+                value: PropertyValue::Vec3(Vec3 {
+                    x: 1.0.into(),
+                    y: 2.0.into(),
+                    z: 3.0.into(),
+                }),
+            },
+            PointInstruction::Constant {
+                value: PropertyValue::Number(2.0.into()),
+            },
+            PointInstruction::Binary {
+                operation: NumericBinaryOperation::Multiply,
+                left: 0,
+                right: 1,
+            },
+            PointInstruction::Constant {
+                value: PointAttributeElementType::Color.default_value(),
+            },
+        ],
+        3,
+    );
+    assert_eq!(
+        program.register_types().unwrap(),
+        vec![
+            PointAttributeElementType::Vec3,
+            PointAttributeElementType::Number,
+            PointAttributeElementType::Vec3,
+            PointAttributeElementType::Color,
+        ]
+    );
+
+    let mut mismatched = program.clone();
+    mismatched.instructions[1] = PointInstruction::Constant {
+        value: PropertyValue::Vec2(Vec2 {
+            x: 1.0.into(),
+            y: 2.0.into(),
+        }),
+    };
+    assert!(mismatched.validate().unwrap_err().contains("incompatible"));
+
+    let mut integer = program;
+    integer.instructions[1] = PointInstruction::Constant {
+        value: PropertyValue::Integer(2),
+    };
+    assert!(
+        integer
+            .validate()
+            .unwrap_err()
+            .contains("does not accept Integer")
+    );
+}
+
+#[test]
+fn point_length_accepts_numeric_shapes_and_returns_number() {
+    let program = value_program(
+        vec![
+            PointInstruction::Position,
+            PointInstruction::Length { value: 0 },
+            PointInstruction::Constant {
+                value: PointAttributeElementType::Color.default_value(),
+            },
+        ],
+        2,
+    );
+    assert_eq!(
+        program.register_types().unwrap(),
+        vec![
+            PointAttributeElementType::Vec3,
+            PointAttributeElementType::Number,
+            PointAttributeElementType::Color,
+        ]
+    );
+    let decoded: PointRenderProgram =
+        serde_json::from_str(&serde_json::to_string(&program).unwrap()).unwrap();
+    assert_eq!(decoded, program);
+
+    let mut wrong = program;
+    wrong.instructions[0] = PointInstruction::Constant {
+        value: PointAttributeElementType::Color.default_value(),
+    };
+    assert!(
+        wrong
+            .validate()
+            .unwrap_err()
+            .contains("does not accept Color")
+    );
+}

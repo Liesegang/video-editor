@@ -112,7 +112,7 @@ fn every_typed_store_uses_its_catalog_type_and_authoritative_default() {
             super::CompiledPointInstruction::Uniform {
                 node_id,
                 port,
-                element_type: actual,
+                value_type: super::CompiledPointValueType::Exact(actual),
             } if *node_id == store && port == POINT_ATTRIBUTE_VALUE_PORT && *actual == element_type
         )));
         assert!(program.instructions.iter().any(|instruction| matches!(

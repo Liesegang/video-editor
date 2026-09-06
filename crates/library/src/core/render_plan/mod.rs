@@ -28,6 +28,8 @@ mod particle_force_tests;
 #[cfg(test)]
 mod particle_tests;
 #[cfg(test)]
+mod point_numeric_tests;
+#[cfg(test)]
 mod point_runtime_tests;
 #[cfg(test)]
 mod point_tests;

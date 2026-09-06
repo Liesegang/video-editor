@@ -154,7 +154,7 @@ fn assert_typed_fields(
     );
 }
 
-fn working_color() -> PropertyValue {
+pub(super) fn working_color() -> PropertyValue {
     PropertyValue::ColorValue(
         ColorValue::new(ColorSpaceRef::linear_srgb(), [0.125, 0.5, 1.25, 0.75]).unwrap(),
     )
@@ -191,7 +191,7 @@ fn copy_program(kind: PointAttributeElementType, value: PropertyValue) -> PointR
     }
 }
 
-fn one_point_grid(program: PointRenderProgram) -> PointSceneFrame {
+pub(super) fn one_point_grid(program: PointRenderProgram) -> PointSceneFrame {
     let mut scene = particle_scene(0);
     scene.executable_hash = [102; 32];
     scene.source = PointSceneSource::Grid(PointGridParameters {

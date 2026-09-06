@@ -26,6 +26,7 @@ pub(crate) const RECTANGLE_SHAPE_CATALOG_ID: &str = "native.shape.rectangle";
 pub(crate) const ELLIPSE_SHAPE_CATALOG_ID: &str = "native.shape.ellipse";
 pub(crate) const APPEARANCE_STACK_CATALOG_ID: &str = "native.appearance-stack";
 
+pub(crate) use builtins::{NUMERIC_LENGTH_CATALOG_ID, NUMERIC_LENGTH_INPUT_PORT};
 use descriptor::DescriptorSpec;
 
 static NATIVE_NODE_CATALOG: LazyLock<Vec<NativeNodeCatalogDescriptor>> = LazyLock::new(|| {

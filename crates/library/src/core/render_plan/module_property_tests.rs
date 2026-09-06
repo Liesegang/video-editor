@@ -230,6 +230,52 @@ fn module_generator_uses_registered_property_evaluator_at_local_time() {
 }
 
 #[test]
+fn module_numeric_length_uses_the_shared_vector_kernel() {
+    use crate::model::node::{NUMERIC_LENGTH_CATALOG_ID, NUMERIC_LENGTH_INPUT_PORT, Node};
+    use crate::model::project::NUMBER_RESULT_OUTPUT_PORT;
+    use crate::model::property::Vec3;
+
+    let plugins = PluginManager::default();
+    let mut length = Node::new_catalog_node(NUMERIC_LENGTH_CATALOG_ID).unwrap();
+    length
+        .set_property(
+            NUMERIC_LENGTH_INPUT_PORT.to_string(),
+            Property::constant(PropertyValue::Vec3(Vec3 {
+                x: 3.0.into(),
+                y: 4.0.into(),
+                z: 12.0.into(),
+            })),
+        )
+        .unwrap();
+    let text = test_generator_node(
+        "Text",
+        GeneratorNodeRequest::Text {
+            text: "Magnitude".to_string(),
+            font: "Arial".to_string(),
+        },
+    );
+    let fill = plugins.create_style_operation_node("fill").unwrap();
+    let (length_id, text_id, fill_id) = (length.id, text.id, fill.id);
+    let (mut definition, output_id) =
+        ModuleDefinition::new_image("Numeric Length", ModuleDefinitionSharing::Private);
+    let output = definition.output(output_id).unwrap();
+    definition
+        .graph
+        .nodes
+        .extend([(length_id, length), (text_id, text), (fill_id, fill)]);
+    definition.graph.connections.extend([
+        connection(length_id, NUMBER_RESULT_OUTPUT_PORT, text_id, "size"),
+        connection(text_id, SHAPE_OUTPUT_PORT, fill_id, SHAPE_INPUT_PORT),
+        connection(fill_id, IMAGE_OUTPUT_PORT, output.node_id, IMAGE_INPUT_PORT),
+    ]);
+    let (project, _) = project_with_module(definition, output_id);
+    let plan = RenderPlanCompiler::compile(&project).unwrap();
+    let frame = evaluate_render_plan_frame(&project, &plan, &plugins, 0, 1.0, None).unwrap();
+
+    assert_eq!(find_text(&frame.items), Some(("Magnitude", 13.0)));
+}
+
+#[test]
 fn module_effect_values_reach_the_frame_operation() {
     let plugins = PluginManager::default();
     let solid = test_generator_node(

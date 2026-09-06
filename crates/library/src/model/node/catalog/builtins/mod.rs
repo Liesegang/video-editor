@@ -13,6 +13,8 @@ mod shape_primitives;
 mod sound;
 mod transition;
 
+pub(crate) use math::{NUMERIC_LENGTH_CATALOG_ID, NUMERIC_LENGTH_INPUT_PORT};
+
 pub(super) fn specs() -> impl Iterator<Item = &'static DescriptorSpec> {
     generators::specs()
         .iter()

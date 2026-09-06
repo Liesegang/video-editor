@@ -317,7 +317,7 @@ fn compute_source(
     source_kind: PointSourceKind,
     program: &PointRenderProgram,
 ) -> Result<String, LibraryError> {
-    program.validate().map_err(LibraryError::Validation)?;
+    let register_types = program.register_types().map_err(LibraryError::Validation)?;
     if source_kind == PointSourceKind::Grid
         && program.instructions.iter().any(|instruction| {
             matches!(
@@ -334,9 +334,8 @@ fn compute_source(
     for (index, instruction) in program.instructions.iter().enumerate() {
         let register = format!("r{index}");
         match instruction {
-            PointInstruction::Constant { value } => {
-                let kind = PointAttributeElementType::from_property_value(value)
-                    .map_err(LibraryError::Validation)?;
+            PointInstruction::Constant { .. } => {
+                let kind = register_types[index];
                 body.push_str(&constant_register_source(&register, index, kind));
             }
             PointInstruction::Age => body.push_str(&format!(
@@ -368,36 +367,19 @@ fn compute_source(
                 operation,
                 left,
                 right,
-            } => {
-                if *operation == NumericBinaryOperation::Fmod {
-                    body.push_str(&format!(
-                        "    if (valid && r{right} == 0.0) valid = false;\n    float {register}_quotient = valid ? trunc(r{left} / r{right}) : 0.0;\n    if (isnan({register}_quotient) || isinf({register}_quotient)) valid = false;\n    float {register}_value = valid ? r{left} - r{right} * {register}_quotient : 0.0;\n    if (isnan({register}_value) || isinf({register}_value)) valid = false;\n    float {register} = valid ? {register}_value : 0.0;\n"
-                    ));
-                    continue;
-                }
-                let expression = match operation {
-                    NumericBinaryOperation::Add => format!("r{left} + r{right}"),
-                    NumericBinaryOperation::Subtract => format!("r{left} - r{right}"),
-                    NumericBinaryOperation::Multiply => format!("r{left} * r{right}"),
-                    NumericBinaryOperation::Divide => format!("r{left} / r{right}"),
-                    NumericBinaryOperation::Fmod => {
-                        return Err(LibraryError::Validation(
-                            "Point Fmod lowering entered an inconsistent branch".to_string(),
-                        ));
-                    }
-                };
-                if matches!(
-                    operation,
-                    NumericBinaryOperation::Divide | NumericBinaryOperation::Fmod
-                ) {
-                    body.push_str(&format!(
-                        "    if (valid && r{right} == 0.0) valid = false;\n"
-                    ));
-                }
-                body.push_str(&format!(
-                    "    float {register}_value = valid ? {expression} : 0.0;\n    if (isnan({register}_value) || isinf({register}_value)) valid = false;\n    float {register} = valid ? {register}_value : 0.0;\n"
-                ));
-            }
+            } => body.push_str(&binary_register_source(
+                &register,
+                *operation,
+                *left,
+                *right,
+                register_types[usize::from(*right)],
+                register_types[index],
+            )?),
+            PointInstruction::Length { value } => body.push_str(&length_register_source(
+                &register,
+                *value,
+                register_types[usize::from(*value)],
+            )?),
             PointInstruction::ColorRamp { gradient, factor } => body.push_str(&format!(
                 "    vec4 {register} = valid ? sample_point_ramp({gradient}u, r{factor}) : vec4(0.0);\n"
             )),
@@ -452,6 +434,125 @@ fn component_count(kind: PointAttributeElementType) -> usize {
         PointAttributeElementType::Vec3 => 3,
         PointAttributeElementType::Vec4 | PointAttributeElementType::Color => 4,
     }
+}
+
+fn zero_literal(kind: PointAttributeElementType) -> Result<String, LibraryError> {
+    Ok(match kind {
+        PointAttributeElementType::Number => "0.0".to_string(),
+        PointAttributeElementType::Vec2
+        | PointAttributeElementType::Vec3
+        | PointAttributeElementType::Vec4 => format!("{}(0.0)", glsl_type(kind)),
+        PointAttributeElementType::Integer | PointAttributeElementType::Color => {
+            return Err(LibraryError::Validation(
+                "Point arithmetic lowering received a non-numeric type".to_string(),
+            ));
+        }
+    })
+}
+
+fn any_zero(expression: &str, kind: PointAttributeElementType) -> Result<String, LibraryError> {
+    Ok(match kind {
+        PointAttributeElementType::Number => format!("{expression} == 0.0"),
+        PointAttributeElementType::Vec2
+        | PointAttributeElementType::Vec3
+        | PointAttributeElementType::Vec4 => {
+            format!("any(equal({expression}, {}(0.0)))", glsl_type(kind))
+        }
+        PointAttributeElementType::Integer | PointAttributeElementType::Color => {
+            return Err(LibraryError::Validation(
+                "Point divisor lowering received a non-numeric type".to_string(),
+            ));
+        }
+    })
+}
+
+fn non_finite(expression: &str, kind: PointAttributeElementType) -> Result<String, LibraryError> {
+    Ok(match kind {
+        PointAttributeElementType::Number => {
+            format!("isnan({expression}) || isinf({expression})")
+        }
+        PointAttributeElementType::Vec2
+        | PointAttributeElementType::Vec3
+        | PointAttributeElementType::Vec4 => {
+            format!("any(isnan({expression})) || any(isinf({expression}))")
+        }
+        PointAttributeElementType::Integer | PointAttributeElementType::Color => {
+            return Err(LibraryError::Validation(
+                "Point arithmetic lowering received a non-numeric type".to_string(),
+            ));
+        }
+    })
+}
+
+fn binary_register_source(
+    register: &str,
+    operation: NumericBinaryOperation,
+    left: u16,
+    right: u16,
+    right_kind: PointAttributeElementType,
+    result_kind: PointAttributeElementType,
+) -> Result<String, LibraryError> {
+    let result_type = glsl_type(result_kind);
+    let zero = zero_literal(result_kind)?;
+    let mut source = String::new();
+    if matches!(
+        operation,
+        NumericBinaryOperation::Divide | NumericBinaryOperation::Fmod
+    ) {
+        source.push_str(&format!(
+            "    if (valid && {}) valid = false;\n",
+            any_zero(&format!("r{right}"), right_kind)?
+        ));
+    }
+    let expression = match operation {
+        NumericBinaryOperation::Add => format!("r{left} + r{right}"),
+        NumericBinaryOperation::Subtract => format!("r{left} - r{right}"),
+        NumericBinaryOperation::Multiply => format!("r{left} * r{right}"),
+        NumericBinaryOperation::Divide => format!("r{left} / r{right}"),
+        NumericBinaryOperation::Fmod => {
+            source.push_str(&format!(
+                "    {result_type} {register}_quotient = valid ? trunc(r{left} / r{right}) : {zero};\n    if ({}) valid = false;\n",
+                non_finite(&format!("{register}_quotient"), result_kind)?
+            ));
+            format!("r{left} - r{right} * {register}_quotient")
+        }
+    };
+    source.push_str(&format!(
+        "    {result_type} {register}_value = valid ? {expression} : {zero};\n    if ({}) valid = false;\n    {result_type} {register} = valid ? {register}_value : {zero};\n",
+        non_finite(&format!("{register}_value"), result_kind)?
+    ));
+    Ok(source)
+}
+
+fn length_register_source(
+    register: &str,
+    value: u16,
+    kind: PointAttributeElementType,
+) -> Result<String, LibraryError> {
+    if kind == PointAttributeElementType::Number {
+        return Ok(format!(
+            "    float {register}_value = valid ? abs(r{value}) : 0.0;\n    if (isnan({register}_value) || isinf({register}_value)) valid = false;\n    float {register} = valid ? {register}_value : 0.0;\n"
+        ));
+    }
+    let scale = match kind {
+        PointAttributeElementType::Vec2 => format!("max(abs(r{value}.x), abs(r{value}.y))"),
+        PointAttributeElementType::Vec3 => {
+            format!("max(max(abs(r{value}.x), abs(r{value}.y)), abs(r{value}.z))")
+        }
+        PointAttributeElementType::Vec4 => format!(
+            "max(max(abs(r{value}.x), abs(r{value}.y)), max(abs(r{value}.z), abs(r{value}.w)))"
+        ),
+        PointAttributeElementType::Number
+        | PointAttributeElementType::Integer
+        | PointAttributeElementType::Color => {
+            return Err(LibraryError::Validation(
+                "Point Length lowering received a non-numeric type".to_string(),
+            ));
+        }
+    };
+    Ok(format!(
+        "    float {register}_scale = valid ? {scale} : 0.0;\n    float {register}_value = {register}_scale == 0.0 ? 0.0 : {register}_scale * length(r{value} / {register}_scale);\n    if (isnan({register}_value) || isinf({register}_value)) valid = false;\n    float {register} = valid ? {register}_value : 0.0;\n"
+    ))
 }
 
 fn constant_register_source(

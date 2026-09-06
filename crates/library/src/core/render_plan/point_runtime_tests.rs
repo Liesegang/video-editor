@@ -348,10 +348,10 @@ fn typed_store_uniform_keyframes_sample_locally_and_keep_siblings_independent() 
         .position(|instruction| {
             matches!(
                 instruction,
-                CompiledPointInstruction::Uniform { node_id, port, element_type }
+                CompiledPointInstruction::Uniform { node_id, port, value_type }
                     if *node_id == store
                         && port == "value"
-                        && *element_type == PointAttributeElementType::Vec3
+                        && *value_type == super::CompiledPointValueType::Exact(PointAttributeElementType::Vec3)
             )
         })
         .unwrap();
