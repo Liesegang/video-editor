@@ -11,11 +11,9 @@ processing connections belong to the Module Definition.
 This keeps ordinary editing usable without the Node Editor and guarantees that
 the number of normal Timeline items does not increase the number of Nodes. The
 derived hierarchical Render Plan is runtime data and is not editable or stored
-as the Project's source of truth. See
-[`docs/adr/0001-node-islands.md`](docs/adr/0001-node-islands.md).
+as the Project's source of truth.
 Timeline-owned transitions use the same boundary: only their typed processing
-is a bounded Module. See
-[`docs/adr/0009-timeline-transition-modules.md`](docs/adr/0009-timeline-transition-modules.md).
+is a bounded Module.
 
 The two advanced editors have distinct names and responsibilities:
 
@@ -55,9 +53,7 @@ cargo xtask publish
 
 The executable does not use a system Python installation, and publishing does
 not produce an archive implicitly. The ready-to-run directory is written to
-`target/publish/windows-x86_64/RuViE`. See
-[`docs/windows-publishing.md`](docs/windows-publishing.md) for the release flow
-and [`docs/python-easing.md`](docs/python-easing.md) for the runtime contract.
+`target/publish/windows-x86_64/RuViE`.
 
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Liesegang/video-editor)
 
@@ -106,9 +102,6 @@ host binaryからdescriptor/default/evaluateまで確認するテストは次で
 ./scripts/test-runtime-plugin.sh
 ```
 
-ABI、bundle構成、対応categoryの詳細は
-[Runtime native plugins](docs/runtime-plugins.md)を参照してください。
-
 ### FFmpeg エクスポーター
 
 `export` ブロックをプロジェクト JSON に追加すると、動画を書き出すフォーマットをプロパティで指定できます。例えば:
@@ -140,9 +133,6 @@ Video Editorの開発に参加したい方は、IssueやPull Requestを歓迎し
 ```bash
 ./scripts/quality-gate.sh
 ```
-
-必要なネイティブ依存やlint方針、自己テストについては
-[Rust quality gate](docs/rust-quality-gate.md)を参照してください。
 
 - 改善や不具合報告は[Issueページ](https://github.com/Liesegang/video-editor/issues)へお願いします。
 - コードの改善や新機能追加は、ForkしてPull Requestを作成してください。
