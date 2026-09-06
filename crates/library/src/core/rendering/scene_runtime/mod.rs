@@ -2,7 +2,11 @@
 
 mod forces;
 mod gl_backend;
+mod point_fields;
+#[cfg(test)]
+mod readback;
 mod shaders;
+mod simulation;
 
 use std::collections::{HashMap, VecDeque};
 use std::hash::{Hash, Hasher};
@@ -24,6 +28,10 @@ pub(crate) use gl_backend::SceneTextureFormat;
 use gl_backend::{
     PARTICLE_STRIDE_BYTES, PARTICLE_VERTICES_PER_SPRITE, PARTICLE_WORKGROUP_SIZE, ParticlePipeline,
     SceneTarget, probe_capabilities,
+};
+use simulation::{
+    ParticleSimulationRequest, allocate_particle_buffer, copy_particle_buffer,
+    delete_particle_buffer, reset_particles, simulate_particles,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -63,6 +71,7 @@ struct ParticleCheckpoint {
 
 struct ParticleInvocation {
     buffer: glow::Buffer,
+    point_fields: Option<point_fields::PointFieldBuffers>,
     capacity: u32,
     executable_hash: [u8; 32],
     parameter_hash: u64,
@@ -73,7 +82,24 @@ struct ParticleInvocation {
 
 impl ParticleInvocation {
     fn allocated_bytes(&self) -> u64 {
-        u64::from(self.capacity) * PARTICLE_STRIDE_BYTES * (1 + self.checkpoints.len() as u64)
+        let simulation =
+            u64::from(self.capacity) * PARTICLE_STRIDE_BYTES * (1 + self.checkpoints.len() as u64);
+        simulation.saturating_add(
+            self.point_fields
+                .as_ref()
+                .map_or(0, point_fields::PointFieldBuffers::byte_len),
+        )
+    }
+
+    fn point_layout_matches(
+        &self,
+        program: Option<&crate::model::point::PointRenderProgram>,
+    ) -> bool {
+        match (&self.point_fields, program) {
+            (None, None) => true,
+            (Some(buffers), Some(program)) => buffers.matches(program),
+            _ => false,
+        }
     }
 }
 
@@ -197,13 +223,23 @@ impl SceneRuntime {
     ) -> Result<SceneTexture, LibraryError> {
         self.use_tick = self.use_tick.wrapping_add(1);
         let use_tick = self.use_tick;
-        let pipeline = self.pipeline([0; 32], use_tick)?;
+        // Preflight has no authored executable identity. Keep its throwaway
+        // program outside the executable cache so a legitimate all-zero hash
+        // cannot collide with this synthetic probe.
+        let pipeline = ParticlePipeline::create(&self.gl, use_tick, None)?;
         self.ensure_target(target_width, target_height, format)?;
-        let buffer = allocate_particle_buffer(&self.gl, 1)?;
+        let buffer = match allocate_particle_buffer(&self.gl, 1) {
+            Ok(buffer) => buffer,
+            Err(error) => {
+                pipeline.destroy(&self.gl);
+                return Err(error);
+            }
+        };
         let result = (|| {
             reset_particles(&self.gl, &pipeline, buffer, 1)?;
             let invocation = ParticleInvocation {
                 buffer,
+                point_fields: None,
                 capacity: 1,
                 executable_hash: [0; 32],
                 parameter_hash: 0,
@@ -233,6 +269,7 @@ impl SceneRuntime {
             })
         })();
         delete_particle_buffer(&self.gl, buffer);
+        pipeline.destroy(&self.gl);
         result
     }
 
@@ -247,7 +284,11 @@ impl SceneRuntime {
     ) -> Result<SceneTexture, LibraryError> {
         self.use_tick = self.use_tick.wrapping_add(1);
         let use_tick = self.use_tick;
-        let pipeline = self.pipeline(scene.executable_hash, use_tick)?;
+        let pipeline = self.pipeline(
+            scene.executable_hash,
+            scene.point_program.as_ref(),
+            use_tick,
+        )?;
         self.ensure_target(target_width, target_height, format)?;
 
         let parameter_hash = stable_parameter_hash(&scene.parameters);
@@ -255,17 +296,18 @@ impl SceneRuntime {
             Some(invocation)
                 if invocation.capacity == scene.parameters.capacity
                     && invocation.executable_hash == scene.executable_hash
-                    && invocation.parameter_hash == parameter_hash =>
+                    && invocation.parameter_hash == parameter_hash
+                    && invocation.point_layout_matches(scene.point_program.as_ref()) =>
             {
                 invocation
             }
             Some(invocation) => {
                 self.destroy_invocation(invocation);
-                self.reserve_invocation(scene.parameters.capacity)?;
+                self.reserve_invocation(scene.parameters.capacity, scene.point_program.as_ref())?;
                 self.create_invocation(scene, parameter_hash, &pipeline, use_tick)?
             }
             None => {
-                self.reserve_invocation(scene.parameters.capacity)?;
+                self.reserve_invocation(scene.parameters.capacity, scene.point_program.as_ref())?;
                 self.create_invocation(scene, parameter_hash, &pipeline, use_tick)?
             }
         };
@@ -275,6 +317,20 @@ impl SceneRuntime {
             // without advancing `current_step`. Discard derived state so a
             // retry starts from a known cold buffer rather than compounding
             // the failed step.
+            self.destroy_invocation(invocation);
+            return Err(error);
+        }
+        if let (Some(program), Some(buffers), Some(point_pipeline)) = (
+            scene.point_program.as_ref(),
+            invocation.point_fields.as_ref(),
+            pipeline.point_fields.as_ref(),
+        ) && let Err(error) = point_pipeline.evaluate(
+            &self.gl,
+            program,
+            buffers,
+            invocation.buffer,
+            invocation_seed(scene),
+        ) {
             self.destroy_invocation(invocation);
             return Err(error);
         }
@@ -309,9 +365,21 @@ impl SceneRuntime {
     fn pipeline(
         &mut self,
         executable_hash: [u8; 32],
+        point_program: Option<&crate::model::point::PointRenderProgram>,
         use_tick: u64,
     ) -> Result<ParticlePipeline, LibraryError> {
         if let Some(pipeline) = self.pipelines.get_mut(&executable_hash) {
+            if pipeline
+                .point_fields
+                .as_ref()
+                .map(|fields| fields.source_hash)
+                != point_fields::source_hash(point_program)?
+            {
+                return Err(LibraryError::Validation(
+                    "Particle executable hash reused for a different Point program shape"
+                        .to_string(),
+                ));
+            }
             pipeline.last_used = use_tick;
             return Ok(pipeline.clone());
         }
@@ -325,7 +393,7 @@ impl SceneRuntime {
         {
             pipeline.destroy(&self.gl);
         }
-        let pipeline = ParticlePipeline::create(&self.gl, use_tick)?;
+        let pipeline = ParticlePipeline::create(&self.gl, use_tick, point_program)?;
         self.pipelines.insert(executable_hash, pipeline.clone());
         Ok(pipeline)
     }
@@ -364,8 +432,19 @@ impl SceneRuntime {
             delete_particle_buffer(&self.gl, buffer);
             return Err(error);
         }
+        let point_fields = match scene.point_program.as_ref().map(|program| {
+            point_fields::PointFieldBuffers::create(&self.gl, program, scene.parameters.capacity)
+        }) {
+            Some(Ok(buffers)) => Some(buffers),
+            Some(Err(error)) => {
+                delete_particle_buffer(&self.gl, buffer);
+                return Err(error);
+            }
+            None => None,
+        };
         Ok(ParticleInvocation {
             buffer,
+            point_fields,
             capacity: scene.parameters.capacity,
             executable_hash: scene.executable_hash,
             parameter_hash,
@@ -468,8 +547,12 @@ impl SceneRuntime {
         Ok(())
     }
 
-    fn reserve_invocation(&mut self, capacity: u32) -> Result<(), LibraryError> {
-        let required_bytes = u64::from(capacity) * PARTICLE_STRIDE_BYTES;
+    fn reserve_invocation(
+        &mut self,
+        capacity: u32,
+        point_program: Option<&crate::model::point::PointRenderProgram>,
+    ) -> Result<(), LibraryError> {
+        let required_bytes = point_fields::required_invocation_bytes(point_program, capacity)?;
         if required_bytes > self.limits.max_state_bytes {
             return Err(LibraryError::Render(format!(
                 "GPU Particle invocation requires {required_bytes} bytes, exceeding the configured {}-byte state budget",
@@ -506,6 +589,9 @@ impl SceneRuntime {
 
     fn destroy_invocation(&self, invocation: ParticleInvocation) {
         delete_particle_buffer(&self.gl, invocation.buffer);
+        if let Some(point_fields) = invocation.point_fields {
+            point_fields.destroy(&self.gl);
+        }
         for checkpoint in invocation.checkpoints {
             delete_particle_buffer(&self.gl, checkpoint.buffer);
         }
@@ -516,6 +602,9 @@ impl Drop for SceneRuntime {
     fn drop(&mut self) {
         for (_, invocation) in self.invocations.drain() {
             delete_particle_buffer(&self.gl, invocation.buffer);
+            if let Some(point_fields) = invocation.point_fields {
+                point_fields.destroy(&self.gl);
+            }
             for checkpoint in invocation.checkpoints {
                 delete_particle_buffer(&self.gl, checkpoint.buffer);
             }
@@ -628,7 +717,7 @@ fn bounded_replay_origin(scene: &ParticleSceneFrame) -> u64 {
         .saturating_sub(lifetime_steps.clamp(1, PARTICLE_MAX_REPLAY_STEPS))
 }
 
-fn invocation_seed(scene: &ParticleSceneFrame) -> u32 {
+pub(crate) fn invocation_seed(scene: &ParticleSceneFrame) -> u32 {
     let mut digest = Sha256::new();
     digest.update(scene.parameters.seed.to_le_bytes());
     digest.update(scene.invocation.module_instance_id.as_uuid().as_bytes());
@@ -646,183 +735,6 @@ fn invocation_seed(scene: &ParticleSceneFrame) -> u32 {
     }
     let digest = digest.finalize();
     u32::from_le_bytes([digest[0], digest[1], digest[2], digest[3]])
-}
-
-fn allocate_particle_buffer(
-    gl: &glow::Context,
-    capacity: u32,
-) -> Result<glow::Buffer, LibraryError> {
-    let bytes = u64::from(capacity)
-        .checked_mul(PARTICLE_STRIDE_BYTES)
-        .and_then(|bytes| i32::try_from(bytes).ok())
-        .ok_or_else(|| LibraryError::Render("GPU Particle buffer size overflow".to_string()))?;
-    // SAFETY: SceneRuntime invokes this helper only while its owning glutin
-    // context is current and exclusively borrowed.
-    let buffer = unsafe { gl.create_buffer() }.map_err(|error| {
-        LibraryError::Render(format!(
-            "Cannot create GPU Particle storage buffer: {error}"
-        ))
-    })?;
-    // SAFETY: `buffer` is a live handle from this context, and `bytes` was
-    // checked to fit the GL signed-size boundary above.
-    unsafe {
-        gl.bind_buffer(glow::SHADER_STORAGE_BUFFER, Some(buffer));
-        gl.buffer_data_size(glow::SHADER_STORAGE_BUFFER, bytes, glow::DYNAMIC_COPY);
-    }
-    let errors = drain_gl_errors(gl);
-    if !errors.is_empty() {
-        delete_particle_buffer(gl, buffer);
-        return Err(LibraryError::Render(format!(
-            "GPU Particle storage allocation failed (OpenGL errors {})",
-            errors
-                .iter()
-                .map(|error| format!("0x{error:04x}"))
-                .collect::<Vec<_>>()
-                .join(", ")
-        )));
-    }
-    Ok(buffer)
-}
-
-fn delete_particle_buffer(gl: &glow::Context, buffer: glow::Buffer) {
-    // SAFETY: callers transfer one live buffer owned by SceneRuntime and call
-    // this exactly once while its creating context is current.
-    unsafe { gl.delete_buffer(buffer) };
-}
-
-fn reset_particles(
-    gl: &glow::Context,
-    pipeline: &ParticlePipeline,
-    buffer: glow::Buffer,
-    capacity: u32,
-) -> Result<(), LibraryError> {
-    // SAFETY: the pipeline and buffer are live resources owned by this
-    // SceneRuntime/context; capacity matches the buffer allocation.
-    unsafe {
-        gl.use_program(Some(pipeline.compute_program));
-        gl.bind_buffer_base(glow::SHADER_STORAGE_BUFFER, 0, Some(buffer));
-        gl.uniform_1_u32(Some(&pipeline.compute.capacity), capacity);
-        gl.uniform_1_i32(Some(&pipeline.compute.reset), 1);
-        gl.dispatch_compute(capacity.div_ceil(PARTICLE_WORKGROUP_SIZE), 1, 1);
-        gl.memory_barrier(glow::SHADER_STORAGE_BARRIER_BIT | glow::BUFFER_UPDATE_BARRIER_BIT);
-    }
-    gl_operation_result(gl, "reset")
-}
-
-struct ParticleSimulationRequest<'a> {
-    buffer: glow::Buffer,
-    capacity: u32,
-    seed: u32,
-    start_step: u64,
-    step_count: u64,
-    parameters: &'a ParticleSceneParameters,
-}
-
-fn simulate_particles(
-    gl: &glow::Context,
-    pipeline: &ParticlePipeline,
-    request: ParticleSimulationRequest<'_>,
-) -> Result<(), LibraryError> {
-    let start_step = u32::try_from(request.start_step).map_err(|_| {
-        LibraryError::Render("GPU Particle time exceeds the 32-bit kernel step range".to_string())
-    })?;
-    let step_count = u32::try_from(request.step_count).map_err(|_| {
-        LibraryError::Render("GPU Particle replay chunk exceeds kernel limits".to_string())
-    })?;
-    let velocity_min = vec3_f32(request.parameters.velocity_min, "minimum velocity")?;
-    let velocity_max = vec3_f32(request.parameters.velocity_max, "maximum velocity")?;
-    let force_uniforms = forces::ForceUniformData::new(&request.parameters.forces)?;
-    let emitter_position = vec3_f32(request.parameters.emitter_position, "emitter position")?;
-    let emitter_size = vec3_f32(request.parameters.emitter_size, "emitter size")?;
-    let emitter_shape = match request.parameters.emitter_shape {
-        ParticleEmitterShape::Point => 0,
-        ParticleEmitterShape::Box => 1,
-        ParticleEmitterShape::Sphere => 2,
-    };
-    // SAFETY: request resources belong to the current SceneRuntime context;
-    // validation bounds every uniform and the dispatch covers only the
-    // allocated `capacity` slots (the shader guards the final workgroup).
-    unsafe {
-        gl.use_program(Some(pipeline.compute_program));
-        gl.bind_buffer_base(glow::SHADER_STORAGE_BUFFER, 0, Some(request.buffer));
-        gl.uniform_1_u32(Some(&pipeline.compute.capacity), request.capacity);
-        gl.uniform_1_i32(Some(&pipeline.compute.reset), 0);
-        gl.uniform_1_u32(Some(&pipeline.compute.seed), request.seed);
-        gl.uniform_1_u32(Some(&pipeline.compute.start_step), start_step);
-        gl.uniform_1_u32(Some(&pipeline.compute.step_count), step_count);
-        gl.uniform_1_f32(
-            Some(&pipeline.compute.rate),
-            request.parameters.emission_rate.into_inner(),
-        );
-        gl.uniform_1_f32(
-            Some(&pipeline.compute.lifetime),
-            request.parameters.lifetime_seconds.into_inner(),
-        );
-        gl.uniform_1_i32(Some(&pipeline.compute.emitter_shape), emitter_shape);
-        gl.uniform_3_f32(
-            Some(&pipeline.compute.emitter_position),
-            emitter_position[0],
-            emitter_position[1],
-            emitter_position[2],
-        );
-        gl.uniform_1_f32(
-            Some(&pipeline.compute.emitter_radius),
-            request.parameters.emitter_radius.into_inner(),
-        );
-        gl.uniform_3_f32(
-            Some(&pipeline.compute.emitter_size),
-            emitter_size[0],
-            emitter_size[1],
-            emitter_size[2],
-        );
-        gl.uniform_1_i32(
-            Some(&pipeline.compute.emitter_surface_only),
-            i32::from(request.parameters.emitter_surface_only),
-        );
-        gl.uniform_3_f32(
-            Some(&pipeline.compute.velocity_min),
-            velocity_min[0],
-            velocity_min[1],
-            velocity_min[2],
-        );
-        gl.uniform_3_f32(
-            Some(&pipeline.compute.velocity_max),
-            velocity_max[0],
-            velocity_max[1],
-            velocity_max[2],
-        );
-        force_uniforms.upload(gl, &pipeline.compute.forces);
-        gl.uniform_1_f32(
-            Some(&pipeline.compute.size_min),
-            request.parameters.size_min.into_inner(),
-        );
-        gl.uniform_1_f32(
-            Some(&pipeline.compute.size_max),
-            request.parameters.size_max.into_inner(),
-        );
-        gl.dispatch_compute(request.capacity.div_ceil(PARTICLE_WORKGROUP_SIZE), 1, 1);
-        gl.memory_barrier(glow::SHADER_STORAGE_BARRIER_BIT | glow::VERTEX_ATTRIB_ARRAY_BARRIER_BIT);
-    }
-    gl_operation_result(gl, "fixed-step simulation")
-}
-
-fn copy_particle_buffer(
-    gl: &glow::Context,
-    source: glow::Buffer,
-    destination: glow::Buffer,
-    capacity: u32,
-) -> Result<(), LibraryError> {
-    let bytes = i32::try_from(u64::from(capacity) * PARTICLE_STRIDE_BYTES)
-        .map_err(|_| LibraryError::Render("GPU Particle checkpoint size overflow".to_string()))?;
-    // SAFETY: both buffers are live and allocated by this context for the
-    // same capacity; `bytes` was checked above and the ranges do not overlap.
-    unsafe {
-        gl.bind_buffer(glow::COPY_READ_BUFFER, Some(source));
-        gl.bind_buffer(glow::COPY_WRITE_BUFFER, Some(destination));
-        gl.copy_buffer_sub_data(glow::COPY_READ_BUFFER, glow::COPY_WRITE_BUFFER, 0, 0, bytes);
-        gl.memory_barrier(glow::BUFFER_UPDATE_BARRIER_BIT | glow::SHADER_STORAGE_BARRIER_BIT);
-    }
-    gl_operation_result(gl, "checkpoint copy")
 }
 
 struct ParticleDrawRequest<'a> {
@@ -877,6 +789,9 @@ fn draw_particles(
             0,
             Some(request.invocation.buffer),
         );
+        if let Some(point_fields) = &request.invocation.point_fields {
+            gl.bind_buffer_base(glow::SHADER_STORAGE_BUFFER, 2, Some(point_fields.colors));
+        }
         gl.uniform_2_f32(
             Some(&pipeline.render.logical_size),
             request.logical_size.0 as f32,
@@ -903,13 +818,21 @@ fn draw_particles(
             Some(&pipeline.render.focal_length),
             request.logical_size.1.max(1) as f32,
         );
-        gl.uniform_4_f32(
-            Some(&pipeline.render.premultiplied_color),
-            request.premultiplied_color[0],
-            request.premultiplied_color[1],
-            request.premultiplied_color[2],
-            request.premultiplied_color[3],
-        );
+        if let Some(location) = &pipeline.render.premultiplied_color {
+            gl.uniform_4_f32(
+                Some(location),
+                request.premultiplied_color[0],
+                request.premultiplied_color[1],
+                request.premultiplied_color[2],
+                request.premultiplied_color[3],
+            );
+        }
+        if let Some(location) = &pipeline.render.output_srgba {
+            gl.uniform_1_i32(
+                Some(location),
+                i32::from(request.target.format == SceneTextureFormat::Srgba8),
+            );
+        }
         let vertex_count = request
             .invocation
             .capacity

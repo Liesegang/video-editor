@@ -37,7 +37,22 @@ impl ModuleImageRuntime<'_> {
             })
             .collect::<Result<Vec<_>, _>>()?;
         let renderer_node = self.particle_node(particle.renderer_node_id)?;
-        let renderer = self.node_values(&renderer_node)?;
+        let point_program = particle
+            .point_program
+            .as_ref()
+            .map(|program| self.sample_point_program(program))
+            .transpose()?;
+        let color = if point_program.is_some() {
+            // The Point program owns per-point color. Never send a varying
+            // branch through the ordinary frame-uniform property evaluator.
+            crate::model::frame::color::Color::white()
+        } else {
+            required_color(
+                &self.node_values(&renderer_node)?,
+                "color",
+                "Sprite Renderer",
+            )?
+        };
         let capacity = required_u32(&emitter, "capacity", "Particle Emitter")?;
         let seed = required_u32(&emitter, "seed", "Particle Emitter")?;
         let logical_width = u32::try_from(self.width).map_err(|_| {
@@ -110,7 +125,7 @@ impl ModuleImageRuntime<'_> {
                 1.0,
                 "maximum size",
             )?,
-            color: required_color(&renderer, "color", "Sprite Renderer")?,
+            color,
         };
         let scene = ParticleSceneFrame {
             invocation: SceneInvocationKey {
@@ -126,6 +141,7 @@ impl ModuleImageRuntime<'_> {
             logical_width,
             logical_height,
             parameters,
+            point_program,
         };
         scene.validate().map_err(LibraryError::Validation)?;
         let object = FrameItem::Object(FrameObject {

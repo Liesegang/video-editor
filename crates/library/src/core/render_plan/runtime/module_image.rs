@@ -813,7 +813,7 @@ impl ModuleImageRuntime<'_> {
         }
     }
 
-    fn value_input(
+    pub(super) fn value_input(
         &mut self,
         node_id: uuid::Uuid,
         port: &str,

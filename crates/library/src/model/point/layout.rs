@@ -75,7 +75,7 @@ impl PointColumnLayout {
                 stride_bytes,
                 default_value: attribute
                     .element_type()
-                    .pack_default(attribute.default_value())?,
+                    .pack_value(attribute.default_value())?,
             });
         }
         Ok(Self {
@@ -89,7 +89,8 @@ impl PointColumnLayout {
 }
 
 impl PointAttributeElementType {
-    fn pack_default(self, value: &PropertyValue) -> Result<PointAttributeGpuDefault, String> {
+    /// Checked conversion shared by column defaults and sampled field uniforms.
+    pub fn pack_value(self, value: &PropertyValue) -> Result<PointAttributeGpuDefault, String> {
         self.validate_authored_default(value)?;
         match (self, value) {
             (Self::Number, PropertyValue::Number(value)) => {

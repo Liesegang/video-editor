@@ -101,7 +101,7 @@ pub(crate) struct SavedGlState {
     sampler: Option<glow::Sampler>,
     texture_unit: u32,
     shader_storage_buffer: Option<glow::Buffer>,
-    shader_storage_binding_zero: Option<glow::Buffer>,
+    shader_storage_bindings: [Option<glow::Buffer>; 4],
     copy_read_buffer: Option<glow::Buffer>,
     copy_write_buffer: Option<glow::Buffer>,
     pixel_unpack_buffer: Option<glow::Buffer>,
@@ -132,8 +132,11 @@ impl SavedGlState {
             gl.get_parameter_i32_slice(glow::VIEWPORT, &mut viewport);
             gl.get_parameter_i32_slice(glow::SCISSOR_BOX, &mut scissor_box);
             gl.get_parameter_f32_slice(glow::COLOR_CLEAR_VALUE, &mut clear_color);
-            let indexed_storage =
-                gl.get_parameter_indexed_i32(glow::SHADER_STORAGE_BUFFER_BINDING, 0);
+            let shader_storage_bindings = std::array::from_fn(|index| {
+                native_buffer(
+                    gl.get_parameter_indexed_i32(glow::SHADER_STORAGE_BUFFER_BINDING, index as u32),
+                )
+            });
             Self {
                 program: gl.get_parameter_program(glow::CURRENT_PROGRAM),
                 vertex_array: gl.get_parameter_vertex_array(glow::VERTEX_ARRAY_BINDING),
@@ -143,7 +146,7 @@ impl SavedGlState {
                 sampler: gl.get_parameter_sampler(glow::SAMPLER_BINDING),
                 texture_unit: gl.get_parameter_i32(glow::ACTIVE_TEXTURE) as u32 - glow::TEXTURE0,
                 shader_storage_buffer: gl.get_parameter_buffer(glow::SHADER_STORAGE_BUFFER_BINDING),
-                shader_storage_binding_zero: native_buffer(indexed_storage),
+                shader_storage_bindings,
                 copy_read_buffer: gl.get_parameter_buffer(glow::COPY_READ_BUFFER_BINDING),
                 copy_write_buffer: gl.get_parameter_buffer(glow::COPY_WRITE_BUFFER_BINDING),
                 pixel_unpack_buffer: gl.get_parameter_buffer(glow::PIXEL_UNPACK_BUFFER_BINDING),
@@ -200,11 +203,9 @@ impl SavedGlState {
             gl.bind_framebuffer(glow::READ_FRAMEBUFFER, self.read_framebuffer);
             gl.bind_texture(glow::TEXTURE_2D, self.texture_2d);
             gl.bind_sampler(self.texture_unit, self.sampler);
-            gl.bind_buffer_base(
-                glow::SHADER_STORAGE_BUFFER,
-                0,
-                self.shader_storage_binding_zero,
-            );
+            for (index, binding) in self.shader_storage_bindings.into_iter().enumerate() {
+                gl.bind_buffer_base(glow::SHADER_STORAGE_BUFFER, index as u32, binding);
+            }
             // BindBufferBase also changes the generic binding. Restore that
             // separately after the indexed slot.
             gl.bind_buffer(glow::SHADER_STORAGE_BUFFER, self.shader_storage_buffer);

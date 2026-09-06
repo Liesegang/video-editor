@@ -27,7 +27,8 @@ mod sound_analysis;
 mod transition;
 pub(crate) use catalog::{
     APPEARANCE_STACK_CATALOG_ID, ELLIPSE_SHAPE_CATALOG_ID, PARTICLE_SPRITE_RENDERER_CATALOG_ID,
-    PARTICLE_SYSTEM_PORT, ParticleNodeRole, RECTANGLE_SHAPE_CATALOG_ID,
+    PARTICLE_SYSTEM_PORT, POINT_ATTRIBUTE_OUTPUT_PORT, POINT_ATTRIBUTE_VALUE_PORT,
+    POINT_SOURCE_PORT, ParticleNodeRole, PointNodeRole, RECTANGLE_SHAPE_CATALOG_ID,
 };
 pub use catalog::{
     NativeNodeCatalogDescriptor, NativeNodeFactory, NativeNodeRuntimeStatus, native_node_catalog,

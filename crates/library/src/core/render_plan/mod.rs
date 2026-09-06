@@ -9,6 +9,7 @@ mod capability;
 mod compiler;
 mod model;
 mod particle;
+mod point;
 mod runtime;
 
 pub use cache::{RenderPlanCache, RenderPlanCacheStats};
@@ -26,6 +27,10 @@ mod module_property_tests;
 mod particle_force_tests;
 #[cfg(test)]
 mod particle_tests;
+#[cfg(test)]
+mod point_runtime_tests;
+#[cfg(test)]
+mod point_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

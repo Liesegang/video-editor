@@ -56,6 +56,7 @@ fn scene(target_step: u64) -> ParticleSceneFrame {
         },
         random_stream_id: uuid::Uuid::from_u128(2),
         executable_hash: [7; 32],
+        point_program: None,
         target_step,
         logical_width: 1920,
         logical_height: 1080,

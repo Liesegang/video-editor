@@ -11,11 +11,15 @@ use super::{GeneratorContent, Node, NodeContent};
 mod builtins;
 mod descriptor;
 mod particle;
+mod point;
 mod three_d;
 
 pub use descriptor::{NativeNodeCatalogDescriptor, NativeNodeFactory, NativeNodeRuntimeStatus};
 pub(crate) use particle::{
     PARTICLE_SPRITE_RENDERER_CATALOG_ID, PARTICLE_SYSTEM_PORT, ParticleNodeRole,
+};
+pub(crate) use point::{
+    POINT_ATTRIBUTE_OUTPUT_PORT, POINT_ATTRIBUTE_VALUE_PORT, POINT_SOURCE_PORT, PointNodeRole,
 };
 
 pub(crate) const RECTANGLE_SHAPE_CATALOG_ID: &str = "native.shape.rectangle";
@@ -27,6 +31,7 @@ use descriptor::DescriptorSpec;
 static NATIVE_NODE_CATALOG: LazyLock<Vec<NativeNodeCatalogDescriptor>> = LazyLock::new(|| {
     builtins::specs()
         .chain(particle::specs().iter())
+        .chain(point::specs().iter())
         .chain(three_d::specs().iter())
         .copied()
         .map(DescriptorSpec::build)

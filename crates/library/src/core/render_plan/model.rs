@@ -11,6 +11,8 @@ use crate::model::authoring::{
     TimelineTrackId, TransitionId, TransitionModuleInstanceTarget, TransitionProcessor,
 };
 use crate::model::node::NodeContent;
+use crate::model::numeric::NumericBinaryOperation;
+use crate::model::point::{PointAttributeElementType, PointAttributeSchema};
 use crate::model::project::property::PropertyMap;
 
 /// Derived, immutable execution description for one authoring Project.
@@ -140,10 +142,53 @@ pub struct CompiledParticleDefinition {
     /// Authored force stages in their exact upstream-to-downstream execution
     /// order. Repeated force kinds remain distinct executable stages.
     pub(crate) force_nodes: Vec<CompiledParticleForce>,
+    /// Render-stage Point fields compiled from the same Module graph. `None`
+    /// preserves the existing uniform Sprite fast path.
+    pub(crate) point_program: Option<CompiledPointProgram>,
     pub renderer_node_id: uuid::Uuid,
     /// Stable Module-owned mutable state slot. Runtime keys combine it with
     /// InstancePath and ModuleInstanceId before allocating any buffer.
     pub state_slot_id: uuid::Uuid,
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(crate) struct CompiledPointProgram {
+    pub schema: PointAttributeSchema,
+    pub instructions: Vec<CompiledPointInstruction>,
+    pub color_register: u16,
+}
+
+/// One typed instruction in the derived render-stage Point field program.
+/// Registers are instruction indices; authored constants and Published values
+/// remain input addresses so the existing frame evaluator stays authoritative.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(crate) enum CompiledPointInstruction {
+    Uniform {
+        node_id: uuid::Uuid,
+        port: String,
+        element_type: PointAttributeElementType,
+    },
+    Age,
+    NormalizedAge,
+    Random {
+        channel: u32,
+    },
+    LoadAttribute {
+        attribute: u16,
+    },
+    StoreNumber {
+        attribute: u16,
+        value: u16,
+    },
+    Binary {
+        operation: NumericBinaryOperation,
+        left: u16,
+        right: u16,
+    },
+    ColorRamp {
+        gradient: ModulePortAddress,
+        factor: u16,
+    },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

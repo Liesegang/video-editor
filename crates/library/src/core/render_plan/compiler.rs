@@ -594,7 +594,8 @@ pub(super) fn compile_module(
             right.id,
         ))
     });
-    let particle_renderers = super::particle::compile_particle_renderers(definition, &active_nodes);
+    let particle_renderers =
+        super::particle::compile_particle_renderers(definition, &active_nodes)?;
     for output in outputs.values_mut() {
         if output
             .evaluation_order
@@ -779,7 +780,15 @@ pub(super) fn definition_fingerprint(definition: &ModuleDefinition) -> Result<[u
     executable.name.clear();
     executable.sharing = crate::model::authoring::ModuleDefinitionSharing::Private;
     for node in executable.graph.nodes.values_mut() {
-        node.name.clear();
+        let semantic_point_attribute_name = matches!(
+            node.content(),
+            crate::model::node::NodeContent::NativeOperation(operation)
+                if crate::model::node::PointNodeRole::from_catalog_id(&operation.catalog_id)
+                    == Some(crate::model::node::PointNodeRole::StoreNumberAttribute)
+        );
+        if !semantic_point_attribute_name {
+            node.name.clear();
+        }
         node.ui_position = [0.0, 0.0];
         node.ui_size = [0.0, 0.0];
         node.ui_collapsed = false;

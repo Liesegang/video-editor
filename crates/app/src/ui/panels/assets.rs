@@ -3,7 +3,6 @@
 //! Assets are sources. Placement is deliberately a drag from one of these
 //! rows to the Timeline; this panel never grows a second placement command.
 
-use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -14,6 +13,7 @@ use library::model::authoring::{
     AuthoringProject, MediaTime, ModuleDefinition, RationalRate, TimelineId,
 };
 use library::plugin::PluginManager;
+use library::util::unique_name;
 
 use crate::state::authoring::{AssetBrowserViewMode, AuthoringSelection, AuthoringUiState};
 use crate::ui::media_preview::AuthoringMediaPreviewService;
@@ -371,29 +371,4 @@ fn open_timeline(
     state.timeline.seek_frame(0);
     state.timeline.set_playing(false);
     state.preview.auto_fit = true;
-}
-
-fn unique_name<'a>(base: &str, existing: impl IntoIterator<Item = &'a str>) -> String {
-    let existing = existing.into_iter().collect::<HashSet<_>>();
-    if !existing.contains(base) {
-        return base.to_string();
-    }
-    (2..)
-        .map(|suffix| format!("{base} {suffix}"))
-        .find(|candidate| !existing.contains(candidate.as_str()))
-        .unwrap_or_else(|| format!("{base} Copy"))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::unique_name;
-
-    #[test]
-    fn names_are_unique_without_discarding_the_readable_base() {
-        assert_eq!(unique_name("Composition", ["Main", "Title"]), "Composition");
-        assert_eq!(
-            unique_name("Composition", ["Composition", "Composition 2"]),
-            "Composition 3"
-        );
-    }
 }

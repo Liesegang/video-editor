@@ -8,8 +8,8 @@ use ordered_float::OrderedFloat;
 
 use crate::model::property::{PropertyValue, Vec2, Vec3, Vec4};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum NumericBinaryOperation {
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum NumericBinaryOperation {
     Add,
     Subtract,
     Multiply,

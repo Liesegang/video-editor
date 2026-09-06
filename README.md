@@ -43,8 +43,30 @@ existing Inspector/Node editor and Palette, including color stops and spread.
 Particle Systems expose **Turbulence Strength** in the Inspector (zero by
 default). Their Node graphs also support ordered, repeated Gravity, Drag,
 Turbulence, Vortex, and Point forces, evaluated by the shared GPU compute
-runtime. Generic per-point custom attributes and lifetime-driven value graphs
-are still in development; the current Color Ramp evaluates once per frame.
+runtime.
+
+### Per-point custom attributes
+
+Inside a Particle Node Clip, add **Point Info** and **Store Number Attribute**
+from the context menu. Connect the final Force's Particles output to both
+Points inputs; connect Store's Points output to Sprite Renderer's Particles
+input. Feed Normalized Age, Age, or Random from Point Info into Store's Value.
+Store's Attribute output can then drive ordinary arithmetic Nodes and a
+**Color Ramp**, whose Color output connects to Sprite Renderer's Color input.
+Gradient values and frame-uniform arithmetic inputs retain their usual editors
+and published Timeline keyframes.
+
+Rename the Store Node to name the attribute (for example, `heat`). Its stable
+identity does not depend on that name. Stores can be chained, and later fields
+read earlier attributes through their Attribute outputs. A field cannot read
+another Point stream implicitly.
+
+This first execution slice supports Number attributes, computed on the GPU
+after simulation at each rendered frame. It does not yet accumulate attributes
+across simulation steps or provide procedural non-particle Point producers.
+Programs are bounded to 16 attributes, 64 instructions, and 8 Color Ramps with
+64 stops each. Invalid per-point arithmetic produces a transparent Sprite for
+that point. Runtime arrays and GPU programs are not saved into Projects.
 
 ## Repository layout
 

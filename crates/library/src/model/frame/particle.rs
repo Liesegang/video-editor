@@ -397,6 +397,7 @@ pub struct ParticleSceneFrame {
     pub logical_width: u32,
     pub logical_height: u32,
     pub parameters: ParticleSceneParameters,
+    pub point_program: Option<crate::model::point::PointRenderProgram>,
 }
 
 impl ParticleSceneFrame {
@@ -410,7 +411,11 @@ impl ParticleSceneFrame {
         if self.logical_width == 0 || self.logical_height == 0 {
             return Err("Particle render dimensions must be positive".to_string());
         }
-        self.parameters.validate()
+        self.parameters.validate()?;
+        if let Some(program) = &self.point_program {
+            program.validate()?;
+        }
+        Ok(())
     }
 }
 

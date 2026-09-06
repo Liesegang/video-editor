@@ -538,6 +538,7 @@ fn hierarchical_rendering_preserves_texture_layers_and_root_texture_output() {
 #[test]
 fn particle_without_effects_uses_the_backend_native_draw_boundary() {
     let scene = ParticleSceneFrame {
+        point_program: None,
         invocation: SceneInvocationKey {
             instance_path: InstancePath::root(TimelineId::new()),
             module_instance_id: ModuleInstanceId::new(),

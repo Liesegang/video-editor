@@ -6,12 +6,14 @@ use crate::model::authoring::{ModuleDefinition, ModulePortAddress};
 use crate::model::frame::particle::PARTICLE_MAX_FORCES;
 use crate::model::node::{Node, NodeContent, PARTICLE_SYSTEM_PORT, ParticleNodeRole};
 
+use super::point::{compile_point_program, trace_point_stream, validate_point_field_consumers};
 use super::{CompiledParticleDefinition, CompiledParticleForce};
 
 pub(super) fn compile_particle_renderers(
     definition: &ModuleDefinition,
     active_nodes: &HashSet<uuid::Uuid>,
-) -> HashMap<uuid::Uuid, CompiledParticleDefinition> {
+) -> Result<HashMap<uuid::Uuid, CompiledParticleDefinition>, String> {
+    validate_point_field_consumers(definition, active_nodes)?;
     let mut compiled = HashMap::new();
     let mut candidate_ids = active_nodes.iter().copied().collect::<Vec<_>>();
     candidate_ids.sort_unstable();
@@ -29,11 +31,14 @@ pub(super) fn compile_particle_renderers(
         if !node.enabled || node.bypassed {
             continue;
         }
-        if let Some(particle) = compile_particle_chain(definition, renderer_node_id) {
+        let Some(trace) = trace_point_stream(definition, renderer_node_id)? else {
+            continue;
+        };
+        if let Some(particle) = compile_particle_chain(definition, renderer_node_id, &trace)? {
             compiled.insert(renderer_node_id, particle);
         }
     }
-    compiled
+    Ok(compiled)
 }
 
 #[derive(Default)]
@@ -53,34 +58,49 @@ struct ParticleStages {
 fn compile_particle_chain(
     definition: &ModuleDefinition,
     renderer_node_id: uuid::Uuid,
-) -> Option<CompiledParticleDefinition> {
+    point_trace: &super::point::PointStreamTrace,
+) -> Result<Option<CompiledParticleDefinition>, String> {
     let mut stages = ParticleStages::default();
     let mut downstream_rank = ParticleNodeRole::SpriteRenderer.execution_rank();
     let mut downstream_node_id = renderer_node_id;
     let mut visited = HashSet::from([renderer_node_id]);
     let mut force_count = 0_usize;
+    let mut first_source = Some(point_trace.particle_source.clone());
+    let mut particle_lineage = HashSet::new();
     loop {
-        let node = single_particle_source(definition, downstream_node_id)?;
+        let node = match first_source.take() {
+            Some(source) => particle_source_node(definition, &source),
+            None => single_particle_source(definition, downstream_node_id),
+        };
+        let Some(node) = node else {
+            return Ok(None);
+        };
         if !visited.insert(node.id) {
-            return None;
+            return Ok(None);
         }
         if !node.enabled {
-            return None;
+            return Ok(None);
         }
-        let role = native_role(node)?;
+        let Some(role) = native_role(node) else {
+            return Ok(None);
+        };
+        particle_lineage.insert(ModulePortAddress {
+            node_id: node.id,
+            port: PARTICLE_SYSTEM_PORT.to_string(),
+        });
         let rank = role.execution_rank();
         let repeated_force = role.is_force() && rank == downstream_rank;
         if role == ParticleNodeRole::SpriteRenderer
             || rank > downstream_rank
             || (rank == downstream_rank && !repeated_force)
         {
-            return None;
+            return Ok(None);
         }
         downstream_rank = rank;
         if role.is_force() {
             force_count += 1;
             if force_count > PARTICLE_MAX_FORCES {
-                return None;
+                return Ok(None);
             }
             if !node.bypassed {
                 stages.forces.push(CompiledParticleForce {
@@ -99,15 +119,15 @@ fn compile_particle_chain(
             | ParticleNodeRole::Drag
             | ParticleNodeRole::Turbulence
             | ParticleNodeRole::Vortex
-            | ParticleNodeRole::Point => return None,
-            ParticleNodeRole::SpriteRenderer => return None,
+            | ParticleNodeRole::Point => return Ok(None),
+            ParticleNodeRole::SpriteRenderer => return Ok(None),
         };
         if slot.is_some() {
-            return None;
+            return Ok(None);
         }
         if role == ParticleNodeRole::Emitter {
             if node.bypassed || has_particle_input(definition, node.id) {
-                return None;
+                return Ok(None);
             }
             *slot = Some(node.id);
             break;
@@ -118,16 +138,32 @@ fn compile_particle_chain(
         downstream_node_id = node.id;
     }
     stages.forces.reverse();
-    Some(CompiledParticleDefinition {
-        emitter_node_id: stages.emitter?,
+    let Some(emitter_node_id) = stages.emitter else {
+        return Ok(None);
+    };
+    let point_program =
+        compile_point_program(definition, renderer_node_id, point_trace, &particle_lineage)?;
+    Ok(Some(CompiledParticleDefinition {
+        emitter_node_id,
         shape_location_node_id: stages.shape_location,
         initialize_node_id: stages.initialize,
         force_nodes: stages.forces,
+        point_program,
         renderer_node_id,
         // A fused executable is owned by this concrete renderer chain. Two
         // branches from one Emitter must never evict each other's SSBO state.
         state_slot_id: renderer_node_id,
-    })
+    }))
+}
+
+fn particle_source_node<'a>(
+    definition: &'a ModuleDefinition,
+    source: &ModulePortAddress,
+) -> Option<&'a Node> {
+    if source.port != PARTICLE_SYSTEM_PORT {
+        return None;
+    }
+    definition.graph.nodes.get(&source.node_id)
 }
 
 fn single_particle_source(

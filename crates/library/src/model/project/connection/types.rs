@@ -214,6 +214,7 @@ impl PortDataType {
             || (self == Self::Any && source.is_property_value_family())
             || (source == Self::Any && self.is_property_value_family())
             || (self == Self::Number && source == Self::Integer)
+            || (self == Self::PointSource && source == Self::ParticleSystem)
             || ((self == Self::Numeric || source == Self::Numeric)
                 && self.is_numeric_family()
                 && source.is_numeric_family())

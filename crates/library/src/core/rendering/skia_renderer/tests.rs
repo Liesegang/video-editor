@@ -638,6 +638,7 @@ fn particle_vec3(x: f64, y: f64, z: f64) -> Vec3 {
 #[cfg(all(feature = "gl", target_os = "windows"))]
 fn particle_scene(target_step: u64) -> ParticleSceneFrame {
     ParticleSceneFrame {
+        point_program: None,
         invocation: SceneInvocationKey {
             instance_path: InstancePath::root(TimelineId::from_uuid(Uuid::from_u128(1))),
             module_instance_id: ModuleInstanceId::from_uuid(Uuid::from_u128(2)),

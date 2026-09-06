@@ -189,6 +189,7 @@ pub(in crate::ui::panels::node_editor) fn node_icon_for_node<'a>(
                 Some("Particles") => {
                     NodeEditorIcon::new(icons::SPARKLE, "Particle design placeholder")
                 }
+                Some("Points") => NodeEditorIcon::new(icons::SPARKLE, "Point operation"),
                 Some("Transition") => {
                     NodeEditorIcon::new(icons::ARROWS_MERGE, "Transition host operation")
                 }

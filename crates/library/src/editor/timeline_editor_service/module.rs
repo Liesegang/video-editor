@@ -759,12 +759,27 @@ pub(super) fn remove_instance_and_private_definition(
 
 pub(super) fn add_node_to_definition(
     definition: &mut ModuleDefinition,
-    node: Node,
+    mut node: Node,
 ) -> Result<uuid::Uuid, String> {
     require_insertable_processing_node(&node)?;
     definition
         .host_contract
         .validate_authored_processing_node(&node)?;
+    if matches!(
+        node.content(),
+        crate::model::node::NodeContent::NativeOperation(operation)
+            if crate::model::node::PointNodeRole::from_catalog_id(&operation.catalog_id)
+                == Some(crate::model::node::PointNodeRole::StoreNumberAttribute)
+    ) {
+        node.name = crate::util::unique_name(
+            &node.name,
+            definition
+                .graph
+                .nodes
+                .values()
+                .map(|existing| existing.name.as_str()),
+        );
+    }
     let node_id = node.id;
     if definition.graph.nodes.insert(node_id, node).is_some() {
         return Err(format!("Module Node {node_id} already exists"));

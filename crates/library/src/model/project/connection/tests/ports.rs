@@ -17,6 +17,13 @@ fn numeric_union_accepts_each_concrete_numeric_type_in_both_directions() {
 }
 
 #[test]
+fn point_source_accepts_particle_system_in_only_the_safe_direction() {
+    assert!(PortDataType::PointSource.accepts(PortDataType::ParticleSystem));
+    assert!(!PortDataType::ParticleSystem.accepts(PortDataType::PointSource));
+    assert!(!PortDataType::PointSource.accepts(PortDataType::Geometry3D));
+}
+
+#[test]
 fn canonical_node_port_order_is_stable_and_does_not_mutate_graph_semantics()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut project = Project::new("port order");

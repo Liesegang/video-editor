@@ -120,11 +120,6 @@ const INITIALIZE_PARTICLE_INPUTS: &[PortSpec] = &[
     PortSpec::single("size_min", "Size Min", PortDataType::Number),
     PortSpec::single("size_max", "Size Max", PortDataType::Number),
 ];
-const SET_ATTRIBUTE_INPUTS: &[PortSpec] = &[
-    PARTICLE,
-    PortSpec::single("attribute_name", "Attribute Name", PortDataType::String),
-    PortSpec::single("value", "Value", PortDataType::Any),
-];
 const GRAVITY_INPUTS: &[PortSpec] = &[
     PARTICLE,
     PortSpec::single("force", "Force", PortDataType::Vec3),
@@ -181,7 +176,7 @@ const COLLISION_DEPTH_INPUTS: &[PortSpec] = &[
     PortSpec::single("thickness", "Thickness", PortDataType::Number),
 ];
 const SPRITE_RENDERER_INPUTS: &[PortSpec] = &[
-    PARTICLE,
+    PortSpec::single(PARTICLE_SYSTEM_PORT, "Particles", PortDataType::PointSource),
     PortSpec::single("color", "Color", PortDataType::Color),
 ];
 const PARTICLE_FIXED_STEP_REASON: &str = "deterministic Particle simulation needs a fixed-step parameter schedule, which is not implemented yet";
@@ -261,13 +256,6 @@ const SPECS: &[DescriptorSpec] = &[
     )
     .validate_property_set(validate_initialize_property_set)
     .constant_only_inputs(INITIALIZE_CONSTANT_ONLY_INPUTS, PARTICLE_FIXED_STEP_REASON),
-    DescriptorSpec::placeholder(
-        "native.particle.set-attribute",
-        "Set Attribute",
-        "Particles",
-        SET_ATTRIBUTE_INPUTS,
-        PARTICLE_OUTPUT,
-    ),
     DescriptorSpec::implemented_native(
         DescriptorIdentity::new(
             ParticleNodeRole::Gravity.catalog_id(),

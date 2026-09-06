@@ -565,6 +565,36 @@ fn module_creation_capability_is_owned_by_semantic_catalog_factories() {
 }
 
 #[test]
+fn point_catalog_uses_node_identity_for_named_number_attributes() {
+    use crate::model::point::PointAttributeId;
+
+    let info = native_node_descriptor("native.point.info").unwrap();
+    assert!(info.supports_general_module_creation());
+    assert_eq!(info.factory(), NativeNodeFactory::NativeOperation);
+    assert!(info.property_definitions().is_empty());
+
+    let store = native_node_descriptor("native.point.store-number-attribute").unwrap();
+    assert!(store.supports_general_module_creation());
+    let mut node = Node::new_catalog_node(store.catalog_id()).unwrap();
+    assert_eq!(
+        node.properties().get("value").unwrap().get_static_value(),
+        Some(&PropertyValue::Number(OrderedFloat(0.0)))
+    );
+    let attribute_id = PointAttributeId::from_uuid(node.id);
+    node.name = "heat".to_string();
+    assert_eq!(PointAttributeId::from_uuid(node.id), attribute_id);
+    assert_eq!(node.name, "heat");
+    assert!(native_node_descriptor("native.particle.set-attribute").is_none());
+
+    let sprite = native_node_descriptor("native.particle.sprite-renderer").unwrap();
+    assert!(sprite.ports().iter().any(|port| {
+        port.direction == PortDirection::Input
+            && port.key == PARTICLE_SYSTEM_PORT
+            && port.data_type == PortDataType::PointSource
+    }));
+}
+
+#[test]
 fn native_particle_descriptor_rejects_schema_and_typed_value_drift() {
     let descriptor = native_node_descriptor("native.particle.emitter").unwrap();
     let emitter = Node::new_catalog_node(descriptor.catalog_id()).unwrap();

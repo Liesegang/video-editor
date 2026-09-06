@@ -4,11 +4,13 @@ use crate::rendering::gl_resources::{GlTargetBindings, link_program};
 use glow::HasContext;
 
 use crate::error::LibraryError;
+use crate::model::point::PointRenderProgram;
 
 use super::forces::ForceUniformLocations;
-use super::shaders::{PARTICLE_FRAGMENT, PARTICLE_VERTEX, particle_compute_source};
+use super::point_fields::PointFieldPipeline;
+use super::shaders::{particle_compute_source, particle_fragment_source, particle_vertex_source};
 
-pub(super) const PARTICLE_STRIDE_BYTES: u64 = 48;
+pub(super) const PARTICLE_STRIDE_BYTES: u64 = 64;
 pub(super) const PARTICLE_WORKGROUP_SIZE: u32 = 64;
 pub(super) const PARTICLE_VERTICES_PER_SPRITE: u32 = 6;
 
@@ -35,7 +37,7 @@ pub(super) fn probe_capabilities(gl: &glow::Context) -> Result<CapabilityProfile
             "GPU Particle requires desktop OpenGL 4.3 compute/SSBO support; active context is {label}"
         ));
     }
-    if storage_bindings < 1 || workgroup_invocations < PARTICLE_WORKGROUP_SIZE as i32 {
+    if storage_bindings < 4 || workgroup_invocations < PARTICLE_WORKGROUP_SIZE as i32 {
         return Err(format!(
             "GPU Particle cannot run on {label}: available SSBO bindings={storage_bindings}, compute workgroup invocations={workgroup_invocations}"
         ));
@@ -76,7 +78,8 @@ pub(super) struct RenderUniforms {
     pub affine_x: glow::UniformLocation,
     pub affine_y: glow::UniformLocation,
     pub focal_length: glow::UniformLocation,
-    pub premultiplied_color: glow::UniformLocation,
+    pub premultiplied_color: Option<glow::UniformLocation>,
+    pub output_srgba: Option<glow::UniformLocation>,
 }
 
 #[derive(Clone)]
@@ -86,19 +89,37 @@ pub(super) struct ParticlePipeline {
     pub vertex_array: glow::VertexArray,
     pub compute: ComputeUniforms,
     pub render: RenderUniforms,
+    pub point_fields: Option<PointFieldPipeline>,
     pub last_used: u64,
 }
 
 impl ParticlePipeline {
-    pub fn create(gl: &glow::Context, last_used: u64) -> Result<Self, LibraryError> {
+    pub fn create(
+        gl: &glow::Context,
+        last_used: u64,
+        point_program: Option<&PointRenderProgram>,
+    ) -> Result<Self, LibraryError> {
         let compute_source = particle_compute_source();
         let compute_program =
             link_program(gl, &[(glow::COMPUTE_SHADER, &compute_source)], "compute")?;
+        let point_fields =
+            match point_program.map(|program| PointFieldPipeline::create(gl, program)) {
+                Some(Ok(pipeline)) => Some(pipeline),
+                Some(Err(error)) => {
+                    // SAFETY: this error path remains the sole owner of the
+                    // base compute program created immediately above.
+                    unsafe { gl.delete_program(compute_program) };
+                    return Err(error);
+                }
+                None => None,
+            };
+        let vertex_source = particle_vertex_source(point_fields.is_some());
+        let fragment_source = particle_fragment_source(point_fields.is_some());
         let render_program = match link_program(
             gl,
             &[
-                (glow::VERTEX_SHADER, PARTICLE_VERTEX),
-                (glow::FRAGMENT_SHADER, PARTICLE_FRAGMENT),
+                (glow::VERTEX_SHADER, &vertex_source),
+                (glow::FRAGMENT_SHADER, &fragment_source),
             ],
             "sprite",
         ) {
@@ -107,6 +128,9 @@ impl ParticlePipeline {
                 // SAFETY: `compute_program` was created by this live context
                 // above and has not been deleted or transferred.
                 unsafe { gl.delete_program(compute_program) };
+                if let Some(point_fields) = point_fields {
+                    point_fields.destroy(gl);
+                }
                 return Err(error);
             }
         };
@@ -120,6 +144,9 @@ impl ParticlePipeline {
                 unsafe {
                     gl.delete_program(compute_program);
                     gl.delete_program(render_program);
+                }
+                if let Some(point_fields) = point_fields {
+                    point_fields.destroy(gl);
                 }
                 return Err(LibraryError::Render(format!(
                     "Cannot create GPU Particle vertex array: {error}"
@@ -157,11 +184,14 @@ impl ParticlePipeline {
                     affine_x: required_uniform(gl, render_program, "uAffineX")?,
                     affine_y: required_uniform(gl, render_program, "uAffineY")?,
                     focal_length: required_uniform(gl, render_program, "uFocalLength")?,
-                    premultiplied_color: required_uniform(
-                        gl,
-                        render_program,
-                        "uPremultipliedColor",
-                    )?,
+                    premultiplied_color: point_fields
+                        .is_none()
+                        .then(|| required_uniform(gl, render_program, "uPremultipliedColor"))
+                        .transpose()?,
+                    output_srgba: point_fields
+                        .is_some()
+                        .then(|| required_uniform(gl, render_program, "uOutputSrgba"))
+                        .transpose()?,
                 },
             ))
         })();
@@ -175,6 +205,9 @@ impl ParticlePipeline {
                     gl.delete_program(compute_program);
                     gl.delete_program(render_program);
                 }
+                if let Some(point_fields) = point_fields {
+                    point_fields.destroy(gl);
+                }
                 return Err(error);
             }
         };
@@ -184,6 +217,7 @@ impl ParticlePipeline {
             vertex_array,
             compute,
             render,
+            point_fields,
             last_used,
         })
     }
@@ -195,6 +229,9 @@ impl ParticlePipeline {
             gl.delete_vertex_array(self.vertex_array);
             gl.delete_program(self.compute_program);
             gl.delete_program(self.render_program);
+        }
+        if let Some(point_fields) = self.point_fields {
+            point_fields.destroy(gl);
         }
     }
 }

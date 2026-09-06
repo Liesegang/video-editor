@@ -42,6 +42,7 @@ mod frame_values;
 mod module_image;
 mod module_shape;
 mod particle;
+mod point;
 mod text_ensemble;
 pub(super) mod time_map;
 mod timeline;

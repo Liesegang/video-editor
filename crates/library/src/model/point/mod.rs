@@ -6,7 +6,14 @@
 //! Project model.
 
 mod layout;
+mod program;
 mod schema;
+
+pub use crate::model::numeric::NumericBinaryOperation;
+pub use program::{
+    POINT_MAX_INSTRUCTIONS, POINT_MAX_RAMP_STOPS, POINT_MAX_RAMPS, PointInstruction,
+    PointRenderProgram,
+};
 
 pub use layout::{
     POINT_MAX_CAPACITY, POINT_MAX_COLUMN_BYTES, PointAttributeColumnLayout,
@@ -17,5 +24,7 @@ pub use schema::{
     PointAttributeElementType, PointAttributeId, PointAttributeSchema, PointId, PointProducerId,
 };
 
+#[cfg(test)]
+mod program_tests;
 #[cfg(test)]
 mod tests;

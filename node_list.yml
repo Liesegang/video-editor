@@ -2443,22 +2443,6 @@ Birth Attributes:
   outputs:
     - name: particles
       type: ParticleSystem
-Set Attribute:
-  category: Particles
-  catalog_status: native
-  catalog_id: native.particle.set-attribute
-  runtime_status: design-needed
-  description: Set custom particle attribute (GPU Buffer Write)
-  inputs:
-    - name: particles
-      type: ParticleSystem
-    - name: attribute_name
-      type: String
-    - name: value
-      type: Any
-  outputs:
-    - name: particles
-      type: ParticleSystem
 Gravity Force:
   category: Particles
   catalog_status: native
@@ -2629,7 +2613,7 @@ Sprite Renderer:
   runtime_status: implemented
   inputs:
     - name: particles
-      type: ParticleSystem
+      type: PointSource
     - name: color
       type: Color
   outputs:
@@ -2668,6 +2652,40 @@ Ribbon Renderer:
   outputs:
     - name: image
       type: Image
+
+# --- Points ---
+Point Info:
+  category: Points
+  catalog_status: native
+  catalog_id: native.point.info
+  runtime_status: implemented
+  description: Read the current Point domain's age and stable random fields
+  inputs:
+    - name: points
+      type: PointSource
+  outputs:
+    - name: age
+      type: Scalar
+    - name: normalized_age
+      type: Scalar
+    - name: random
+      type: Scalar
+Store Number Attribute:
+  category: Points
+  catalog_status: native
+  catalog_id: native.point.store-number-attribute
+  runtime_status: implemented
+  description: Store one Number field under the stable identity derived from this Node
+  inputs:
+    - name: points
+      type: PointSource
+    - name: value
+      type: Scalar
+  outputs:
+    - name: points
+      type: PointSource
+    - name: attribute
+      type: Scalar
 
 # --- 3D ---
 Camera 3D:
