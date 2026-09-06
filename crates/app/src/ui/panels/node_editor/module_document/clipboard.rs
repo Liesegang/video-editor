@@ -155,7 +155,8 @@ pub(super) fn keyboard_actions(
             || ui.ctx().wants_keyboard_input()
             || egui::Popup::is_any_open(ui.ctx())
             || state.create_menu.is_some()
-            || state.wire_menu.is_some())
+            || state.wire_menu.is_some()
+            || state.node_menu.is_some())
     {
         return Vec::new();
     }

@@ -8,8 +8,8 @@ use crate::{
 };
 
 use super::{
-    hit, keyboard, selection, transient, EditorOutput, Gesture, InteractionOptions,
-    InteractionState, Movable, MoveEndOutcome,
+    hit, keyboard, selection, transient, ContextMenuTarget, EditorOutput, Gesture,
+    InteractionOptions, InteractionState, Movable, MoveEndOutcome,
 };
 
 const MOVE_DRAG_THRESHOLD: f32 = 4.0;
@@ -174,7 +174,15 @@ fn cancel_disabled_gesture<NodeId, PortId, WireId, GroupId>(
         Some(Gesture::Marquee { .. }) => !options.select || !options.marquee,
         Some(Gesture::Connect { .. } | Gesture::Reconnect { .. }) => !options.connect,
         Some(Gesture::LazyConnect { .. }) => !options.connect,
-        Some(Gesture::WireSecondary { .. } | Gesture::CutWires { .. }) => !options.disconnect,
+        Some(Gesture::ContextMenu {
+            target: ContextMenuTarget::Wire(_),
+            ..
+        }
+        | Gesture::CutWires { .. }) => !options.disconnect,
+        Some(Gesture::ContextMenu {
+            target: ContextMenuTarget::Node(_),
+            ..
+        }) => false,
         Some(Gesture::Resize { .. }) => !options.resize_groups,
         Some(Gesture::LayoutSwipe(_)) => options.layout_swipe == LayoutSwipeHitArea::Disabled,
         None => false,
@@ -206,7 +214,7 @@ pub(crate) fn cancel_gesture<NodeId, PortId, WireId, GroupId>(
             | Gesture::Move { .. }
             | Gesture::Connect { .. }
             | Gesture::Reconnect { .. }
-            | Gesture::WireSecondary { .. }
+            | Gesture::ContextMenu { .. }
             | Gesture::CutWires { .. }
             | Gesture::LazyConnect { .. }
             | Gesture::Resize { .. },
@@ -221,7 +229,7 @@ fn is_secondary_gesture<NodeId, PortId, WireId, GroupId>(
     matches!(
         state.gesture,
         Some(
-            Gesture::WireSecondary { .. } | Gesture::CutWires { .. } | Gesture::LazyConnect { .. }
+            Gesture::ContextMenu { .. } | Gesture::CutWires { .. } | Gesture::LazyConnect { .. }
         )
     )
 }
@@ -258,13 +266,23 @@ fn begin_secondary<NodeId, PortId, WireId, GroupId, Key>(
         }
         return;
     }
-    if hit::node(frame, graph_position).is_some() || hit::port(frame, graph_position).is_some() {
+    if let Some(node) = hit::node(frame, graph_position) {
+        state.gesture = Some(Gesture::ContextMenu {
+            target: ContextMenuTarget::Node(node.clone()),
+            start: screen_position,
+            current: screen_position,
+            transform: frame.transform,
+        });
+        capture_pointer(ui);
+        return;
+    }
+    if hit::port(frame, graph_position).is_some() {
         return;
     }
     if options.disconnect {
         if let Some(wire) = hit::wire(frame, graph_position).filter(|wire| wire.editable) {
-            state.gesture = Some(Gesture::WireSecondary {
-                wire: wire.id.clone(),
+            state.gesture = Some(Gesture::ContextMenu {
+                target: ContextMenuTarget::Wire(wire.id.clone()),
                 start: screen_position,
                 current: screen_position,
                 transform: frame.transform,
@@ -283,7 +301,7 @@ fn update_secondary<NodeId, PortId, WireId, GroupId>(
         return;
     }
     match state.gesture.as_mut() {
-        Some(Gesture::WireSecondary { current, .. } | Gesture::LazyConnect { current, .. }) => {
+        Some(Gesture::ContextMenu { current, .. } | Gesture::LazyConnect { current, .. }) => {
             *current = screen_position
         }
         Some(Gesture::CutWires { points, .. }) => {
@@ -324,16 +342,25 @@ fn finish_secondary<NodeId, PortId, WireId, GroupId, Key>(
         return;
     };
     match gesture {
-        Gesture::WireSecondary {
-            wire,
+        Gesture::ContextMenu {
+            target,
             start,
             current,
             ..
-        } if options.disconnect && start.distance(current) < MOVE_DRAG_THRESHOLD => {
-            outputs.push(EditorOutput::WireContextMenu {
-                wire,
-                screen_position: current,
-            });
+        } if start.distance(current) < MOVE_DRAG_THRESHOLD => {
+            match target {
+                ContextMenuTarget::Node(node) => outputs.push(EditorOutput::NodeContextMenu {
+                    node,
+                    screen_position: current,
+                }),
+                ContextMenuTarget::Wire(wire) if options.disconnect => {
+                    outputs.push(EditorOutput::WireContextMenu {
+                        wire,
+                        screen_position: current,
+                    });
+                }
+                ContextMenuTarget::Wire(_) => {}
+            }
         }
         Gesture::CutWires {
             mut points,
@@ -378,7 +405,7 @@ fn finish_secondary<NodeId, PortId, WireId, GroupId, Key>(
             };
             finish_lazy_connect(frame, &from_node, to_node, outputs);
         }
-        Gesture::WireSecondary { .. } | Gesture::CutWires { .. } | Gesture::LazyConnect { .. } => {}
+        Gesture::ContextMenu { .. } | Gesture::CutWires { .. } | Gesture::LazyConnect { .. } => {}
         Gesture::Hold { .. }
         | Gesture::Marquee { .. }
         | Gesture::Move { .. }
@@ -682,7 +709,7 @@ fn update<NodeId, PortId, WireId, GroupId>(
                 }
             }
         }
-        Gesture::WireSecondary { .. } | Gesture::CutWires { .. } | Gesture::LazyConnect { .. } => {}
+        Gesture::ContextMenu { .. } | Gesture::CutWires { .. } | Gesture::LazyConnect { .. } => {}
     }
 }
 
@@ -756,7 +783,7 @@ fn finish<NodeId, PortId, WireId, GroupId, Key>(
         | Gesture::Marquee { .. }
         | Gesture::Connect { .. }
         | Gesture::Reconnect { .. }
-        | Gesture::WireSecondary { .. }
+        | Gesture::ContextMenu { .. }
         | Gesture::CutWires { .. }
         | Gesture::LazyConnect { .. }
         | Gesture::Move { .. }

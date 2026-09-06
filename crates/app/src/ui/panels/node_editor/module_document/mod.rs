@@ -218,7 +218,7 @@ fn translate_surface_outputs(
             EditorOutput::Disconnect { wire } => {
                 actions.push(ModuleEditorAction::Disconnect(wire));
             }
-            EditorOutput::WireContextMenu { .. } => {}
+            EditorOutput::WireContextMenu { .. } | EditorOutput::NodeContextMenu { .. } => {}
             EditorOutput::Connect { from, to }
                 if from.direction == PortDirection::Output
                     && to.direction == PortDirection::Input =>

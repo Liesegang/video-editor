@@ -15,6 +15,7 @@ mod runtime;
 pub use cache::{RenderPlanCache, RenderPlanCacheStats};
 pub use compiler::RenderPlanCompiler;
 pub use model::*;
+pub use point::validate_module_node_name;
 pub(crate) use runtime::time_map::map_composition_time;
 pub use runtime::{
     evaluate_render_plan_frame, evaluate_timeline_render_plan_frame,

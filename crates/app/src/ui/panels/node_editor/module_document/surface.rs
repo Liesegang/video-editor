@@ -10,14 +10,13 @@ use node_editor_ui::{
     ReconnectEndpoint, TypeKey, WireDescriptor,
 };
 
-use super::context_menu::{show_module_create_menu, show_module_wire_menu};
+use super::context_menu::{show_module_create_menu, show_module_node_menu, show_module_wire_menu};
 use super::interface::port_interface_actions;
 use super::viewer::{ModuleNodeViewer, ModuleSurfaceCapture};
 use super::*;
 use crate::ui::panels::node_editor::{
-    node_editor_details_visible, node_editor_navigation_config, node_editor_snarl_style_for,
-    node_palette_for_node, pin_color, NODE_EDITOR_MAX_SCALE, NODE_EDITOR_MIN_SCALE,
-    PORT_ROW_HEIGHT,
+    NODE_EDITOR_MAX_SCALE, NODE_EDITOR_MIN_SCALE, PORT_ROW_HEIGHT, node_editor_details_visible,
+    node_editor_navigation_config, node_editor_snarl_style_for, node_palette_for_node, pin_color,
 };
 use crate::ui::viewport::{ViewportController, ViewportState};
 
@@ -72,8 +71,10 @@ pub(super) fn show_module_document(
     // Capture ownership before body widgets can close their popup. A click
     // that dismisses an overlay must not become a background graph gesture.
     let popup_was_open = egui::Popup::is_any_open(ui.ctx());
-    let overlay_was_open =
-        popup_was_open || state.create_menu.is_some() || state.wire_menu.is_some();
+    let overlay_was_open = popup_was_open
+        || state.create_menu.is_some()
+        || state.wire_menu.is_some()
+        || state.node_menu.is_some();
     release_finished_direct_gesture(ui, state);
     if !overlay_was_open {
         retain_press_time_transform(ui, state, viewport);
@@ -169,24 +170,38 @@ pub(super) fn show_module_document(
     };
     let mut mutation_outputs = Vec::with_capacity(outputs.len());
     let mut opened_wire_menu = false;
+    let mut opened_node_menu = false;
     for output in outputs {
-        if let node_editor_ui::EditorOutput::WireContextMenu {
-            wire,
-            screen_position,
-        } = output
-        {
-            state.selected_nodes.clear();
-            state.primary_node = None;
-            state.selected_connection = Some(wire);
-            state.wire_menu = Some(crate::state::node_editor::ModuleWireMenuState {
-                connection_id: wire,
-                position: screen_position,
-                open_time: ui.input(|input| input.time),
-            });
-            state.create_menu = None;
-            opened_wire_menu = true;
-        } else {
-            mutation_outputs.push(output);
+        match output {
+            node_editor_ui::EditorOutput::WireContextMenu {
+                wire,
+                screen_position,
+            } => {
+                state.selected_nodes.clear();
+                state.primary_node = None;
+                state.selected_connection = Some(wire);
+                state.wire_menu = Some(crate::state::node_editor::ModuleWireMenuState {
+                    connection_id: wire,
+                    position: screen_position,
+                    open_time: ui.input(|input| input.time),
+                });
+                state.create_menu = None;
+                state.node_menu = None;
+                opened_wire_menu = true;
+            }
+            node_editor_ui::EditorOutput::NodeContextMenu {
+                node,
+                screen_position,
+            } => {
+                state.node_menu = Some(crate::state::node_editor::ModuleNodeMenuState {
+                    node_id: node,
+                    position: screen_position,
+                });
+                state.create_menu = None;
+                state.wire_menu = None;
+                opened_node_menu = true;
+            }
+            output => mutation_outputs.push(output),
         }
     }
     actions.extend(translate_surface_outputs(
@@ -206,7 +221,16 @@ pub(super) fn show_module_document(
     if let Some(connection_id) = show_module_wire_menu(ui, state) {
         actions.push(ModuleEditorAction::Disconnect(connection_id));
     }
-    if !opened_wire_menu && !wire_menu_was_open && !popup_was_open {
+    let node_menu_was_open = state.node_menu.is_some();
+    if let Some(action) = show_module_node_menu(ui, state, definition) {
+        actions.push(action);
+    }
+    if !opened_wire_menu
+        && !opened_node_menu
+        && !wire_menu_was_open
+        && !node_menu_was_open
+        && !popup_was_open
+    {
         if let Some(action) = show_module_create_menu(
             ui,
             state,

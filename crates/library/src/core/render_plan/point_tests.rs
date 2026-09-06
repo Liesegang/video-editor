@@ -6,12 +6,15 @@ use super::particle_tests::{
 };
 use crate::editor::TimelineEditorService;
 use crate::editor::project_service::{GeneratorNodeRequest, test_generator_node};
-use crate::model::authoring::{ModulePortAddress, PublishedParameter, PublishedParameterId};
+use crate::model::authoring::{
+    ModuleDefinitionSharing, ModulePortAddress, ModuleTemplateOrigin, PublishedParameter,
+    PublishedParameterId,
+};
 use crate::model::node::{
     COLOR_RAMP_FACTOR_PORT, COLOR_VALUE_PORT, ColorContent, Node, PARTICLE_SYSTEM_PORT,
     POINT_ATTRIBUTE_OUTPUT_PORT, POINT_ATTRIBUTE_VALUE_PORT, POINT_SOURCE_PORT, PointNodeRole,
 };
-use crate::model::point::PointAttributeId;
+use crate::model::point::{POINT_ATTRIBUTE_NAME_MAX_BYTES, PointAttributeId};
 use crate::model::project::{
     IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, NUMBER_RESULT_OUTPUT_PORT,
     NUMERIC_A_INPUT_PORT, NUMERIC_B_INPUT_PORT, PortDataType,
@@ -542,6 +545,123 @@ fn duplicate_store_name_fails_identically_with_a_warm_or_cold_compiler() {
     let cold_error = super::RenderPlanCompiler::compile(&fixture.project).unwrap_err();
     assert!(warm_error.contains("duplicate display name"));
     assert_eq!(warm_error, cold_error);
+}
+
+#[test]
+fn rejected_store_renames_leave_copy_on_write_project_and_history_unchanged() {
+    let (mut fixture, nodes) = point_fixture(2);
+    let second_store = append_store(&mut fixture, &nodes, "density");
+    let instance_id = fixture.instance_ids[0];
+    let before = fixture.project.clone();
+    let service = TimelineEditorService::new(fixture.project).unwrap();
+    let revision = service.revision().unwrap();
+
+    let empty_error = service
+        .set_instance_module_node_state(instance_id, nodes.store, "  ".to_string(), true, false)
+        .unwrap_err();
+    assert!(empty_error.to_string().contains("must not be empty"));
+
+    let duplicate_error = service
+        .set_instance_module_node_state(instance_id, second_store, "heat".to_string(), true, false)
+        .unwrap_err();
+    assert!(
+        duplicate_error
+            .to_string()
+            .contains("duplicate display name"),
+        "{duplicate_error}"
+    );
+
+    assert_eq!(service.snapshot().unwrap().as_ref(), &before);
+    assert_eq!(service.revision().unwrap(), revision);
+    assert!(!service.can_undo().unwrap());
+}
+
+#[test]
+fn rejected_shared_template_store_renames_leave_project_and_history_unchanged() {
+    let (mut fixture, nodes) = point_fixture(1);
+    fixture
+        .project
+        .module_definitions
+        .get_mut(&fixture.definition_id)
+        .unwrap()
+        .sharing = ModuleDefinitionSharing::ReusableTemplate(ModuleTemplateOrigin::Project);
+    let second_store = append_store(&mut fixture, &nodes, "density");
+    let before = fixture.project.clone();
+    let service = TimelineEditorService::new(fixture.project).unwrap();
+    let revision = service.revision().unwrap();
+
+    let long_error = service
+        .set_shared_module_node_state(
+            fixture.definition_id,
+            nodes.store,
+            "x".repeat(POINT_ATTRIBUTE_NAME_MAX_BYTES + 1),
+            true,
+            false,
+        )
+        .unwrap_err();
+    assert!(long_error.to_string().contains("UTF-8 bytes"));
+
+    let duplicate_error = service
+        .set_shared_module_node_state(
+            fixture.definition_id,
+            second_store,
+            "heat".to_string(),
+            true,
+            false,
+        )
+        .unwrap_err();
+    assert!(
+        duplicate_error
+            .to_string()
+            .contains("duplicate display name"),
+        "{duplicate_error}"
+    );
+
+    assert_eq!(service.snapshot().unwrap().as_ref(), &before);
+    assert_eq!(service.revision().unwrap(), revision);
+    assert!(!service.can_undo().unwrap());
+}
+
+#[test]
+fn separate_point_streams_may_reuse_an_attribute_display_name() {
+    let (mut fixture, nodes) = point_fixture(1);
+    let definition = fixture
+        .project
+        .module_definitions
+        .get_mut(&fixture.definition_id)
+        .unwrap();
+    let grid = Node::new_catalog_node(PointNodeRole::Grid.catalog_id()).unwrap();
+    let mut store = Node::new_catalog_node(
+        PointNodeRole::StoreAttribute(crate::model::point::PointAttributeElementType::Number)
+            .catalog_id(),
+    )
+    .unwrap();
+    store.name = "heat".to_string();
+    let renderer =
+        Node::new_catalog_node(crate::model::node::ParticleNodeRole::SpriteRenderer.catalog_id())
+            .unwrap();
+    let grid_id = grid.id;
+    let store_id = store.id;
+    let renderer_id = renderer.id;
+    definition
+        .graph
+        .nodes
+        .extend([(grid_id, grid), (store_id, store), (renderer_id, renderer)]);
+    definition.graph.connections.extend([
+        connection(grid_id, POINT_SOURCE_PORT, store_id, POINT_SOURCE_PORT, 0),
+        connection(
+            store_id,
+            POINT_SOURCE_PORT,
+            renderer_id,
+            PARTICLE_SYSTEM_PORT,
+            0,
+        ),
+    ]);
+
+    super::validate_module_node_name(definition, nodes.store, "heat")
+        .expect("names are scoped to one Point stream");
+    super::validate_module_node_name(definition, store_id, "heat")
+        .expect("names are scoped to one Point stream");
 }
 
 #[test]

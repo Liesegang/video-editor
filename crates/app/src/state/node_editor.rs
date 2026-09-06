@@ -36,6 +36,7 @@ pub struct NodeEditorState {
     pub selected_connection: Option<ModuleConnectionId>,
     pub create_menu: Option<ModuleCreateMenuState>,
     pub wire_menu: Option<ModuleWireMenuState>,
+    pub node_menu: Option<ModuleNodeMenuState>,
     pub node_drag_offsets: HashMap<Uuid, egui::Vec2>,
     /// Authoritative Node Editor camera. The production Snarl surface consumes
     /// this value, but never owns or feeds back a second navigation state.
@@ -63,6 +64,7 @@ impl Default for NodeEditorState {
             selected_connection: None,
             create_menu: None,
             wire_menu: None,
+            node_menu: None,
             node_drag_offsets: HashMap::new(),
             canvas: CanvasState::uniform(egui::Vec2::ZERO, 1.0),
             fit_requested: false,
@@ -83,6 +85,7 @@ impl NodeEditorState {
             self.selected_connection = None;
             self.create_menu = None;
             self.wire_menu = None;
+            self.node_menu = None;
             self.node_drag_offsets.clear();
             self.canvas = CanvasState::uniform(egui::Vec2::ZERO, 1.0);
             self.fit_requested = true;
@@ -191,6 +194,12 @@ pub struct ModuleWireMenuState {
     pub open_time: f64,
 }
 
+#[derive(Debug, Clone)]
+pub struct ModuleNodeMenuState {
+    pub node_id: Uuid,
+    pub position: egui::Pos2,
+}
+
 impl ModuleCreateMenuState {
     pub const fn new(position: egui::Pos2, open_time: f64) -> Self {
         Self {
@@ -216,6 +225,10 @@ mod tests {
             position: egui::pos2(80.0, 90.0),
             open_time: 1.0,
         });
+        state.node_menu = Some(ModuleNodeMenuState {
+            node_id: Uuid::new_v4(),
+            position: egui::pos2(70.0, 80.0),
+        });
         state.canvas = CanvasState::uniform(egui::vec2(10.0, 20.0), 0.75);
         state.direct_gesture_transform = Some(egui::emath::TSTransform::IDENTITY);
         let document = NodeEditorDocument::ModuleDefinition {
@@ -229,6 +242,7 @@ mod tests {
         state.request_document(document.clone());
         assert!(state.selected_nodes.is_empty());
         assert!(state.wire_menu.is_none());
+        assert!(state.node_menu.is_none());
         assert_eq!(state.pending_command, None);
         assert_eq!(state.canvas, CanvasState::uniform(egui::Vec2::ZERO, 1.0));
         assert!(state.fit_requested);

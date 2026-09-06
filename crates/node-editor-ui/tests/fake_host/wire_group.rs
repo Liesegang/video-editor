@@ -123,18 +123,134 @@ fn right_click_requests_a_context_menu_for_the_wire_under_the_pointer() {
 }
 
 #[test]
-fn node_occlusion_wins_over_a_wire_right_click() {
+fn right_click_requests_the_same_node_context_intent_from_header_and_body() {
+    let graph = FakeGraph::new();
+    let secondary = egui::PointerButton::Secondary;
+
+    for target in [pos2(110.0, 105.0), pos2(150.0, 180.0)] {
+        let context = egui::Context::default();
+        let mut state = State::default();
+        let _ = run_interaction_frame(
+            &context,
+            &graph,
+            &mut state,
+            InteractionOptions::ALL,
+            vec![
+                Event::PointerMoved(target),
+                pointer_button_with(target, secondary, true, Modifiers::NONE),
+            ],
+        );
+        let outputs = run_interaction_frame(
+            &context,
+            &graph,
+            &mut state,
+            InteractionOptions::ALL,
+            vec![pointer_button_with(
+                target,
+                secondary,
+                false,
+                Modifiers::NONE,
+            )],
+        );
+
+        assert_eq!(
+            outputs,
+            vec![EditorOutput::NodeContextMenu {
+                node: 1,
+                screen_position: target,
+            }]
+        );
+    }
+}
+
+#[test]
+fn moved_or_cancelled_node_secondary_gestures_do_not_open_a_context_menu() {
+    let graph = FakeGraph::new();
+    let secondary = egui::PointerButton::Secondary;
+    let target = pos2(150.0, 180.0);
+
+    let moved_context = egui::Context::default();
+    let mut moved_state = State::default();
+    let _ = run_interaction_frame(
+        &moved_context,
+        &graph,
+        &mut moved_state,
+        InteractionOptions::ALL,
+        vec![
+            Event::PointerMoved(target),
+            pointer_button_with(target, secondary, true, Modifiers::NONE),
+        ],
+    );
+    let moved = target + vec2(12.0, 0.0);
+    let outputs = run_interaction_frame(
+        &moved_context,
+        &graph,
+        &mut moved_state,
+        InteractionOptions::ALL,
+        vec![
+            Event::PointerMoved(moved),
+            pointer_button_with(moved, secondary, false, Modifiers::NONE),
+        ],
+    );
+    assert!(outputs.is_empty());
+
+    let cancelled_context = egui::Context::default();
+    let mut cancelled_state = State::default();
+    let _ = run_interaction_frame(
+        &cancelled_context,
+        &graph,
+        &mut cancelled_state,
+        InteractionOptions::ALL,
+        vec![
+            Event::PointerMoved(target),
+            pointer_button_with(target, secondary, true, Modifiers::NONE),
+        ],
+    );
+    let cancelled = run_interaction_frame(
+        &cancelled_context,
+        &graph,
+        &mut cancelled_state,
+        InteractionOptions::ALL,
+        vec![key(egui::Key::Escape)],
+    );
+    assert!(cancelled.is_empty());
+    let released = run_interaction_frame(
+        &cancelled_context,
+        &graph,
+        &mut cancelled_state,
+        InteractionOptions::ALL,
+        vec![pointer_button_with(
+            target,
+            secondary,
+            false,
+            Modifiers::NONE,
+        )],
+    );
+    assert!(released.is_empty());
+}
+
+#[test]
+fn topmost_node_context_menu_wins_over_overlapping_nodes_and_a_wire() {
     let mut graph = FakeGraph::new();
     let occluder = Rect::from_min_size(pos2(300.0, 145.0), vec2(60.0, 50.0));
     graph.nodes.push(NodeDescriptor {
         id: 3,
-        title: "Occluder",
+        title: "Lower occluder",
+        rect: occluder,
+        header_rect: occluder,
+        parent: Some(10),
+        enabled: true,
+    });
+    graph.nodes.push(NodeDescriptor {
+        id: 4,
+        title: "Top occluder",
         rect: occluder,
         header_rect: occluder,
         parent: Some(10),
         enabled: true,
     });
     graph.selection_order.push(ItemId::Node(3));
+    graph.selection_order.push(ItemId::Node(4));
     let context = egui::Context::default();
     let mut state = State::default();
     let target = pos2(330.0, 170.0);
@@ -163,7 +279,13 @@ fn node_occlusion_wins_over_a_wire_right_click() {
         )],
     );
 
-    assert!(outputs.is_empty());
+    assert_eq!(
+        outputs,
+        vec![EditorOutput::NodeContextMenu {
+            node: 4,
+            screen_position: target,
+        }]
+    );
 }
 
 #[test]

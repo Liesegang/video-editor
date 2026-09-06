@@ -66,6 +66,11 @@ pub enum EditorOutput<NodeId, PortId, WireId, GroupId> {
         wire: WireId,
         screen_position: Pos2,
     },
+    /// Requests the host's native context menu for one authored Node.
+    NodeContextMenu {
+        node: NodeId,
+        screen_position: Pos2,
+    },
     Delete {
         items: Vec<ItemId<NodeId, GroupId, WireId>>,
     },
@@ -184,6 +189,12 @@ pub(super) enum Movable<NodeId, GroupId> {
 }
 
 #[derive(Clone, Debug)]
+pub(super) enum ContextMenuTarget<NodeId, WireId> {
+    Node(NodeId),
+    Wire(WireId),
+}
+
+#[derive(Clone, Debug)]
 pub(super) enum Gesture<NodeId, PortId, WireId, GroupId> {
     /// Claims an otherwise-unowned Node body press without promoting it into
     /// movement. An interactive host widget preempts this through
@@ -217,10 +228,10 @@ pub(super) enum Gesture<NodeId, PortId, WireId, GroupId> {
         current: Pos2,
         transform: egui::emath::TSTransform,
     },
-    /// Plain right-click on one authored wire. The disconnect is committed on
-    /// release, so host context menus can still own right-clicks on Nodes.
-    WireSecondary {
-        wire: WireId,
+    /// Plain right-click captured until release so movement or cancellation
+    /// cannot accidentally open a host context menu.
+    ContextMenu {
+        target: ContextMenuTarget<NodeId, WireId>,
         start: Pos2,
         current: Pos2,
         transform: egui::emath::TSTransform,
@@ -255,7 +266,7 @@ impl<NodeId, PortId, WireId, GroupId> Gesture<NodeId, PortId, WireId, GroupId> {
             | Self::Move { transform, .. }
             | Self::Connect { transform, .. }
             | Self::Reconnect { transform, .. }
-            | Self::WireSecondary { transform, .. }
+            | Self::ContextMenu { transform, .. }
             | Self::CutWires { transform, .. }
             | Self::LazyConnect { transform, .. }
             | Self::Resize { transform, .. } => *transform,

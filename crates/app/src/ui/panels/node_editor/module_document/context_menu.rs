@@ -5,6 +5,271 @@ use crate::ui::widgets::searchable_context_menu::{
     show_searchable_items_with_qa, show_searchable_popup_frame,
 };
 
+#[derive(Clone)]
+struct NodeNameDraft {
+    source: String,
+    text: String,
+    frame: u64,
+}
+
+fn node_name_editor_id(definition: &ModuleDefinition, node: &Node) -> egui::Id {
+    egui::Id::new(("module.node_name", definition.id, node.id))
+}
+
+pub(super) fn show_node_name(
+    ui: &mut egui::Ui,
+    definition: &ModuleDefinition,
+    node: &Node,
+) -> Option<ModuleEditorAction> {
+    let id = node_name_editor_id(definition, node);
+    let frame = ui.ctx().cumulative_frame_nr();
+    let mut draft = ui
+        .data(|data| data.get_temp::<NodeNameDraft>(id))
+        .filter(|draft| draft.source == node.name && frame <= draft.frame.saturating_add(1))
+        .unwrap_or_else(|| NodeNameDraft {
+            source: node.name.clone(),
+            text: node.name.clone(),
+            frame,
+        });
+    let edit = crate::ui::widgets::name_editor::name_editor(
+        ui,
+        id,
+        &mut draft.text,
+        &node.name,
+        220.0,
+        |name| library::core::render_plan::validate_module_node_name(definition, node.id, name),
+    );
+    crate::qa::register_component_with_metadata(
+        format!("node_editor.node_menu:{}:name", node.id),
+        "node_name_editor",
+        edit.response.rect,
+        edit.response.enabled(),
+        Some(serde_json::json!({
+            "node_id": node.id,
+            "source": node.name,
+            "draft": draft.text,
+            "validation_error": edit.error,
+        })),
+    );
+    draft.frame = frame;
+    ui.data_mut(|data| data.insert_temp(id, draft));
+    if edit.cancelled || edit.value.is_some() {
+        ui.close();
+    }
+    edit.value.map(|name| ModuleEditorAction::SetNodeState {
+        node_id: node.id,
+        name,
+        enabled: node.enabled,
+        bypassed: node.bypassed,
+    })
+}
+
+pub(super) fn show_module_node_menu(
+    ui: &mut egui::Ui,
+    state: &mut NodeEditorState,
+    definition: &ModuleDefinition,
+) -> Option<ModuleEditorAction> {
+    let context = state.node_menu.clone()?;
+    let Some(node) = definition.graph.nodes.get(&context.node_id) else {
+        state.node_menu = None;
+        return None;
+    };
+    let popup_id = ui.make_persistent_id(("node_editor_node_context_menu", definition.id, node.id));
+    let mut open = true;
+    let popup = show_node_popup(ui, popup_id, context.position, &mut open, |ui| {
+        node_menu_contents(ui, definition, &state.selected_nodes, node)
+    });
+    let mut action = None;
+    if let Some(popup) = popup {
+        crate::qa::register_component_with_metadata(
+            format!("node_editor.node_menu:{}", node.id),
+            "node_context_menu",
+            popup.response.rect,
+            true,
+            Some(serde_json::json!({
+                "node_id": node.id,
+                "close_behavior": "outside_click",
+            })),
+        );
+        action = popup.inner;
+    }
+    if !open {
+        state.node_menu = None;
+        ui.data_mut(|data| data.remove::<NodeNameDraft>(node_name_editor_id(definition, node)));
+    }
+    action
+}
+
+fn show_node_popup<R>(
+    ui: &mut egui::Ui,
+    id: egui::Id,
+    position: egui::Pos2,
+    open: &mut bool,
+    contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> Option<egui::InnerResponse<R>> {
+    egui::Popup::new(id, ui.ctx().clone(), position, ui.layer_id())
+        .open_bool(open)
+        .kind(egui::PopupKind::Menu)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .layout(egui::Layout::top_down_justified(egui::Align::Min))
+        .width(220.0)
+        .show(contents)
+}
+
+fn node_menu_contents(
+    ui: &mut egui::Ui,
+    definition: &ModuleDefinition,
+    selected_nodes: &std::collections::HashSet<Uuid>,
+    node: &Node,
+) -> Option<ModuleEditorAction> {
+    let node_id = node.id;
+    let is_output = is_module_output_node(definition, node_id);
+    let is_protected = definition.is_protected_host_boundary_node(node_id);
+    if let Some(action) = super::clipboard::menu_actions(
+        ui,
+        definition,
+        selected_nodes,
+        Some(node_id),
+        egui::pos2(node.ui_position[0] + 32.0, node.ui_position[1] + 32.0),
+    ) {
+        ui.close();
+        return Some(action);
+    }
+    ui.separator();
+    const OUTPUT_STATE_REASON: &str =
+        "Module Output is a required render terminal and cannot be disabled or bypassed.";
+    const OUTPUT_DELETE_REASON: &str =
+        "Module Output is a required render terminal and cannot be deleted.";
+    const HOST_BOUNDARY_STATE_REASON: &str = "Transition A/B/Progress boundaries are supplied by the Timeline and cannot be disabled or bypassed.";
+    const HOST_BOUNDARY_DELETE_REASON: &str = "Transition A/B/Progress boundaries are required by the host contract and cannot be deleted.";
+    if let Some(action) = show_node_name(ui, definition, node) {
+        ui.close();
+        return Some(action);
+    }
+    let mut enabled = node.enabled;
+    let enabled_response = ui.add_enabled(
+        !is_output && !is_protected,
+        egui::Checkbox::new(&mut enabled, "Enabled"),
+    );
+    if enabled_response.changed() {
+        ui.close();
+        return Some(ModuleEditorAction::SetNodeState {
+            node_id,
+            name: node.name.clone(),
+            enabled,
+            bypassed: node.bypassed,
+        });
+    }
+    if is_output {
+        register_output_control(node_id, "enabled", &enabled_response, OUTPUT_STATE_REASON);
+        enabled_response.on_hover_text(OUTPUT_STATE_REASON);
+    } else if is_protected {
+        register_host_boundary_control(
+            node_id,
+            "enabled",
+            &enabled_response,
+            HOST_BOUNDARY_STATE_REASON,
+        );
+        enabled_response.on_hover_text(HOST_BOUNDARY_STATE_REASON);
+    }
+    let mut bypassed = node.bypassed;
+    let bypass_response = ui.add_enabled(
+        !is_output && !is_protected && node.supports_bypass(),
+        egui::Checkbox::new(&mut bypassed, "Bypass"),
+    );
+    if bypass_response.changed() {
+        ui.close();
+        return Some(ModuleEditorAction::SetNodeState {
+            node_id,
+            name: node.name.clone(),
+            enabled: node.enabled,
+            bypassed,
+        });
+    }
+    if is_output {
+        register_output_control(node_id, "bypass", &bypass_response, OUTPUT_STATE_REASON);
+        bypass_response.on_hover_text(OUTPUT_STATE_REASON);
+    } else if is_protected {
+        register_host_boundary_control(
+            node_id,
+            "bypass",
+            &bypass_response,
+            HOST_BOUNDARY_STATE_REASON,
+        );
+        bypass_response.on_hover_text(HOST_BOUNDARY_STATE_REASON);
+    }
+    ui.separator();
+    let delete_response = ui.add_enabled(
+        !is_output && !is_protected,
+        egui::Button::new(format!("{} Delete Node", egui_phosphor::regular::TRASH))
+            .shortcut_text("Del"),
+    );
+    crate::qa::register_component_with_metadata(
+        format!("node_editor.node_menu:{node_id}:delete"),
+        "node_menu_action",
+        delete_response.rect,
+        delete_response.enabled(),
+        Some(serde_json::json!({"node_id": node_id, "action": "delete"})),
+    );
+    if delete_response.clicked() {
+        ui.close();
+        return Some(ModuleEditorAction::DeleteNodes(vec![node_id]));
+    }
+    if is_output {
+        register_output_control(node_id, "delete", &delete_response, OUTPUT_DELETE_REASON);
+        delete_response.on_hover_text(OUTPUT_DELETE_REASON);
+    } else if is_protected {
+        register_host_boundary_control(
+            node_id,
+            "delete",
+            &delete_response,
+            HOST_BOUNDARY_DELETE_REASON,
+        );
+        delete_response.on_hover_text(HOST_BOUNDARY_DELETE_REASON);
+    }
+    None
+}
+
+fn register_output_control(
+    node_id: Uuid,
+    action: &str,
+    response: &egui::Response,
+    disabled_reason: &str,
+) {
+    crate::qa::register_component_with_metadata(
+        format!("node_editor.output_control:{node_id}:{action}"),
+        "node_editor_output_control",
+        response.rect,
+        response.enabled(),
+        Some(serde_json::json!({
+            "node_id": node_id,
+            "action": action,
+            "module_output": true,
+            "disabled_reason": disabled_reason,
+        })),
+    );
+}
+
+fn register_host_boundary_control(
+    node_id: Uuid,
+    action: &str,
+    response: &egui::Response,
+    disabled_reason: &str,
+) {
+    crate::qa::register_component_with_metadata(
+        format!("node_editor.host_boundary_control:{node_id}:{action}"),
+        "node_editor_host_boundary_control",
+        response.rect,
+        response.enabled(),
+        Some(serde_json::json!({
+            "node_id": node_id,
+            "action": action,
+            "host_boundary": true,
+            "disabled_reason": disabled_reason,
+        })),
+    );
+}
+
 pub(super) fn show_module_create_menu(
     ui: &mut egui::Ui,
     state: &mut NodeEditorState,
@@ -194,6 +459,125 @@ fn update_for_secondary_click(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn popup_frame(
+        context: &egui::Context,
+        frame: u64,
+        open: &mut bool,
+        draft: &mut String,
+        events: Vec<egui::Event>,
+    ) -> egui::Rect {
+        let mut edit_rect = egui::Rect::NOTHING;
+        drop(context.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(600.0, 400.0),
+                )),
+                time: Some(frame as f64 / 60.0),
+                events,
+                ..Default::default()
+            },
+            |context| {
+                egui::CentralPanel::default().show(context, |ui| {
+                    drop(show_node_popup(
+                        ui,
+                        egui::Id::new("node-menu-popup-test"),
+                        egui::pos2(80.0, 70.0),
+                        open,
+                        |ui| {
+                            edit_rect = ui.text_edit_singleline(draft).rect;
+                        },
+                    ));
+                });
+            },
+        ));
+        edit_rect
+    }
+
+    fn pointer_button(
+        position: egui::Pos2,
+        button: egui::PointerButton,
+        pressed: bool,
+    ) -> egui::Event {
+        egui::Event::PointerButton {
+            pos: position,
+            button,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        }
+    }
+
+    #[test]
+    fn node_popup_keeps_inline_name_clicks_open() {
+        let context = egui::Context::default();
+        let mut open = true;
+        let mut draft = "Node".to_string();
+        popup_frame(&context, 0, &mut open, &mut draft, Vec::new());
+        let edit = popup_frame(&context, 1, &mut open, &mut draft, Vec::new());
+        assert!(edit.is_positive());
+        let point = edit.center();
+        let press_edit = popup_frame(
+            &context,
+            2,
+            &mut open,
+            &mut draft,
+            vec![
+                egui::Event::PointerMoved(point),
+                pointer_button(point, egui::PointerButton::Primary, true),
+            ],
+        );
+        assert!(
+            press_edit.contains(point),
+            "press target {point:?} moved outside {press_edit:?}"
+        );
+        assert!(open, "popup closed on the inline TextEdit press");
+        let release_edit = popup_frame(
+            &context,
+            3,
+            &mut open,
+            &mut draft,
+            vec![pointer_button(point, egui::PointerButton::Primary, false)],
+        );
+        assert!(
+            open,
+            "an inline TextEdit click at {point:?} must not close the Node menu; release rect {release_edit:?}"
+        );
+    }
+
+    #[test]
+    fn node_popup_survives_the_secondary_release_that_opens_it() {
+        let context = egui::Context::default();
+        let point = egui::pos2(320.0, 240.0);
+        drop(context.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(600.0, 400.0),
+                )),
+                time: Some(0.0),
+                events: vec![
+                    egui::Event::PointerMoved(point),
+                    pointer_button(point, egui::PointerButton::Secondary, true),
+                ],
+                ..Default::default()
+            },
+            |_| {},
+        ));
+        let mut open = true;
+        let mut draft = "Node".to_string();
+        popup_frame(
+            &context,
+            1,
+            &mut open,
+            &mut draft,
+            vec![pointer_button(point, egui::PointerButton::Secondary, false)],
+        );
+        assert!(
+            open,
+            "the opening secondary release must not dismiss the popup"
+        );
+    }
 
     #[test]
     fn node_surface_prevents_the_blank_canvas_menu() {

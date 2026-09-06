@@ -796,15 +796,25 @@ fn set_definition_node_state(
     enabled: bool,
     bypassed: bool,
 ) -> Result<(), String> {
-    let node = definition
+    {
+        let node = definition
+            .graph
+            .nodes
+            .get_mut(&node_id)
+            .ok_or_else(|| format!("Missing Module Node {node_id}"))?;
+        require_output_state(node, enabled, bypassed)?;
+        node.name = name;
+        node.enabled = enabled;
+        node.bypassed = bypassed;
+    }
+    let proposed_name = definition
         .graph
         .nodes
-        .get_mut(&node_id)
-        .ok_or_else(|| format!("Missing Module Node {node_id}"))?;
-    require_output_state(node, enabled, bypassed)?;
-    node.name = name;
-    node.enabled = enabled;
-    node.bypassed = bypassed;
+        .get(&node_id)
+        .ok_or_else(|| format!("Missing Module Node {node_id}"))?
+        .name
+        .as_str();
+    crate::core::render_plan::validate_module_node_name(definition, node_id, proposed_name)?;
     bump_topology_revision(definition)
 }
 

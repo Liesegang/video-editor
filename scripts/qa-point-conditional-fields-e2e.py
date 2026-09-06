@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Exercise Boolean Point fields through Compare and typed Select Nodes."""
 
+import copy
 import os
 import pathlib
 
 from qa_automation_support import history_shortcut
 from qa_node_module_support import (
+    component,
     connect_nodes,
     create_node_from_menu,
     enter_exact_numeric,
@@ -23,6 +25,7 @@ from qa_support import (
     media_seconds,
     run_suite_main,
     save_project_to_disk,
+    write_json,
 )
 
 
@@ -64,6 +67,282 @@ def _edit_float(client, definition_id, node_id, key, value, description):
     return client.wait_until(description + " exact edit", edited)
 
 
+def _node_name(state, definition_id, node_id):
+    return state["project"]["module_definitions"][definition_id]["graph"]["nodes"][
+        node_id
+    ]["name"]
+
+
+def _name_editor_id(node_id):
+    return "node_editor.node_menu:{}:name".format(node_id)
+
+
+def _open_name_editor(client, node_id, expected_source):
+    client.click_component("node_editor.node_header:" + node_id, button="secondary")
+    editor_id = _name_editor_id(node_id)
+    _, editor = client.wait_component_settled(editor_id)
+    metadata = editor.get("metadata") or {}
+    if (
+        editor.get("type") != "node_name_editor"
+        or metadata.get("node_id") != node_id
+        or metadata.get("source") != expected_source
+        or metadata.get("draft") != expected_source
+        or metadata.get("validation_error") is not None
+    ):
+        raise QaFailure("Node Name editor lost its source/draft identity")
+    return editor_id
+
+
+def _wait_name_draft(client, editor_id, expected, require_error, description):
+    def drafted():
+        snapshot = client.component_snapshot()
+        editor = component(snapshot, editor_id)
+        metadata = (editor or {}).get("metadata") or {}
+        error = metadata.get("validation_error")
+        valid_error = bool(error) if require_error else error is None
+        return (
+            (snapshot, editor)
+            if editor
+            and editor.get("visible") is True
+            and metadata.get("draft") == expected
+            and valid_error
+            else None
+        )
+
+    return client.wait_until(description, drafted)
+
+
+def _assert_draft_is_transient(client, before, description):
+    current = client.state()
+    if (
+        current["history"]["revision"] != before["history"]["revision"]
+        or current["project"] != before["project"]
+    ):
+        raise QaFailure(description + " mutated the Project before commit")
+
+
+def _wait_editor_closed(client, editor_id, description):
+    def closed():
+        snapshot = client.component_snapshot()
+        editor = component(snapshot, editor_id)
+        return snapshot if editor is None or editor.get("visible") is not True else None
+
+    return client.wait_until(description, closed)
+
+
+def _wait_node_name(client, definition_id, node_id, expected, before_revision, description):
+    return client.wait_until(
+        description,
+        lambda: state
+        if (
+            (state := client.state())["history"]["revision"] == before_revision + 1
+            and _node_name(state, definition_id, node_id) == expected
+        )
+        else None,
+    )
+
+
+def _replace_name_draft(client, editor_id, text):
+    client.click_component(editor_id)
+    client.key("a", True, command=True)
+    client.key("a", False, command=True)
+    client.inject("text", {"text": text})
+
+
+def _exercise_attribute_names(
+    client,
+    item_id,
+    definition_id,
+    number_id,
+    boolean_id,
+    start,
+    baseline_pixels,
+    artifact_dir,
+):
+    open_timeline_item_definition(
+        client, item_id, "node_clip", "Point attribute names"
+    )
+    number_before = client.state()
+    number_editor = _open_name_editor(
+        client, number_id, "Store Number Attribute"
+    )
+    write_json(
+        artifact_dir / "point-name-open-components.json",
+        client.component_snapshot(),
+    )
+    capture_viewport(client, artifact_dir / "point-name-open.png")
+    client.click_component(number_editor)
+    write_json(
+        artifact_dir / "point-name-focused-components.json",
+        client.component_snapshot(),
+    )
+    capture_viewport(client, artifact_dir / "point-name-focused.png")
+    client.key("a", True, command=True)
+    client.key("a", False, command=True)
+    client.inject("text", {"text": "he"})
+    write_json(
+        artifact_dir / "point-name-typed-components.json",
+        client.component_snapshot(),
+    )
+    capture_viewport(client, artifact_dir / "point-name-typed.png")
+    _wait_name_draft(client, number_editor, "he", False, "Number name first draft")
+    _assert_draft_is_transient(client, number_before, "Number name first draft")
+    client.inject("text", {"text": "at"})
+    _wait_name_draft(client, number_editor, "heat", False, "Number name second draft")
+    _assert_draft_is_transient(client, number_before, "Number name second draft")
+    client.key("enter", True)
+    client.key("enter", False)
+    number_named = _wait_node_name(
+        client,
+        definition_id,
+        number_id,
+        "heat",
+        number_before["history"]["revision"],
+        "Enter committing Number attribute name",
+    )
+    expected_number_project = copy.deepcopy(number_before["project"])
+    expected_number_project["module_definitions"][definition_id]["graph"]["nodes"][
+        number_id
+    ]["name"] = "heat"
+    expected_number_project["module_definitions"][definition_id][
+        "topology_revision"
+    ] += 1
+    if number_named["project"] != expected_number_project:
+        raise QaFailure("Number name commit changed more than its exact Node name")
+    _wait_editor_closed(client, number_editor, "Number Name editor closed")
+    number_pixels = sample_rendered_preview(
+        client, start + 0.5, number_named["history"]["revision"], "named Number field"
+    )
+    if number_pixels["pixel_hash"] != baseline_pixels["pixel_hash"]:
+        raise QaFailure("Number attribute rename changed rendered pixels")
+
+    open_timeline_item_definition(
+        client, item_id, "node_clip", "Boolean attribute name"
+    )
+    boolean_before = client.state()
+    boolean_editor = _open_name_editor(
+        client, boolean_id, "Store Boolean Attribute"
+    )
+    _replace_name_draft(client, boolean_editor, "heat")
+    _wait_name_draft(
+        client, boolean_editor, "heat", True, "duplicate Boolean name validation"
+    )
+    _assert_draft_is_transient(client, boolean_before, "duplicate Boolean name")
+    client.key("enter", True)
+    client.key("enter", False)
+    _wait_name_draft(
+        client, boolean_editor, "heat", True, "blocked duplicate Boolean commit"
+    )
+    _assert_draft_is_transient(client, boolean_before, "blocked duplicate Boolean commit")
+    duplicate_capture = capture_viewport(
+        client, artifact_dir / "point-name-duplicate.png"
+    )
+    _assert_draft_is_transient(client, boolean_before, "duplicate-name capture")
+
+    _replace_name_draft(client, boolean_editor, "temporary")
+    _wait_name_draft(
+        client, boolean_editor, "temporary", False, "Boolean Escape draft"
+    )
+    _assert_draft_is_transient(client, boolean_before, "Boolean Escape draft")
+    client.key("escape", True)
+    client.key("escape", False)
+    _wait_editor_closed(client, boolean_editor, "Escape closing Boolean Name editor")
+    _assert_draft_is_transient(client, boolean_before, "Boolean Escape cancellation")
+    if _node_name(client.state(), definition_id, boolean_id) != "Store Boolean Attribute":
+        raise QaFailure("Escape changed the Boolean attribute name")
+
+    boolean_editor = _open_name_editor(
+        client, boolean_id, "Store Boolean Attribute"
+    )
+    _replace_name_draft(client, boolean_editor, "hot")
+    _wait_name_draft(client, boolean_editor, "hot", False, "Boolean lost-focus draft")
+    _assert_draft_is_transient(client, boolean_before, "Boolean lost-focus draft")
+    client.click_component("node_editor.node_header:" + number_id)
+    boolean_named = _wait_node_name(
+        client,
+        definition_id,
+        boolean_id,
+        "hot",
+        boolean_before["history"]["revision"],
+        "outside-click committing Boolean attribute name",
+    )
+    expected_boolean_project = copy.deepcopy(boolean_before["project"])
+    expected_boolean_project["module_definitions"][definition_id]["graph"]["nodes"][
+        boolean_id
+    ]["name"] = "hot"
+    expected_boolean_project["module_definitions"][definition_id][
+        "topology_revision"
+    ] += 1
+    if boolean_named["project"] != expected_boolean_project:
+        raise QaFailure("Boolean name commit changed more than its exact Node name")
+    _wait_editor_closed(client, boolean_editor, "Boolean Name editor closed")
+    named_pixels = sample_rendered_preview(
+        client, start + 0.5, boolean_named["history"]["revision"], "named Boolean field"
+    )
+    if named_pixels["pixel_hash"] != baseline_pixels["pixel_hash"]:
+        raise QaFailure("Boolean attribute rename changed rendered pixels")
+
+    history_scenario = [
+        (
+            False,
+            "Undo Boolean attribute name",
+            number_named["project"],
+            "undone Boolean name",
+        ),
+        (
+            False,
+            "Undo Number attribute name",
+            number_before["project"],
+            "undone Number name",
+        ),
+        (
+            True,
+            "Redo Number attribute name",
+            number_named["project"],
+            "redone Number name",
+        ),
+        (
+            True,
+            "Redo Boolean attribute name",
+            boolean_named["project"],
+            "redone Boolean name",
+        ),
+    ]
+    current = boolean_named
+    restored_pixels = named_pixels
+    for redo, action, expected_project, sample_description in history_scenario:
+        history_shortcut(client, redo=redo)
+        expected_revision = current["history"]["revision"] + 1
+
+        def history_applied():
+            state = client.state()
+            return (
+                state
+                if state["history"]["revision"] == expected_revision
+                and state["project"] == expected_project
+                else None
+            )
+
+        current = client.wait_until(action, history_applied)
+        restored_pixels = sample_rendered_preview(
+            client,
+            start + 0.5,
+            current["history"]["revision"],
+            sample_description,
+        )
+        if restored_pixels["pixel_hash"] != baseline_pixels["pixel_hash"]:
+            raise QaFailure(action + " changed rendered pixels")
+    return (
+        current,
+        restored_pixels,
+        {
+            "number": "heat",
+            "boolean": "hot",
+            "duplicate_capture": duplicate_capture,
+        },
+    )
+
+
 def _assert_routes(definition, expected):
     actual = {
         (
@@ -82,7 +361,7 @@ def _assert_routes(definition, expected):
         )
 
 
-def _assert_definition(definition, context, threshold):
+def _assert_definition(definition, context, threshold, expected_names):
     nodes = definition["graph"]["nodes"]
     expected_native = {
         context["grid_id"]: "native.point.grid",
@@ -105,9 +384,9 @@ def _assert_definition(definition, context, threshold):
         raise QaFailure("Point conditional graph lost Color Ramp")
     if node_content_type(nodes.get(context["output_id"], {})) != "moduleoutput":
         raise QaFailure("Point conditional graph lost its Output boundary")
-    if nodes[context["number_id"]].get("name") != "Store Number Attribute":
+    if nodes[context["number_id"]].get("name") != expected_names[0]:
         raise QaFailure("Number Point attribute lost its authoritative Node name")
-    if nodes[context["boolean_id"]].get("name") != "Store Boolean Attribute":
+    if nodes[context["boolean_id"]].get("name") != expected_names[1]:
         raise QaFailure("Boolean Point attribute lost its authoritative Node name")
     if _constant(nodes[context["greater_id"]], "b") != threshold:
         raise QaFailure("Greater Than threshold changed")
@@ -275,10 +554,30 @@ def run_suite(client):
         "routes": {route[:4] for route in route_specs},
     }
     _assert_definition(
-        routed["project"]["module_definitions"][definition_id], context, 0.5
+        routed["project"]["module_definitions"][definition_id],
+        context,
+        0.5,
+        ("Store Number Attribute", "Store Boolean Attribute"),
     )
-    midpoint = sample_rendered_preview(
+    unnamed_pixels = sample_rendered_preview(
         client, start + 0.5, routed["history"]["revision"], "midpoint mask"
+    )
+    artifact_dir = pathlib.Path(os.environ["RUVIE_QA_ARTIFACT_DIR"])
+    named, midpoint, rename_evidence = _exercise_attribute_names(
+        client,
+        item_id,
+        definition_id,
+        nodes["number"],
+        nodes["boolean"],
+        start,
+        unnamed_pixels,
+        artifact_dir,
+    )
+    _assert_definition(
+        named["project"]["module_definitions"][definition_id],
+        context,
+        0.5,
+        ("heat", "hot"),
     )
     open_timeline_item_definition(
         client, item_id, "node_clip", "Point conditional threshold"
@@ -342,7 +641,6 @@ def run_suite(client):
     open_timeline_item_definition(
         client, item_id, "node_clip", "Point conditional capture"
     )
-    artifact_dir = pathlib.Path(os.environ["RUVIE_QA_ARTIFACT_DIR"])
     capture = capture_viewport(client, artifact_dir / "capture.png")
     project_path = os.environ.get("RUVIE_QA_PROJECT_PATH")
     if not project_path:
@@ -360,7 +658,9 @@ def run_suite(client):
         "Point conditional",
         "point-conditional",
         "point-conditional-reloaded.png",
-        lambda definition: _assert_definition(definition, context, 0.85),
+        lambda definition: _assert_definition(
+            definition, context, 0.85, ("heat", "hot")
+        ),
     )
     return {
         "suite": "point-conditional-fields",
@@ -368,6 +668,7 @@ def run_suite(client):
         "definition_id": definition_id,
         "nodes": nodes,
         "connections": connections,
+        "renames": rename_evidence,
         "samples": samples,
         "saved": saved_file,
         "capture": capture,

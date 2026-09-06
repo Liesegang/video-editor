@@ -240,20 +240,25 @@ fn editable_name(
     model_name: &str,
     commit: impl FnOnce(String) -> Result<library::model::authoring::ChangeSet, library::LibraryError>,
 ) {
-    ui.horizontal(|ui| {
-        ui.label("Name");
-        let response = ui.add(
-            egui::TextEdit::singleline(&mut state.inspector.name).desired_width(f32::INFINITY),
-        );
-        if (response.lost_focus() || ui.input(|input| input.key_pressed(egui::Key::Enter)))
-            && !state.inspector.name.trim().is_empty()
-            && state.inspector.name != model_name
-        {
-            if let Err(error) = commit(state.inspector.name.trim().to_string()) {
-                state.error = Some(error.to_string());
+    let edit = crate::ui::widgets::name_editor::name_editor(
+        ui,
+        egui::Id::new(("inspector.name", state.inspector.target)),
+        &mut state.inspector.name,
+        model_name,
+        f32::INFINITY,
+        |name| {
+            if name.is_empty() {
+                Err("Name cannot be empty".to_string())
+            } else {
+                Ok(())
             }
+        },
+    );
+    if let Some(name) = edit.value {
+        if let Err(error) = commit(name) {
+            state.error = Some(error.to_string());
         }
-    });
+    }
 }
 
 fn item_inspector(

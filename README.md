@@ -59,8 +59,11 @@ control with per-point color logic explicitly.
 Gradient values and frame-uniform arithmetic inputs retain their usual editors
 and published Timeline keyframes.
 
-Rename the Store Node to name the attribute (for example, `heat`). Its stable
-identity does not depend on that name. Stores can be chained, and later fields
+Right-click a Store Node and edit **Name** to name the attribute (for example,
+`heat`). Enter or clicking outside the field commits one undoable rename;
+Escape cancels it. Empty or duplicate names within the same rendered Point
+stream are rejected. Its stable identity does not depend on that name.
+Stores can be chained, and later fields
 read earlier attributes through their Attribute outputs. A field cannot read
 another Point stream implicitly.
 

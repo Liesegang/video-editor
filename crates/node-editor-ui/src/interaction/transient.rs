@@ -4,7 +4,7 @@ use crate::wire::ReconnectEndpoint;
 use crate::GraphFrame;
 use crate::ItemId;
 
-use super::{Gesture, InteractionState};
+use super::{ContextMenuTarget, Gesture, InteractionState};
 
 pub(super) fn paint<NodeId, PortId, WireId, GroupId, Key>(
     overlay_painter: &egui::Painter,
@@ -68,7 +68,10 @@ pub(super) fn paint<NodeId, PortId, WireId, GroupId, Key>(
                 ));
             }
         }
-        Some(Gesture::WireSecondary { wire, .. }) => {
+        Some(Gesture::ContextMenu {
+            target: ContextMenuTarget::Wire(wire),
+            ..
+        }) => {
             if let Some(wire) = frame.wires.iter().find(|candidate| candidate.id == *wire) {
                 painter.add(egui::epaint::CubicBezierShape::from_points_stroke(
                     wire.curve.transformed(frame.transform).points(),
@@ -93,6 +96,10 @@ pub(super) fn paint<NodeId, PortId, WireId, GroupId, Key>(
             );
         }
         Some(Gesture::Hold { .. })
+        | Some(Gesture::ContextMenu {
+            target: ContextMenuTarget::Node(_),
+            ..
+        })
         | Some(Gesture::Move { .. })
         | Some(Gesture::Resize { .. })
         | Some(Gesture::LayoutSwipe(_))
