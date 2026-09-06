@@ -78,9 +78,10 @@ def _enter_exact_numeric(client, control_id, value):
     client.key("enter", False)
 
 
-def _duplicate_particle_sibling(client, item_id):
+def _duplicate_particle_sibling(client, item_id, definition_id):
     activate_dock_tab(client, "dock.tab:timeline", "Timeline", "Particle sibling")
     before = client.state()
+    before_definition = before["project"]["module_definitions"][definition_id]
     client.click_component("timeline.item:" + item_id, button="secondary")
     action = "timeline.item.duplicate:" + item_id
     client.wait_component_settled(action)
@@ -91,7 +92,25 @@ def _duplicate_particle_sibling(client, item_id):
         added = set(state["project"]["items"]) - set(before["project"]["items"])
         return (state, next(iter(added))) if len(added) == 1 else None
 
-    return client.wait_until("one Particle sibling placement", duplicated)
+    duplicated_state, sibling_id = client.wait_until(
+        "one Particle sibling placement", duplicated
+    )
+    duplicated_definition = duplicated_state["project"]["module_definitions"][
+        definition_id
+    ]
+    if before_definition.get("sharing") != {"kind": "private"}:
+        raise QaFailure("Particle factory Definition was not private before duplication")
+    if duplicated_definition.get("sharing") != {"kind": "shared_local"}:
+        raise QaFailure("duplicating Particle placement did not mark its Definition shared")
+    before_without_sharing = dict(before_definition)
+    duplicated_without_sharing = dict(duplicated_definition)
+    before_without_sharing.pop("sharing", None)
+    duplicated_without_sharing.pop("sharing", None)
+    if duplicated_without_sharing != before_without_sharing:
+        raise QaFailure(
+            "duplicating Particle placement changed more than Definition sharing"
+        )
+    return duplicated_state, sibling_id, duplicated_definition
 
 
 def _assert_sibling_unchanged(project, before, sibling_id):
@@ -115,7 +134,9 @@ def edit_turbulence_and_assert_history(
     if not isinstance(default_value, (int, float)) or float(default_value) != 0.0:
         raise QaFailure("Particle factory Turbulence Strength is not neutral by default")
 
-    duplicated, sibling_id = _duplicate_particle_sibling(client, item_id)
+    duplicated, sibling_id, definition_baseline = _duplicate_particle_sibling(
+        client, item_id, definition_id
+    )
     sibling_before = duplicated["project"]
     frame = baseline_state["editor"]["preview"]["rendered_frame"]
     sibling_baseline = wait_particle_preview(
@@ -191,6 +212,7 @@ def edit_turbulence_and_assert_history(
         )
 
     reset_state = client.wait_until("Turbulence Strength reset", reset)
+    _assert_sibling_unchanged(reset_state["project"], sibling_before, sibling_id)
     reset_render = wait_particle_preview(client, reset_state["history"]["revision"], frame)
     if (
         reset_render["editor"]["preview"]["pixel_hash"]
@@ -229,4 +251,5 @@ def edit_turbulence_and_assert_history(
         "edited_preview": edited_render["editor"]["preview"],
         "reset_preview": reset_render["editor"]["preview"],
         "undo_preview": undo_render["editor"]["preview"],
+        "shared_definition": definition_baseline,
     }

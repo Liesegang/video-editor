@@ -756,17 +756,6 @@ def run_suite(client):
 
     replay_at_active = seek_timeline_seconds(client, active_seconds)
     active_frame = replay_at_active["editor"]["timeline"]["current_frame"]
-    active_before_edit = _wait_particle_preview(
-        client, final["history"]["revision"], active_frame
-    )
-    turbulence_edit = _edit_turbulence_and_assert_history(
-        client,
-        item_id,
-        instance_id,
-        definition_id,
-        parameters,
-        active_before_edit,
-    )
     activate_dock_tab(client, TIMELINE_TAB_ID, "Timeline", "Particle source selection")
     client.click_component("timeline.item:" + item_id)
     activate_dock_tab(client, INSPECTOR_TAB_ID, "Inspector", "Particle Inspector")
@@ -779,7 +768,7 @@ def run_suite(client):
     )
     before_open_definition = client.state()["project"]["module_definitions"][definition_id]
     if before_open_definition != definition:
-        raise QaFailure("Particle parameter history changed Definition presentation")
+        raise QaFailure("Particle parameter history changed the private Definition")
 
     opened, node_canvas, native_catalog_ids, output_node_id = (
         _assert_open_particle_definition(
@@ -792,6 +781,19 @@ def run_suite(client):
         definition_id,
         definition,
         opened["history"]["revision"],
+    )
+    activate_dock_tab(client, TIMELINE_TAB_ID, "Timeline", "Particle force selection")
+    client.click_component("timeline.item:" + item_id)
+    active_before_turbulence = _wait_particle_preview(
+        client, client.state()["history"]["revision"], active_frame
+    )
+    turbulence_edit = _edit_turbulence_and_assert_history(
+        client,
+        item_id,
+        instance_id,
+        definition_id,
+        parameters,
+        active_before_turbulence,
     )
     completed = client.state()
 
