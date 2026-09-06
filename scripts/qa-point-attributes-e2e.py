@@ -12,6 +12,7 @@ from qa_node_module_support import (
     disconnect_node_connection,
     node_content_type,
     place_created_node,
+    sample_rendered_preview,
     unpublish_node_input_parameter,
 )
 from qa_particle_force_support import create_particle_node_clip
@@ -28,8 +29,6 @@ from qa_support import (
     request_clean_native_close,
     run_suite_main,
     save_project_to_disk,
-    seek_timeline_seconds,
-    settled_preview_state,
     spawned_authoring_app,
 )
 
@@ -39,35 +38,6 @@ def _native_catalog_id(node):
     if node_content_type(node) != "nativeoperation":
         return None
     return (content.get("data") or {}).get("catalog_id")
-
-
-def _rendered(client, revision, frame, description):
-    return client.wait_until(
-        description + " rendered Preview",
-        lambda: state
-        if (
-            (state := settled_preview_state(client, revision, frame))
-            and state["editor"].get("error") is None
-            and state["editor"]["preview"].get("pixel_hash")
-            and int(state["editor"]["preview"].get("nontransparent_pixels") or 0) > 0
-        )
-        else None,
-        30.0,
-    )
-
-
-def _sample(client, seconds, revision, description):
-    activate_dock_tab(client, "dock.tab:timeline", "Timeline", description)
-    sought = seek_timeline_seconds(client, seconds)
-    frame = sought["editor"]["timeline"]["current_frame"]
-    state = _rendered(client, revision, frame, description)
-    preview = state["editor"]["preview"]
-    return {
-        "seconds": seconds,
-        "frame": frame,
-        "pixel_hash": preview["pixel_hash"],
-        "nontransparent_pixels": preview["nontransparent_pixels"],
-    }
 
 
 def _catalog_nodes(definition):
@@ -158,7 +128,9 @@ def _reload_and_compare(client, project_file, saved, samples, context, artifact_
             raise QaFailure("fresh process changed Point graph IDs, names, or routes")
         revision = reloaded["history"]["revision"]
         reloaded_samples = [
-            _sample(fresh, sample["seconds"], revision, "reloaded Point field")
+            sample_rendered_preview(
+                fresh, sample["seconds"], revision, "reloaded Point field"
+            )
             for sample in samples
         ]
         if [sample["pixel_hash"] for sample in reloaded_samples] != [
@@ -192,7 +164,7 @@ def run_suite(client):
     item_id = created["item_id"]
     definition_id = created["definition_id"]
     start = media_seconds(created["item"]["interval"]["start"])
-    baseline = _sample(
+    baseline = sample_rendered_preview(
         client,
         start + 0.5,
         created["state"]["history"]["revision"],
@@ -292,7 +264,7 @@ def run_suite(client):
     if len(definition["graph"]["connections"]) != len(before["graph"]["connections"]) + 6:
         raise QaFailure("Point routing added or removed an unexpected connection")
 
-    routed_baseline = _sample(
+    routed_baseline = sample_rendered_preview(
         client, start + 0.5, routed["history"]["revision"], "Point field"
     )
     if routed_baseline["pixel_hash"] == baseline["pixel_hash"]:
@@ -315,7 +287,9 @@ def run_suite(client):
         )
         else None,
     )
-    _sample(client, start + 0.5, undone["history"]["revision"], "undone Point color")
+    sample_rendered_preview(
+        client, start + 0.5, undone["history"]["revision"], "undone Point color"
+    )
     history_shortcut(client, redo=True)
     routed = client.wait_until(
         "Redo Color Ramp-to-Sprite route",
@@ -332,7 +306,7 @@ def run_suite(client):
         )
         else None,
     )
-    restored = _sample(
+    restored = sample_rendered_preview(
         client, start + 0.5, routed["history"]["revision"], "redone Point color"
     )
     if restored["pixel_hash"] != routed_baseline["pixel_hash"]:
@@ -340,7 +314,9 @@ def run_suite(client):
 
     samples = [
         restored,
-        _sample(client, start + 1.0, routed["history"]["revision"], "Point field"),
+        sample_rendered_preview(
+            client, start + 1.0, routed["history"]["revision"], "Point field"
+        ),
     ]
     bring_timeline_component(client, "timeline.item:" + item_id, -120.0)
     client.double_click_component("timeline.item:" + item_id)

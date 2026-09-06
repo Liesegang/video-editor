@@ -6,30 +6,23 @@ import pathlib
 
 from qa_automation_support import history_shortcut
 from qa_node_module_support import (
-    active_definition,
     connect_nodes,
     create_node_from_menu,
     enter_exact_numeric,
     node_content_type,
+    open_timeline_item_definition,
     place_created_node,
     place_private_node_clip_source,
+    reload_node_clip_project,
+    sample_rendered_preview,
 )
 from qa_support import (
-    QA_APP_BINARY_ENV,
     QaClient,
     QaFailure,
-    activate_dock_tab,
-    bring_timeline_component,
     capture_viewport,
-    close_clean_native_app,
-    free_port,
     media_seconds,
-    request_clean_native_close,
     run_suite_main,
     save_project_to_disk,
-    seek_timeline_seconds,
-    settled_preview_state,
-    spawned_authoring_app,
 )
 
 
@@ -136,87 +129,6 @@ def _assert_definition(definition, context):
     _assert_routes(definition, context["routes"])
 
 
-def _sample(client, seconds, revision, description):
-    activate_dock_tab(client, "dock.tab:timeline", "Timeline", description)
-    sought = seek_timeline_seconds(client, seconds)
-    frame = sought["editor"]["timeline"]["current_frame"]
-
-    def rendered():
-        state = settled_preview_state(client, revision, frame)
-        preview = (state or {}).get("editor", {}).get("preview", {})
-        return (
-            state
-            if state
-            and state["editor"].get("error") is None
-            and preview.get("pixel_hash")
-            and int(preview.get("nontransparent_pixels") or 0) > 0
-            else None
-        )
-
-    state = client.wait_until(description + " rendered Preview", rendered, 30.0)
-    preview = state["editor"]["preview"]
-    return {
-        "seconds": seconds,
-        "frame": frame,
-        "pixel_hash": preview["pixel_hash"],
-        "nontransparent_pixels": preview["nontransparent_pixels"],
-    }
-
-
-def _open_definition(client, item_id, description):
-    bring_timeline_component(client, "timeline.item:" + item_id, -120.0)
-    client.double_click_component("timeline.item:" + item_id)
-    activate_dock_tab(client, "dock.tab:node_editor", "Node Editor", description)
-    client.wait_component_settled("node_editor.canvas")
-    return active_definition(client.state(), "node_clip")
-
-
-def _reload(client, project_file, saved, context, samples, artifact_dir):
-    initial_close = request_clean_native_close(
-        client, "Point vector authoring", client.timeout
-    )
-    port_number = free_port()
-    environment = {
-        "RUVIE_QA_PROJECT_PATH": str(project_file),
-        "RUVIE_QA_OPEN_EXISTING_PROJECT": "1",
-        "RUVIE_QA_PORT_FILE": None,
-        "RUVIE_QA_RUN_ID": os.environ.get("RUVIE_QA_RUN_ID", "point-vector")
-        + ":reload",
-        QA_APP_BINARY_ENV: os.environ.get(QA_APP_BINARY_ENV),
-    }
-    with spawned_authoring_app(port_number, environment) as process:
-        fresh = QaClient("http://127.0.0.1:{}".format(port_number), client.timeout)
-        fresh.wait_health()
-        state = fresh.state()
-        if state["project"] != saved["project"]:
-            raise QaFailure("fresh process changed Point vector Project state")
-        revision = state["history"]["revision"]
-        reloaded_samples = [
-            _sample(fresh, sample["seconds"], revision, "reloaded Point vector")
-            for sample in samples
-        ]
-        if [sample["pixel_hash"] for sample in reloaded_samples] != [
-            sample["pixel_hash"] for sample in samples
-        ]:
-            raise QaFailure("fresh process changed Point vector pixels")
-        definition_id, definition = _open_definition(
-            fresh, context["item_id"], "Point vector reload"
-        )
-        if definition_id != context["definition_id"]:
-            raise QaFailure("fresh process changed Point vector Definition identity")
-        _assert_definition(definition, context)
-        capture = capture_viewport(fresh, artifact_dir / "point-vector-reloaded.png")
-        reload_close = close_clean_native_app(
-            fresh, process, "reloaded Point vector app", client.timeout
-        )
-    return {
-        "initial_close": initial_close,
-        "reload_close": reload_close,
-        "samples": reloaded_samples,
-        "capture": capture,
-    }
-
-
 def run_suite(client):
     client.wait_health()
     source_snapshot, source = client.wait_component_settled("assets.node_clip_source")
@@ -229,7 +141,9 @@ def run_suite(client):
     item_id = created["item_id"]
     definition_id = created["definition_id"]
     start = media_seconds(created["item"]["interval"]["start"])
-    opened_id, before = _open_definition(client, item_id, "Point vector fields")
+    opened_id, before = open_timeline_item_definition(
+        client, item_id, "node_clip", "Point vector fields"
+    )
     if opened_id != definition_id:
         raise QaFailure("Node Editor opened a different Point vector Definition")
     output_ids = [
@@ -320,10 +234,12 @@ def run_suite(client):
         connect_nodes(client, "node_clip", *route) for route in route_specs[:-1]
     ]
     unrouted = client.state()
-    plain = _sample(
+    plain = sample_rendered_preview(
         client, start + 0.5, unrouted["history"]["revision"], "plain vector Grid"
     )
-    _open_definition(client, item_id, "Point vector radial color")
+    open_timeline_item_definition(
+        client, item_id, "node_clip", "Point vector radial color"
+    )
     connections.append(connect_nodes(client, "node_clip", *route_specs[-1]))
     routed = client.state()
     expected_routes = {route[:4] for route in route_specs}
@@ -346,7 +262,7 @@ def run_suite(client):
     _assert_definition(
         routed["project"]["module_definitions"][definition_id], context
     )
-    colored = _sample(
+    colored = sample_rendered_preview(
         client, start + 0.5, routed["history"]["revision"], "radial vector Grid"
     )
     if colored["pixel_hash"] == plain["pixel_hash"]:
@@ -370,7 +286,7 @@ def run_suite(client):
         "Undo vector color route",
         color_route_removed,
     )
-    undone_pixels = _sample(
+    undone_pixels = sample_rendered_preview(
         client, start + 0.5, undone["history"]["revision"], "undone vector color"
     )
     if undone_pixels["pixel_hash"] != plain["pixel_hash"]:
@@ -388,7 +304,7 @@ def run_suite(client):
         "Redo vector color route",
         color_route_restored,
     )
-    restored = _sample(
+    restored = sample_rendered_preview(
         client, start + 0.5, redone["history"]["revision"], "redone vector color"
     )
     if restored["pixel_hash"] != colored["pixel_hash"]:
@@ -396,9 +312,13 @@ def run_suite(client):
 
     samples = [
         restored,
-        _sample(client, start + 1.0, redone["history"]["revision"], "Point vector"),
+        sample_rendered_preview(
+            client, start + 1.0, redone["history"]["revision"], "Point vector"
+        ),
     ]
-    _open_definition(client, item_id, "Point vector capture")
+    open_timeline_item_definition(
+        client, item_id, "node_clip", "Point vector capture"
+    )
     artifact_dir = pathlib.Path(os.environ["RUVIE_QA_ARTIFACT_DIR"])
     capture = capture_viewport(client, artifact_dir / "capture.png")
     project_path = os.environ.get("RUVIE_QA_PROJECT_PATH")
@@ -406,7 +326,19 @@ def run_suite(client):
         raise QaFailure("Point vector persistence QA requires a Project file")
     project_file = pathlib.Path(project_path)
     saved, saved_file = save_project_to_disk(client, project_file, "Point vector")
-    reloaded = _reload(client, project_file, saved, context, samples, artifact_dir)
+    reloaded = reload_node_clip_project(
+        client,
+        project_file,
+        saved,
+        item_id,
+        definition_id,
+        samples,
+        artifact_dir,
+        "Point vector",
+        "point-vector",
+        "point-vector-reloaded.png",
+        lambda definition: _assert_definition(definition, context),
+    )
     return {
         "suite": "point-vector-fields",
         "item_id": item_id,

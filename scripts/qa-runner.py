@@ -75,6 +75,12 @@ FULL_SUITES = (
         project_file=True,
         expects_exit=True,
     ),
+    SuiteSpec(
+        "point-conditional-fields",
+        "qa-point-conditional-fields-e2e.py",
+        project_file=True,
+        expects_exit=True,
+    ),
     SuiteSpec("inspector-asset-preview", "qa-inspector-asset-preview-e2e.py"),
     SuiteSpec("timeline-edit", "qa-timeline-edit-e2e.py"),
     SuiteSpec("timeline-transition", "qa-transition-e2e.py"),

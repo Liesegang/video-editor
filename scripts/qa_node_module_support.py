@@ -1,6 +1,24 @@
 """Shared production Node Editor document, port, and route assertions."""
 
-from qa_support import QaFailure, component_center, find_clear_canvas_point, media_seconds
+import os
+
+from qa_support import (
+    QA_APP_BINARY_ENV,
+    QaClient,
+    QaFailure,
+    activate_dock_tab,
+    bring_timeline_component,
+    capture_viewport,
+    close_clean_native_app,
+    component_center,
+    find_clear_canvas_point,
+    free_port,
+    media_seconds,
+    request_clean_native_close,
+    seek_timeline_seconds,
+    settled_preview_state,
+    spawned_authoring_app,
+)
 
 
 def component(snapshot, component_id):
@@ -23,6 +41,107 @@ def enter_exact_numeric(client, component_id, value):
     client.inject("text", {"text": str(value)})
     client.key("enter", True)
     client.key("enter", False)
+
+
+def open_timeline_item_definition(client, item_id, expected_host, description):
+    """Open one Timeline Item's production Module document."""
+
+    bring_timeline_component(client, "timeline.item:" + item_id, -120.0)
+    client.double_click_component("timeline.item:" + item_id)
+    activate_dock_tab(client, "dock.tab:node_editor", "Node Editor", description)
+    client.wait_component_settled("node_editor.canvas")
+    return active_definition(client.state(), expected_host)
+
+
+def sample_rendered_preview(client, seconds, revision, description):
+    """Render and return one exact revision/frame Preview sample."""
+
+    activate_dock_tab(client, "dock.tab:timeline", "Timeline", description)
+    sought = seek_timeline_seconds(client, seconds)
+    frame = sought["editor"]["timeline"]["current_frame"]
+
+    def rendered():
+        state = settled_preview_state(client, revision, frame)
+        preview = (state or {}).get("editor", {}).get("preview", {})
+        return (
+            state
+            if state
+            and state["editor"].get("error") is None
+            and preview.get("pixel_hash")
+            and int(preview.get("nontransparent_pixels") or 0) > 0
+            else None
+        )
+
+    state = client.wait_until(description + " rendered Preview", rendered, 30.0)
+    preview = state["editor"]["preview"]
+    return {
+        "seconds": seconds,
+        "frame": frame,
+        "pixel_hash": preview["pixel_hash"],
+        "nontransparent_pixels": preview["nontransparent_pixels"],
+    }
+
+
+def reload_node_clip_project(
+    client,
+    project_file,
+    saved,
+    item_id,
+    definition_id,
+    samples,
+    artifact_dir,
+    domain,
+    run_id_default,
+    capture_filename,
+    validate_definition,
+):
+    """Reload one saved Node Clip and prove Project, pixels, and graph identity."""
+
+    initial_close = request_clean_native_close(
+        client, domain + " authoring", client.timeout
+    )
+    port_number = free_port()
+    environment = {
+        "RUVIE_QA_PROJECT_PATH": str(project_file),
+        "RUVIE_QA_OPEN_EXISTING_PROJECT": "1",
+        "RUVIE_QA_PORT_FILE": None,
+        "RUVIE_QA_RUN_ID": os.environ.get("RUVIE_QA_RUN_ID", run_id_default)
+        + ":reload",
+        QA_APP_BINARY_ENV: os.environ.get(QA_APP_BINARY_ENV),
+    }
+    with spawned_authoring_app(port_number, environment) as process:
+        fresh = QaClient("http://127.0.0.1:{}".format(port_number), client.timeout)
+        fresh.wait_health()
+        state = fresh.state()
+        if state["project"] != saved["project"]:
+            raise QaFailure("fresh process changed " + domain + " Project state")
+        revision = state["history"]["revision"]
+        reloaded_samples = [
+            sample_rendered_preview(
+                fresh, sample["seconds"], revision, "reloaded " + domain
+            )
+            for sample in samples
+        ]
+        if [sample["pixel_hash"] for sample in reloaded_samples] != [
+            sample["pixel_hash"] for sample in samples
+        ]:
+            raise QaFailure("fresh process changed " + domain + " pixels")
+        reloaded_id, definition = open_timeline_item_definition(
+            fresh, item_id, "node_clip", domain + " reload"
+        )
+        if reloaded_id != definition_id:
+            raise QaFailure("fresh process changed " + domain + " Definition identity")
+        validate_definition(definition)
+        capture = capture_viewport(fresh, artifact_dir / capture_filename)
+        reload_close = close_clean_native_app(
+            fresh, process, "reloaded " + domain + " app", client.timeout
+        )
+    return {
+        "initial_close": initial_close,
+        "reload_close": reload_close,
+        "samples": reloaded_samples,
+        "capture": capture,
+    }
 
 
 def place_private_node_clip_source(

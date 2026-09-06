@@ -12,26 +12,20 @@ from qa_node_module_support import (
     disconnect_node_connection,
     enter_exact_numeric,
     node_content_type,
+    open_timeline_item_definition,
     place_created_node,
+    reload_node_clip_project,
+    sample_rendered_preview,
     unpublish_node_input_parameter,
 )
 from qa_particle_force_support import create_particle_node_clip
 from qa_support import (
-    QA_APP_BINARY_ENV,
     QaClient,
     QaFailure,
-    activate_dock_tab,
-    bring_timeline_component,
     capture_viewport,
-    close_clean_native_app,
-    free_port,
     media_seconds,
-    request_clean_native_close,
     run_suite_main,
     save_project_to_disk,
-    seek_timeline_seconds,
-    settled_preview_state,
-    spawned_authoring_app,
 )
 
 
@@ -196,86 +190,6 @@ def _assert_routes(definition, expected):
         raise QaFailure("Point Grid graph omitted routes {!r}".format(sorted(missing)))
 
 
-def _sample(client, seconds, revision, description):
-    activate_dock_tab(client, "dock.tab:timeline", "Timeline", description)
-    sought = seek_timeline_seconds(client, seconds)
-    frame = sought["editor"]["timeline"]["current_frame"]
-
-    def rendered():
-        state = settled_preview_state(client, revision, frame)
-        preview = (state or {}).get("editor", {}).get("preview", {})
-        return (
-            state
-            if state
-            and state["editor"].get("error") is None
-            and preview.get("pixel_hash")
-            and int(preview.get("nontransparent_pixels") or 0) > 0
-            else None
-        )
-
-    state = client.wait_until(description + " rendered Preview", rendered, 30.0)
-    preview = state["editor"]["preview"]
-    return {
-        "seconds": seconds,
-        "frame": frame,
-        "pixel_hash": preview["pixel_hash"],
-        "nontransparent_pixels": preview["nontransparent_pixels"],
-    }
-
-
-def _open_definition(client, item_id, description):
-    bring_timeline_component(client, "timeline.item:" + item_id, -120.0)
-    client.double_click_component("timeline.item:" + item_id)
-    activate_dock_tab(client, "dock.tab:node_editor", "Node Editor", description)
-    client.wait_component_settled("node_editor.canvas")
-    return active_definition(client.state(), "node_clip")
-
-
-def _reload(client, project_file, saved, context, samples, artifact_dir):
-    initial_close = request_clean_native_close(client, "Point Grid authoring", client.timeout)
-    port_number = free_port()
-    environment = {
-        "RUVIE_QA_PROJECT_PATH": str(project_file),
-        "RUVIE_QA_OPEN_EXISTING_PROJECT": "1",
-        "RUVIE_QA_PORT_FILE": None,
-        "RUVIE_QA_RUN_ID": os.environ.get("RUVIE_QA_RUN_ID", "point-grid") + ":reload",
-        QA_APP_BINARY_ENV: os.environ.get(QA_APP_BINARY_ENV),
-    }
-    with spawned_authoring_app(port_number, environment) as process:
-        fresh = QaClient("http://127.0.0.1:{}".format(port_number), client.timeout)
-        fresh.wait_health()
-        state = fresh.state()
-        if state["project"] != saved["project"]:
-            raise QaFailure("fresh process changed Point Grid Project state")
-        revision = state["history"]["revision"]
-        reloaded_samples = [
-            _sample(fresh, sample["seconds"], revision, "reloaded Point Grid")
-            for sample in samples
-        ]
-        if [sample["pixel_hash"] for sample in reloaded_samples] != [
-            sample["pixel_hash"] for sample in samples
-        ]:
-            raise QaFailure("fresh process changed Point Grid pixels")
-        definition_id, definition = _open_definition(
-            fresh, context["item_id"], "Point Grid reload"
-        )
-        if definition_id != context["definition_id"]:
-            raise QaFailure("fresh process changed Point Grid Definition identity")
-        _assert_grid_defaults(definition, context["grid_id"])
-        _assert_typed_stores(definition, context)
-        _assert_routes(definition, context["routes"])
-        capture = capture_viewport(fresh, artifact_dir / "point-grid-reloaded.png")
-        reload_close = close_clean_native_app(
-            fresh, process, "reloaded Point Grid app", client.timeout
-        )
-    return {
-        "initial_close": initial_close,
-        "reload_close": reload_close,
-        "samples": reloaded_samples,
-        "capture": capture,
-    }
-
-
 def run_suite(client):
     client.wait_health()
     created = create_particle_node_clip(client, 6.5)
@@ -283,14 +197,16 @@ def run_suite(client):
     definition_id = created["definition_id"]
     instance_id = created["instance_id"]
     start = media_seconds(created["item"]["interval"]["start"])
-    particle_pixels = _sample(
+    particle_pixels = sample_rendered_preview(
         client,
         start + 0.5,
         created["state"]["history"]["revision"],
         "factory Particle",
     )
 
-    opened_id, before = _open_definition(client, item_id, "Point Grid")
+    opened_id, before = open_timeline_item_definition(
+        client, item_id, "node_clip", "Point Grid"
+    )
     if opened_id != definition_id:
         raise QaFailure("Node Editor opened a different Particle Definition")
     drag_id, sprite_id, direct_route = _find_factory_route(before)
@@ -416,10 +332,12 @@ def run_suite(client):
         before,
     )
     uncolored = client.state()
-    plain_grid = _sample(
+    plain_grid = sample_rendered_preview(
         client, start + 0.5, uncolored["history"]["revision"], "plain Point Grid"
     )
-    opened_id, _ = _open_definition(client, item_id, "Point Grid color field")
+    opened_id, _ = open_timeline_item_definition(
+        client, item_id, "node_clip", "Point Grid color field"
+    )
     if opened_id != definition_id:
         raise QaFailure("Point Grid color routing reopened a different Definition")
     connections.append(connect_nodes(client, "node_clip", *route_specs[-1]))
@@ -430,7 +348,7 @@ def run_suite(client):
     if len(definition["graph"]["connections"]) != len(before["graph"]["connections"]) + 11:
         raise QaFailure("Point Grid routing changed an unexpected connection")
 
-    colored = _sample(
+    colored = sample_rendered_preview(
         client, start + 0.5, routed["history"]["revision"], "colored Point Grid"
     )
     if plain_grid["pixel_hash"] == colored["pixel_hash"]:
@@ -455,7 +373,7 @@ def run_suite(client):
         )
         else None,
     )
-    undone_pixels = _sample(
+    undone_pixels = sample_rendered_preview(
         client, start + 0.5, undone["history"]["revision"], "undone Grid color"
     )
     if undone_pixels["pixel_hash"] != plain_grid["pixel_hash"]:
@@ -476,7 +394,7 @@ def run_suite(client):
         )
         else None,
     )
-    restored = _sample(
+    restored = sample_rendered_preview(
         client, start + 0.5, redone["history"]["revision"], "redone Grid color"
     )
     if restored["pixel_hash"] != colored["pixel_hash"]:
@@ -484,9 +402,13 @@ def run_suite(client):
 
     samples = [
         restored,
-        _sample(client, start + 1.0, redone["history"]["revision"], "Point Grid"),
+        sample_rendered_preview(
+            client, start + 1.0, redone["history"]["revision"], "Point Grid"
+        ),
     ]
-    _open_definition(client, item_id, "Point Grid capture")
+    open_timeline_item_definition(
+        client, item_id, "node_clip", "Point Grid capture"
+    )
     artifact_dir = pathlib.Path(os.environ["RUVIE_QA_ARTIFACT_DIR"])
     capture = capture_viewport(client, artifact_dir / "capture.png")
     project_path = os.environ.get("RUVIE_QA_PROJECT_PATH")
@@ -494,21 +416,31 @@ def run_suite(client):
         raise QaFailure("Point Grid persistence QA requires a Project file")
     project_file = pathlib.Path(project_path)
     saved, saved_file = save_project_to_disk(client, project_file, "Point Grid")
-    reloaded = _reload(
+    reload_context = {
+        "grid_id": grid_id,
+        "store_integer_id": store_integer_id,
+        "store_vec3_id": store_vec3_id,
+        "store_color_id": store_color_id,
+        "routes": expected_routes,
+    }
+
+    def validate_reloaded(definition):
+        _assert_grid_defaults(definition, reload_context["grid_id"])
+        _assert_typed_stores(definition, reload_context)
+        _assert_routes(definition, reload_context["routes"])
+
+    reloaded = reload_node_clip_project(
         client,
         project_file,
         saved,
-        {
-            "item_id": item_id,
-            "definition_id": definition_id,
-            "grid_id": grid_id,
-            "store_integer_id": store_integer_id,
-            "store_vec3_id": store_vec3_id,
-            "store_color_id": store_color_id,
-            "routes": expected_routes,
-        },
+        item_id,
+        definition_id,
         samples,
         artifact_dir,
+        "Point Grid",
+        "point-grid",
+        "point-grid-reloaded.png",
+        validate_reloaded,
     )
     return {
         "suite": "point-grid",
