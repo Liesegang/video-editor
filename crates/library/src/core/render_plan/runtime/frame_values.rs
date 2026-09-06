@@ -261,6 +261,42 @@ pub(super) fn required_number(
     }
 }
 
+pub(super) fn finite_f32(value: f64, label: &str) -> Result<OrderedFloat<f32>, LibraryError> {
+    let value = value as f32;
+    if value.is_finite() {
+        Ok(OrderedFloat(value))
+    } else {
+        Err(LibraryError::Validation(format!(
+            "{label} must fit a finite GPU float"
+        )))
+    }
+}
+
+pub(super) fn required_u32(
+    values: &HashMap<String, PropertyValue>,
+    key: &str,
+    owner: &str,
+) -> Result<u32, LibraryError> {
+    let value = match values.get(key) {
+        Some(PropertyValue::Integer(value)) => *value,
+        _ => return Err(type_error(&format!("{owner} {key}"), "Integer")),
+    };
+    u32::try_from(value).map_err(|_| {
+        LibraryError::Validation(format!("{owner} {key} must fit an unsigned 32-bit value"))
+    })
+}
+
+pub(super) fn required_vec3(
+    values: &HashMap<String, PropertyValue>,
+    key: &str,
+    owner: &str,
+) -> Result<crate::model::property::Vec3, LibraryError> {
+    match values.get(key) {
+        Some(PropertyValue::Vec3(value)) => Ok(*value),
+        _ => Err(type_error(&format!("{owner} {key}"), "Vec3")),
+    }
+}
+
 pub(super) fn required_color(
     values: &HashMap<String, PropertyValue>,
     key: &str,

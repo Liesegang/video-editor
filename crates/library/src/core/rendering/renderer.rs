@@ -288,8 +288,8 @@ pub struct SkSLRasterRequest<'a> {
 }
 
 #[derive(Clone, Copy)]
-pub struct ParticleRasterRequest<'a> {
-    pub scene: &'a crate::model::frame::particle::ParticleSceneFrame,
+pub struct PointRasterRequest<'a> {
+    pub scene: &'a crate::model::frame::point::PointSceneFrame,
     pub transform: &'a Affine2D,
 }
 
@@ -464,44 +464,44 @@ pub trait Renderer {
         self.draw_layer_affine_with_blend(&layer, &Affine2D::IDENTITY, opacity, blend_mode)
     }
 
-    /// Stateful GPU scene boundary. Non-GPU renderers fail closed instead of
+    /// Shared GPU Point boundary. Non-GPU renderers fail closed instead of
     /// substituting a CPU implementation with different behavior.
-    fn rasterize_particle_layer(
+    fn rasterize_point_layer(
         &mut self,
-        _request: ParticleRasterRequest<'_>,
+        _request: PointRasterRequest<'_>,
     ) -> Result<RenderOutput, LibraryError> {
         Err(LibraryError::Render(
-            "GPU Particle requires an OpenGL 4.3 SceneRuntime; this renderer has no compatible GPU boundary"
+            "GPU Point requires an OpenGL 4.3 SceneRuntime; this renderer has no compatible GPU boundary"
                 .to_string(),
         ))
     }
 
-    /// Prove that the complete stateful Particle backend is usable before an
+    /// Prove that the shared Point backend is usable before an
     /// exporter creates any externally visible output. Implementations must
     /// validate their real execution/storage path, not merely the presence of
     /// a nominal GPU context. `target_sizes` are the distinct render targets
-    /// reached by Particle scenes in the requested export range.
-    fn preflight_particle_backend(
+    /// reached by Point scenes in the requested export range.
+    fn preflight_point_backend(
         &mut self,
         _target_sizes: &[(u32, u32)],
     ) -> Result<(), LibraryError> {
         Err(LibraryError::Render(
-            "GPU Particle requires an OpenGL 4.3 SceneRuntime; this renderer cannot preflight that backend"
+            "GPU Point requires an OpenGL 4.3 SceneRuntime; this renderer cannot preflight that backend"
                 .to_string(),
         ))
     }
 
-    /// Render and composite one stateful Particle scene into the active
+    /// Render and composite one Point scene into the active
     /// backend target. GPU renderers override this boundary so the scene
     /// texture remains backend-native instead of round-tripping through a
     /// full-frame CPU image before the immediately following composite.
-    fn draw_particle_layer(
+    fn draw_point_layer(
         &mut self,
-        request: ParticleRasterRequest<'_>,
+        request: PointRasterRequest<'_>,
         opacity: f64,
         blend_mode: BlendMode,
     ) -> Result<(), LibraryError> {
-        let layer = self.rasterize_particle_layer(request)?;
+        let layer = self.rasterize_point_layer(request)?;
         self.draw_layer_affine_with_blend(&layer, &Affine2D::IDENTITY, opacity, blend_mode)
     }
 

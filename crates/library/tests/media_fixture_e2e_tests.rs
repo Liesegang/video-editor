@@ -332,7 +332,7 @@ fn collect_content_kinds(items: &[FrameItem], kinds: &mut HashSet<&'static str>)
                     FrameContent::Text { .. } => "text",
                     FrameContent::Shape { .. } => "solid-or-shape",
                     FrameContent::SkSL { .. } => "sksl",
-                    FrameContent::ParticleScene { .. } => "particle-scene",
+                    FrameContent::PointScene { .. } => "point-scene",
                 });
             }
             FrameItem::Group(group) => collect_content_kinds(&group.items, kinds),

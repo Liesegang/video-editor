@@ -30,6 +30,8 @@ use uuid::Uuid;
 
 #[path = "export_capability_tests.rs"]
 mod capability_tests;
+#[path = "export_point_tests.rs"]
+mod point_tests;
 
 struct TemporaryPng(PathBuf);
 
@@ -89,8 +91,8 @@ fn particle_export_project() -> Arc<AuthoringProject> {
 fn assert_explicit_particle_gpu_diagnostic(error: &LibraryError) {
     let diagnostic = error.to_string();
     assert!(
-        diagnostic.contains("GPU Particle") && diagnostic.contains("OpenGL"),
-        "expected explicit GPU Particle/OpenGL diagnosis, got: {diagnostic}"
+        diagnostic.contains("GPU Point") && diagnostic.contains("OpenGL"),
+        "expected explicit GPU Point/OpenGL diagnosis, got: {diagnostic}"
     );
 }
 
@@ -288,7 +290,11 @@ fn read_rgba8_png(path: &std::path::Path) -> Vec<u8> {
 #[test]
 #[ignore = "requires an idle desktop OpenGL 4.3 GPU"]
 fn authoring_particle_png_export_matches_preview_and_is_nontransparent() {
-    let project = particle_export_project();
+    assert_point_png_export_matches_preview(particle_export_project());
+}
+
+#[cfg(all(feature = "gl", target_os = "windows"))]
+fn assert_point_png_export_matches_preview(project: Arc<AuthoringProject>) {
     let timeline_id = project.root_timeline_id;
     let plan = Arc::new(RenderPlanCompiler::compile(project.as_ref()).unwrap());
     let output = TemporaryPng::new();
@@ -327,18 +333,18 @@ fn authoring_particle_png_export_matches_preview_and_is_nontransparent() {
         .unwrap();
     exported
         .output
-        .unwrap_or_else(|error| panic!("Particle export preflight/render failed: {error}"));
+        .unwrap_or_else(|error| panic!("Point export preflight/render failed: {error}"));
     assert_eq!(exported.frames_exported, 1);
     let preview_image = match preview.output {
         Ok(RenderOutput::Image(image)) => image,
         Ok(other) => panic!("expected terminal Preview image, got {other:?}"),
-        Err(error) => panic!("Particle Preview failed while export succeeded: {error}"),
+        Err(error) => panic!("Point Preview failed while export succeeded: {error}"),
     };
     let exported_pixels = read_rgba8_png(&output.0);
     assert_eq!(exported_pixels, preview_image.data);
     assert!(
         exported_pixels.chunks_exact(4).any(|pixel| pixel[3] != 0),
-        "Particle PNG must contain at least one nontransparent pixel"
+        "Point PNG must contain at least one nontransparent pixel"
     );
 }
 

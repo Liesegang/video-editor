@@ -8,8 +8,8 @@ use crate::core::rendering::media_color_ingress::{
     MediaAssetKind, require_unmanaged_abi_srgb, source_asset_from_assets,
 };
 use crate::core::rendering::renderer::{
-    Affine2D, ParticleRasterRequest, RenderOutput, Renderer, RetainedRenderLayer,
-    ShapeRasterRequest, SkSLRasterRequest, TextRasterRequest,
+    Affine2D, PointRasterRequest, RenderOutput, Renderer, RetainedRenderLayer, ShapeRasterRequest,
+    SkSLRasterRequest, TextRasterRequest,
 };
 use crate::editor::project_model::ProjectModel;
 use crate::error::{LibraryError, TransitionSourceHandleError};
@@ -255,14 +255,14 @@ impl<T: Renderer> RenderService<T> {
     /// Validate the exact Project-linear Particle rendering boundary without
     /// evaluating or writing an export frame. Export workers call this before
     /// audio temporaries, encoder sessions, or destination files exist.
-    pub(crate) fn preflight_authoring_particle_backend(
+    pub(crate) fn preflight_authoring_point_backend(
         &mut self,
         project: &AuthoringProject,
         destination: RenderDestination,
         target_sizes: &[(u32, u32)],
     ) -> Result<(), LibraryError> {
         self.prepare_authoring_color_pipeline(project, destination)?;
-        self.renderer.preflight_particle_backend(target_sizes)
+        self.renderer.preflight_point_backend(target_sizes)
     }
 
     fn prepare_authoring_color_pipeline(
@@ -665,16 +665,16 @@ impl<T: Renderer> RenderService<T> {
                     )
                 })
             }
-            FrameContent::ParticleScene {
+            FrameContent::PointScene {
                 scene,
                 effects,
                 transform,
             } => {
                 let render_transform = context.transform(transform);
                 if effects.is_empty() {
-                    return measure_debug("Draw GPU Particle scene", || {
-                        self.renderer.draw_particle_layer(
-                            ParticleRasterRequest {
+                    return measure_debug("Draw GPU Point scene", || {
+                        self.renderer.draw_point_layer(
+                            PointRasterRequest {
                                 scene,
                                 transform: &render_transform,
                             },
@@ -683,16 +683,15 @@ impl<T: Renderer> RenderService<T> {
                         )
                     });
                 }
-                let particle_layer = measure_debug("Rasterize GPU Particle scene", || {
-                    self.renderer
-                        .rasterize_particle_layer(ParticleRasterRequest {
-                            scene,
-                            transform: &render_transform,
-                        })
+                let point_layer = measure_debug("Rasterize GPU Point scene", || {
+                    self.renderer.rasterize_point_layer(PointRasterRequest {
+                        scene,
+                        transform: &render_transform,
+                    })
                 })?;
                 let final_image =
-                    self.apply_effects(particle_layer, effects, current_time, color_authority)?;
-                measure_debug("Composite GPU Particle scene", || {
+                    self.apply_effects(point_layer, effects, current_time, color_authority)?;
+                measure_debug("Composite GPU Point scene", || {
                     self.renderer.draw_layer_affine_with_blend(
                         &final_image,
                         &Affine2D::IDENTITY,

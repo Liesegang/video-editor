@@ -8,7 +8,8 @@ use crate::model::point::PointRenderProgram;
 
 use super::forces::ForceUniformLocations;
 use super::point_fields::PointFieldPipeline;
-use super::shaders::{particle_compute_source, particle_fragment_source, particle_vertex_source};
+use super::shaders::{particle_compute_source, point_fragment_source, point_vertex_source};
+use super::source::{PointSourceKind, PointSourceUniforms};
 
 pub(super) const PARTICLE_STRIDE_BYTES: u64 = 64;
 pub(super) const PARTICLE_WORKGROUP_SIZE: u32 = 64;
@@ -83,38 +84,47 @@ pub(super) struct RenderUniforms {
 }
 
 #[derive(Clone)]
-pub(super) struct ParticlePipeline {
+pub(super) struct ParticleSimulationPipeline {
     pub compute_program: glow::Program,
+    pub compute: ComputeUniforms,
+}
+
+#[derive(Clone)]
+pub(super) struct PointPipeline {
     pub render_program: glow::Program,
     pub vertex_array: glow::VertexArray,
-    pub compute: ComputeUniforms,
     pub render: RenderUniforms,
+    pub source: PointSourceUniforms,
     pub point_fields: Option<PointFieldPipeline>,
+    pub particle: Option<ParticleSimulationPipeline>,
     pub last_used: u64,
 }
 
-impl ParticlePipeline {
+impl PointPipeline {
     pub fn create(
         gl: &glow::Context,
         last_used: u64,
+        source_kind: PointSourceKind,
         point_program: Option<&PointRenderProgram>,
     ) -> Result<Self, LibraryError> {
-        let compute_source = particle_compute_source();
-        let compute_program =
-            link_program(gl, &[(glow::COMPUTE_SHADER, &compute_source)], "compute")?;
-        let point_fields =
-            match point_program.map(|program| PointFieldPipeline::create(gl, program)) {
-                Some(Ok(pipeline)) => Some(pipeline),
-                Some(Err(error)) => {
-                    // SAFETY: this error path remains the sole owner of the
-                    // base compute program created immediately above.
-                    unsafe { gl.delete_program(compute_program) };
-                    return Err(error);
+        let particle = match source_kind {
+            PointSourceKind::Particle => Some(create_particle_pipeline(gl)?),
+            PointSourceKind::Grid => None,
+        };
+        let point_fields = match point_program
+            .map(|program| PointFieldPipeline::create(gl, source_kind, program))
+        {
+            Some(Ok(pipeline)) => Some(pipeline),
+            Some(Err(error)) => {
+                if let Some(particle) = particle {
+                    particle.destroy(gl);
                 }
-                None => None,
-            };
-        let vertex_source = particle_vertex_source(point_fields.is_some());
-        let fragment_source = particle_fragment_source(point_fields.is_some());
+                return Err(error);
+            }
+            None => None,
+        };
+        let vertex_source = point_vertex_source(source_kind, point_fields.is_some());
+        let fragment_source = point_fragment_source(point_fields.is_some());
         let render_program = match link_program(
             gl,
             &[
@@ -125,9 +135,9 @@ impl ParticlePipeline {
         ) {
             Ok(program) => program,
             Err(error) => {
-                // SAFETY: `compute_program` was created by this live context
-                // above and has not been deleted or transferred.
-                unsafe { gl.delete_program(compute_program) };
+                if let Some(particle) = particle {
+                    particle.destroy(gl);
+                }
                 if let Some(point_fields) = point_fields {
                     point_fields.destroy(gl);
                 }
@@ -141,9 +151,9 @@ impl ParticlePipeline {
             Err(error) => {
                 // SAFETY: both programs were created by this context above
                 // and this error path is their sole owner.
-                unsafe {
-                    gl.delete_program(compute_program);
-                    gl.delete_program(render_program);
+                unsafe { gl.delete_program(render_program) };
+                if let Some(particle) = particle {
+                    particle.destroy(gl);
                 }
                 if let Some(point_fields) = point_fields {
                     point_fields.destroy(gl);
@@ -155,29 +165,6 @@ impl ParticlePipeline {
         };
         let uniforms = (|| {
             Ok((
-                ComputeUniforms {
-                    capacity: required_uniform(gl, compute_program, "uCapacity")?,
-                    reset: required_uniform(gl, compute_program, "uReset")?,
-                    seed: required_uniform(gl, compute_program, "uSeed")?,
-                    start_step: required_uniform(gl, compute_program, "uStartStep")?,
-                    step_count: required_uniform(gl, compute_program, "uStepCount")?,
-                    rate: required_uniform(gl, compute_program, "uRate")?,
-                    lifetime: required_uniform(gl, compute_program, "uLifetime")?,
-                    emitter_shape: required_uniform(gl, compute_program, "uEmitterShape")?,
-                    emitter_position: required_uniform(gl, compute_program, "uEmitterPosition")?,
-                    emitter_radius: required_uniform(gl, compute_program, "uEmitterRadius")?,
-                    emitter_size: required_uniform(gl, compute_program, "uEmitterSize")?,
-                    emitter_surface_only: required_uniform(
-                        gl,
-                        compute_program,
-                        "uEmitterSurfaceOnly",
-                    )?,
-                    velocity_min: required_uniform(gl, compute_program, "uVelocityMin")?,
-                    velocity_max: required_uniform(gl, compute_program, "uVelocityMax")?,
-                    forces: ForceUniformLocations::new(gl, compute_program)?,
-                    size_min: required_uniform(gl, compute_program, "uSizeMin")?,
-                    size_max: required_uniform(gl, compute_program, "uSizeMax")?,
-                },
                 RenderUniforms {
                     logical_size: required_uniform(gl, render_program, "uLogicalSize")?,
                     target_size: required_uniform(gl, render_program, "uTargetSize")?,
@@ -193,17 +180,20 @@ impl ParticlePipeline {
                         .then(|| required_uniform(gl, render_program, "uOutputSrgba"))
                         .transpose()?,
                 },
+                PointSourceUniforms::new(gl, render_program, source_kind, true)?,
             ))
         })();
-        let (compute, render) = match uniforms {
+        let (render, source) = match uniforms {
             Ok(uniforms) => uniforms,
             Err(error) => {
                 // SAFETY: these three handles were created by this context and
                 // have not escaped because pipeline construction failed.
                 unsafe {
                     gl.delete_vertex_array(vertex_array);
-                    gl.delete_program(compute_program);
                     gl.delete_program(render_program);
+                }
+                if let Some(particle) = particle {
+                    particle.destroy(gl);
                 }
                 if let Some(point_fields) = point_fields {
                     point_fields.destroy(gl);
@@ -212,26 +202,75 @@ impl ParticlePipeline {
             }
         };
         Ok(Self {
-            compute_program,
             render_program,
             vertex_array,
-            compute,
             render,
+            source,
             point_fields,
+            particle,
             last_used,
         })
     }
 
     pub fn destroy(self, gl: &glow::Context) {
-        // SAFETY: ParticlePipeline uniquely owns handles created by `gl`; its
+        // SAFETY: PointPipeline uniquely owns handles created by `gl`; its
         // caller destroys it while that same context is current.
         unsafe {
             gl.delete_vertex_array(self.vertex_array);
-            gl.delete_program(self.compute_program);
             gl.delete_program(self.render_program);
         }
         if let Some(point_fields) = self.point_fields {
             point_fields.destroy(gl);
+        }
+        if let Some(particle) = self.particle {
+            particle.destroy(gl);
+        }
+    }
+}
+
+impl ParticleSimulationPipeline {
+    pub fn destroy(self, gl: &glow::Context) {
+        // SAFETY: the pipeline owns this program and destruction runs on the
+        // creating SceneRuntime context.
+        unsafe { gl.delete_program(self.compute_program) };
+    }
+}
+
+fn create_particle_pipeline(
+    gl: &glow::Context,
+) -> Result<ParticleSimulationPipeline, LibraryError> {
+    let source = particle_compute_source();
+    let compute_program = link_program(gl, &[(glow::COMPUTE_SHADER, &source)], "compute")?;
+    let uniforms = (|| {
+        Ok(ComputeUniforms {
+            capacity: required_uniform(gl, compute_program, "uCapacity")?,
+            reset: required_uniform(gl, compute_program, "uReset")?,
+            seed: required_uniform(gl, compute_program, "uSeed")?,
+            start_step: required_uniform(gl, compute_program, "uStartStep")?,
+            step_count: required_uniform(gl, compute_program, "uStepCount")?,
+            rate: required_uniform(gl, compute_program, "uRate")?,
+            lifetime: required_uniform(gl, compute_program, "uLifetime")?,
+            emitter_shape: required_uniform(gl, compute_program, "uEmitterShape")?,
+            emitter_position: required_uniform(gl, compute_program, "uEmitterPosition")?,
+            emitter_radius: required_uniform(gl, compute_program, "uEmitterRadius")?,
+            emitter_size: required_uniform(gl, compute_program, "uEmitterSize")?,
+            emitter_surface_only: required_uniform(gl, compute_program, "uEmitterSurfaceOnly")?,
+            velocity_min: required_uniform(gl, compute_program, "uVelocityMin")?,
+            velocity_max: required_uniform(gl, compute_program, "uVelocityMax")?,
+            forces: ForceUniformLocations::new(gl, compute_program)?,
+            size_min: required_uniform(gl, compute_program, "uSizeMin")?,
+            size_max: required_uniform(gl, compute_program, "uSizeMax")?,
+        })
+    })();
+    match uniforms {
+        Ok(compute) => Ok(ParticleSimulationPipeline {
+            compute_program,
+            compute,
+        }),
+        Err(error) => {
+            // SAFETY: failed construction remains the sole owner.
+            unsafe { gl.delete_program(compute_program) };
+            Err(error)
         }
     }
 }

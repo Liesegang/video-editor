@@ -1,25 +1,35 @@
 use ordered_float::OrderedFloat;
 
-use super::particle_tests::{ParticleFixture, particle_scenes};
-use super::point_tests::{PointNodes, point_fixture};
+use super::particle_tests::{ParticleFixture, particle_scenes, point_scenes};
+use super::point_tests::{PointNodes, point_fixture, replace_fixture_source_with_grid};
 use super::{
     CompiledPointInstruction, RenderPlanCache, RenderPlanCompiler, evaluate_render_plan_frame,
 };
 use crate::model::animation::EasingFunction;
 use crate::model::authoring::{
-    AuthoringProject, AutomationKeyframe, AutomationTrack, MediaTime, SourceRef,
+    AuthoringProject, AutomationKeyframe, AutomationTrack, MediaTime, ModulePortAddress,
+    PublishedParameter, PublishedParameterId, SourceRef,
 };
-use crate::model::frame::particle::ParticleSceneFrame;
+use crate::model::frame::particle::ParticleSceneParameters;
+use crate::model::frame::point::{PointSceneFrame, PointSceneSource};
 use crate::model::point::{PointInstruction, PointRenderProgram};
-use crate::model::project::NUMERIC_B_INPUT_PORT;
-use crate::model::property::PropertyValue;
+use crate::model::project::{NUMERIC_B_INPUT_PORT, PortDataType};
+use crate::model::property::{PropertyValue, Vec3};
 use crate::plugin::PluginManager;
 
 fn number(value: f64) -> PropertyValue {
     PropertyValue::Number(OrderedFloat(value))
 }
 
-fn scenes(fixture: &ParticleFixture, frame: u64) -> Vec<ParticleSceneFrame> {
+fn vec3(value: f64) -> Vec3 {
+    Vec3 {
+        x: OrderedFloat(value),
+        y: OrderedFloat(value),
+        z: OrderedFloat(value),
+    }
+}
+
+fn scenes(fixture: &ParticleFixture, frame: u64) -> Vec<PointSceneFrame> {
     let plan = RenderPlanCompiler::compile(&fixture.project).unwrap();
     let frame = evaluate_render_plan_frame(
         &fixture.project,
@@ -33,9 +43,16 @@ fn scenes(fixture: &ParticleFixture, frame: u64) -> Vec<ParticleSceneFrame> {
     particle_scenes(&frame.items).into_iter().cloned().collect()
 }
 
+fn particle_parameters(scene: &PointSceneFrame) -> &ParticleSceneParameters {
+    let PointSceneSource::Particle { parameters, .. } = &scene.source else {
+        panic!("expected Particle source");
+    };
+    parameters
+}
+
 fn factor_register(fixture: &ParticleFixture, nodes: &PointNodes) -> usize {
     let plan = RenderPlanCompiler::compile(&fixture.project).unwrap();
-    plan.module_definitions[&fixture.definition_id].particle_renderers[&nodes.renderer]
+    plan.module_definitions[&fixture.definition_id].point_renderers[&nodes.renderer]
         .point_program.as_ref().unwrap().instructions.iter().position(|instruction| {
             matches!(instruction, CompiledPointInstruction::Uniform {node_id, port, ..} if *node_id == nodes.math && port == NUMERIC_B_INPUT_PORT)
         }).unwrap()
@@ -95,12 +112,13 @@ fn point_field_uniform_keyframes_are_instance_scoped_and_leave_simulation_parame
             };
             assert_eq!(factor(program, register), &number(expected));
             assert_eq!(
-                scene.parameters,
-                first
-                    .iter()
-                    .find(|first| first.invocation == scene.invocation)
-                    .unwrap()
-                    .parameters
+                particle_parameters(scene),
+                particle_parameters(
+                    first
+                        .iter()
+                        .find(|first| first.invocation == scene.invocation)
+                        .unwrap()
+                )
             );
         }
         assert_ne!(sampled[0].invocation, sampled[1].invocation);
@@ -127,6 +145,130 @@ fn point_instance_uniform_changes_reuse_compiled_definition() {
         &before.module_definitions[&fixture.definition_id],
         &after.module_definitions[&fixture.definition_id]
     ));
+}
+
+#[test]
+fn grid_source_samples_the_same_point_program_without_particle_state() {
+    let (mut fixture, nodes) = point_fixture(1);
+    let grid = replace_fixture_source_with_grid(&mut fixture, &nodes, "random");
+    let plan = RenderPlanCompiler::compile(&fixture.project).unwrap();
+    let frame = evaluate_render_plan_frame(
+        &fixture.project,
+        &plan,
+        &PluginManager::default(),
+        15,
+        1.0,
+        None,
+    )
+    .unwrap();
+    let scenes = point_scenes(&frame.items);
+    assert_eq!(scenes.len(), 1);
+    let scene = scenes[0];
+    assert_eq!(scene.source_node_id, grid);
+    let PointSceneSource::Grid(parameters) = &scene.source else {
+        panic!("expected procedural Grid source");
+    };
+    assert_eq!(parameters.counts, [8, 8, 1]);
+    assert_eq!(parameters.capacity(), 64);
+    assert!(scene.point_program.as_ref().is_some_and(|program| {
+        program
+            .instructions
+            .iter()
+            .any(|instruction| matches!(instruction, PointInstruction::Random { .. }))
+    }));
+}
+
+#[test]
+fn grid_published_spacing_samples_local_time_and_keeps_sibling_instances_independent() {
+    let (mut fixture, nodes) = point_fixture(2);
+    let grid = replace_fixture_source_with_grid(&mut fixture, &nodes, "random");
+    let spacing_parameter = PublishedParameterId::new();
+    let definition = fixture
+        .project
+        .module_definitions
+        .get_mut(&fixture.definition_id)
+        .unwrap();
+    let spacing_default = definition.graph.nodes[&grid]
+        .properties()
+        .get("spacing")
+        .and_then(|property| property.value())
+        .cloned()
+        .expect("Grid spacing default");
+    definition.interface.parameters.push(PublishedParameter {
+        id: spacing_parameter,
+        name: "Grid Spacing".to_string(),
+        data_type: PortDataType::Vec3,
+        default_value: spacing_default,
+        target: ModulePortAddress {
+            node_id: grid,
+            port: "spacing".to_string(),
+        },
+    });
+    definition.interface_version += 1;
+    let mut cache = RenderPlanCache::default();
+    let (_, initial) = cache.compile(&fixture.project).unwrap();
+    assert_eq!(initial.compiled_definitions, 1);
+
+    let SourceRef::Module(first) = &mut fixture
+        .project
+        .items
+        .get_mut(&fixture.item_ids[0])
+        .unwrap()
+        .source
+    else {
+        panic!("module item");
+    };
+    first.automation_tracks.insert(
+        spacing_parameter,
+        AutomationTrack {
+            keyframes: vec![
+                AutomationKeyframe::new(
+                    MediaTime::zero(),
+                    PropertyValue::Vec3(vec3(10.0)),
+                    EasingFunction::Linear,
+                ),
+                AutomationKeyframe::new(
+                    MediaTime::new(1, 1).unwrap(),
+                    PropertyValue::Vec3(vec3(30.0)),
+                    EasingFunction::Linear,
+                ),
+            ],
+        },
+    );
+    fixture
+        .project
+        .module_instances
+        .get_mut(&fixture.instance_ids[1])
+        .unwrap()
+        .parameter_overrides
+        .insert(spacing_parameter, PropertyValue::Vec3(vec3(70.0)));
+    let (_, reused) = cache.compile(&fixture.project).unwrap();
+    assert_eq!(reused.compiled_definitions, 0);
+    assert_eq!(reused.reused_definitions, 1);
+
+    let plan = RenderPlanCompiler::compile(&fixture.project).unwrap();
+    let frame = evaluate_render_plan_frame(
+        &fixture.project,
+        &plan,
+        &PluginManager::default(),
+        15,
+        1.0,
+        None,
+    )
+    .unwrap();
+    let scenes = point_scenes(&frame.items);
+    assert_eq!(scenes.len(), 2);
+    for scene in scenes {
+        let PointSceneSource::Grid(parameters) = &scene.source else {
+            panic!("expected Grid source");
+        };
+        let expected = if scene.invocation.module_instance_id == fixture.instance_ids[0] {
+            vec3(20.0)
+        } else {
+            vec3(70.0)
+        };
+        assert_eq!(parameters.spacing, expected);
+    }
 }
 
 #[test]

@@ -1,44 +1,16 @@
 //! Compilation of the bounded executable Particle Node chain.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use crate::model::authoring::{ModuleDefinition, ModulePortAddress};
 use crate::model::frame::particle::PARTICLE_MAX_FORCES;
 use crate::model::node::{Node, NodeContent, PARTICLE_SYSTEM_PORT, ParticleNodeRole};
 
-use super::point::{compile_point_program, trace_point_stream, validate_point_field_consumers};
-use super::{CompiledParticleDefinition, CompiledParticleForce};
+use super::{CompiledParticleForce, CompiledParticleSource};
 
-pub(super) fn compile_particle_renderers(
-    definition: &ModuleDefinition,
-    active_nodes: &HashSet<uuid::Uuid>,
-) -> Result<HashMap<uuid::Uuid, CompiledParticleDefinition>, String> {
-    validate_point_field_consumers(definition, active_nodes)?;
-    let mut compiled = HashMap::new();
-    let mut candidate_ids = active_nodes.iter().copied().collect::<Vec<_>>();
-    candidate_ids.sort_unstable();
-    for renderer_node_id in candidate_ids {
-        let Some(node) = definition.graph.nodes.get(&renderer_node_id) else {
-            continue;
-        };
-        if native_role(node) != Some(ParticleNodeRole::SpriteRenderer) {
-            continue;
-        }
-        // Disabled Nodes produce no output before resolving their descriptor,
-        // properties, or upstream topology. Particle endpoints cannot
-        // type-preservingly bypass, so bypassing either endpoint is likewise
-        // a stable no-image result.
-        if !node.enabled || node.bypassed {
-            continue;
-        }
-        let Some(trace) = trace_point_stream(definition, renderer_node_id)? else {
-            continue;
-        };
-        if let Some(particle) = compile_particle_chain(definition, renderer_node_id, &trace)? {
-            compiled.insert(renderer_node_id, particle);
-        }
-    }
-    Ok(compiled)
+pub(super) struct ParticleSourceCompilation {
+    pub source: CompiledParticleSource,
+    pub lineage: HashSet<ModulePortAddress>,
 }
 
 #[derive(Default)]
@@ -55,17 +27,16 @@ struct ParticleStages {
 /// out-of-order chains are a stable no-image result while the Node Editor is
 /// being rewired; they never turn a model-valid Project into a RenderPlan
 /// compilation failure.
-fn compile_particle_chain(
+pub(super) fn compile_particle_source(
     definition: &ModuleDefinition,
-    renderer_node_id: uuid::Uuid,
-    point_trace: &super::point::PointStreamTrace,
-) -> Result<Option<CompiledParticleDefinition>, String> {
+    first_source: &ModulePortAddress,
+) -> Result<Option<ParticleSourceCompilation>, String> {
     let mut stages = ParticleStages::default();
     let mut downstream_rank = ParticleNodeRole::SpriteRenderer.execution_rank();
-    let mut downstream_node_id = renderer_node_id;
-    let mut visited = HashSet::from([renderer_node_id]);
+    let mut downstream_node_id = first_source.node_id;
+    let mut visited = HashSet::new();
     let mut force_count = 0_usize;
-    let mut first_source = Some(point_trace.particle_source.clone());
+    let mut first_source = Some(first_source.clone());
     let mut particle_lineage = HashSet::new();
     loop {
         let node = match first_source.take() {
@@ -141,18 +112,14 @@ fn compile_particle_chain(
     let Some(emitter_node_id) = stages.emitter else {
         return Ok(None);
     };
-    let point_program =
-        compile_point_program(definition, renderer_node_id, point_trace, &particle_lineage)?;
-    Ok(Some(CompiledParticleDefinition {
-        emitter_node_id,
-        shape_location_node_id: stages.shape_location,
-        initialize_node_id: stages.initialize,
-        force_nodes: stages.forces,
-        point_program,
-        renderer_node_id,
-        // A fused executable is owned by this concrete renderer chain. Two
-        // branches from one Emitter must never evict each other's SSBO state.
-        state_slot_id: renderer_node_id,
+    Ok(Some(ParticleSourceCompilation {
+        source: CompiledParticleSource {
+            emitter_node_id,
+            shape_location_node_id: stages.shape_location,
+            initialize_node_id: stages.initialize,
+            force_nodes: stages.forces,
+        },
+        lineage: particle_lineage,
     }))
 }
 
@@ -212,13 +179,20 @@ mod tests {
     fn particle_topology_compiles_once_at_the_definition_boundary() {
         let fixture = ParticleNodeClipFactory::create("Particles").expect("fixture");
         let compiled = compile_module(&fixture.definition).expect("compiled");
-        let particle = compiled
-            .particle_renderers
+        let point_renderer = compiled
+            .point_renderers
             .values()
             .next()
-            .expect("particle executable");
-        assert_eq!(particle.state_slot_id, particle.renderer_node_id);
-        assert_eq!(compiled.particle_renderers.len(), 1);
+            .expect("Point executable");
+        assert_eq!(
+            point_renderer.state_slot_id,
+            point_renderer.renderer_node_id
+        );
+        assert!(matches!(
+            &point_renderer.source,
+            crate::core::render_plan::CompiledPointSource::Particle(_)
+        ));
+        assert_eq!(compiled.point_renderers.len(), 1);
         assert_eq!(compiled.nodes.len(), 7);
     }
 

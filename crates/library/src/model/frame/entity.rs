@@ -120,8 +120,8 @@ pub enum FrameContent {
     },
     /// Compact command for the stateful GPU SceneRuntime. Particle buffers
     /// remain derived renderer state and are never embedded in FrameInfo.
-    ParticleScene {
-        scene: crate::model::frame::particle::ParticleSceneFrame,
+    PointScene {
+        scene: crate::model::frame::point::PointSceneFrame,
         #[serde(default)]
         effects: Vec<ImageEffect>,
         #[serde(flatten)]
@@ -136,7 +136,7 @@ impl FrameContent {
             Self::Text { transform, .. }
             | Self::Shape { transform, .. }
             | Self::SkSL { transform, .. }
-            | Self::ParticleScene { transform, .. } => transform,
+            | Self::PointScene { transform, .. } => transform,
         }
     }
 
@@ -146,7 +146,7 @@ impl FrameContent {
             Self::Text { transform, .. }
             | Self::Shape { transform, .. }
             | Self::SkSL { transform, .. }
-            | Self::ParticleScene { transform, .. } => transform,
+            | Self::PointScene { transform, .. } => transform,
         }
     }
 }
@@ -217,7 +217,7 @@ impl Hash for FrameContent {
                 effects.hash(state);
                 transform.hash(state);
             }
-            FrameContent::ParticleScene {
+            FrameContent::PointScene {
                 scene,
                 effects,
                 transform,
@@ -329,12 +329,12 @@ impl PartialEq for FrameContent {
                     && tr1 == tr2
             }
             (
-                FrameContent::ParticleScene {
+                FrameContent::PointScene {
                     scene: s1,
                     effects: e1,
                     transform: tr1,
                 },
-                FrameContent::ParticleScene {
+                FrameContent::PointScene {
                     scene: s2,
                     effects: e2,
                     transform: tr2,

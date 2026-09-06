@@ -7,8 +7,8 @@ use super::*;
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct PointFieldReadback {
     pub serial: u32,
-    pub age: f32,
-    pub lifetime: f32,
+    pub age: Option<f32>,
+    pub lifetime: Option<f32>,
     pub attributes: Vec<f32>,
     pub color: [f32; 4],
 }
@@ -24,20 +24,27 @@ impl SceneRuntime {
         let fields = invocation.point_fields.as_ref().ok_or_else(|| {
             LibraryError::Render("Point readback has no render-stage program".to_string())
         })?;
-        let particle_bytes =
-            usize::try_from(u64::from(invocation.capacity) * PARTICLE_STRIDE_BYTES)
-                .map_err(|_| LibraryError::Render("Point readback size overflow".to_string()))?;
-        let mut particles = vec![0_u8; particle_bytes];
+        let mut particles = invocation
+            .particle
+            .as_ref()
+            .map(|_| {
+                usize::try_from(u64::from(invocation.capacity) * PARTICLE_STRIDE_BYTES)
+                    .map(|bytes| vec![0_u8; bytes])
+                    .map_err(|_| LibraryError::Render("Point readback size overflow".to_string()))
+            })
+            .transpose()?;
         let mut columns = vec![0_u8; fields.layout.byte_len as usize];
         let mut colors = vec![0_u8; invocation.capacity as usize * 16];
         let saved = SavedGlState::capture(&self.gl);
         // SAFETY: test-only inspection runs with SceneRuntime's context current;
         // every range exactly matches an owned buffer allocation.
         unsafe {
-            self.gl
-                .bind_buffer(glow::SHADER_STORAGE_BUFFER, Some(invocation.buffer));
-            self.gl
-                .get_buffer_sub_data(glow::SHADER_STORAGE_BUFFER, 0, &mut particles);
+            if let (Some(particle), Some(bytes)) = (&invocation.particle, particles.as_mut()) {
+                self.gl
+                    .bind_buffer(glow::SHADER_STORAGE_BUFFER, Some(particle.buffer));
+                self.gl
+                    .get_buffer_sub_data(glow::SHADER_STORAGE_BUFFER, 0, bytes);
+            }
             self.gl
                 .bind_buffer(glow::SHADER_STORAGE_BUFFER, Some(fields.columns));
             self.gl
@@ -51,12 +58,17 @@ impl SceneRuntime {
         gl_operation_result(&self.gl, "Point field test readback")?;
         let mut result = Vec::new();
         for slot in 0..invocation.capacity as usize {
-            let particle = slot * PARTICLE_STRIDE_BYTES as usize;
-            let age = read_f32(&particles, particle + 12);
-            let lifetime = read_f32(&particles, particle + 28);
-            if age < 0.0 || age >= lifetime {
-                continue;
-            }
+            let (age, lifetime) = if let Some(particles) = &particles {
+                let particle = slot * PARTICLE_STRIDE_BYTES as usize;
+                let age = read_f32(particles, particle + 12);
+                let lifetime = read_f32(particles, particle + 28);
+                if age < 0.0 || age >= lifetime {
+                    continue;
+                }
+                (Some(age), Some(lifetime))
+            } else {
+                (None, None)
+            };
             let serial_offset = fields.layout.serial_offset_bytes as usize
                 + slot * fields.layout.serial_stride_bytes as usize;
             let serial = read_u32(&columns, serial_offset);
@@ -82,6 +94,19 @@ impl SceneRuntime {
             });
         }
         Ok(result)
+    }
+
+    pub(crate) fn point_invocation_has_particle_state(
+        &self,
+        key: &SceneInvocationKey,
+    ) -> Option<bool> {
+        self.invocations
+            .get(key)
+            .map(|invocation| invocation.particle.is_some())
+    }
+
+    pub(crate) fn compiled_point_pipeline_count(&self) -> usize {
+        self.pipelines.len()
     }
 }
 

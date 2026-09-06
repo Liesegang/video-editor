@@ -1,11 +1,142 @@
 //! Sample uniform leaves once per invocation; Point arithmetic runs on the GPU.
 
+use ordered_float::OrderedFloat;
+
+use super::frame_values::{
+    finite_f32, required_color, required_number, required_u32, required_vec3, transparent,
+};
 use super::*;
-use crate::core::render_plan::{CompiledPointInstruction, CompiledPointProgram};
+use crate::core::render_plan::{
+    CompiledPointInstruction, CompiledPointProgram, CompiledPointRenderer, CompiledPointSource,
+};
+use crate::model::authoring::ModuleOutputId;
+use crate::model::frame::point::{
+    PointGridParameters, PointSceneFrame, PointSceneSource, SceneInvocationKey,
+};
 use crate::model::point::{PointAttributeElementType, PointInstruction, PointRenderProgram};
 use crate::model::property::ColorValue;
 
 impl ModuleImageRuntime<'_> {
+    pub(super) fn evaluate_point_renderer(
+        &mut self,
+        output_id: ModuleOutputId,
+        renderer: &CompiledPointRenderer,
+    ) -> Result<FrameItem, LibraryError> {
+        let renderer_node = self
+            .definition
+            .nodes
+            .get(&renderer.renderer_node_id)
+            .cloned()
+            .ok_or_else(|| {
+                LibraryError::Validation(format!(
+                    "Compiled Point renderer reaches missing Node {}",
+                    renderer.renderer_node_id
+                ))
+            })?;
+        let point_program = renderer
+            .point_program
+            .as_ref()
+            .map(|program| self.sample_point_program(program))
+            .transpose()?;
+        let color = if point_program.is_some() {
+            // The Point program owns per-point color. Never send a varying
+            // branch through the ordinary frame-uniform property evaluator.
+            crate::model::frame::color::Color::white()
+        } else {
+            required_color(
+                &self.node_values(&renderer_node)?,
+                "color",
+                "Sprite Renderer",
+            )?
+        };
+        let (source_node_id, source) = match &renderer.source {
+            CompiledPointSource::Particle(particle) => (
+                particle.emitter_node_id,
+                self.sample_particle_source(particle)?,
+            ),
+            CompiledPointSource::Grid { node_id } => (*node_id, self.sample_point_grid(*node_id)?),
+        };
+        let logical_width = u32::try_from(self.width).map_err(|_| {
+            LibraryError::Validation("Point canvas width exceeds GPU limits".to_string())
+        })?;
+        let logical_height = u32::try_from(self.height).map_err(|_| {
+            LibraryError::Validation("Point canvas height exceeds GPU limits".to_string())
+        })?;
+        let scene = PointSceneFrame {
+            invocation: SceneInvocationKey {
+                instance_path: self.instance_path.clone(),
+                module_instance_id: self.invocation.instance_id,
+                state_slot_id: renderer.state_slot_id,
+                output_id,
+            },
+            source_node_id,
+            executable_hash: self.definition.fingerprint,
+            logical_width,
+            logical_height,
+            source,
+            color,
+            point_program,
+        };
+        scene.validate().map_err(LibraryError::Validation)?;
+        let object = FrameItem::Object(FrameObject {
+            source_node_id: renderer.renderer_node_id,
+            spatial_transform_node_id: None,
+            spatial_transform: Box::default(),
+            content_bounds: Some(FrameBounds::new(
+                0.0,
+                0.0,
+                logical_width as f32,
+                logical_height as f32,
+            )),
+            content: FrameContent::PointScene {
+                scene,
+                effects: Vec::new(),
+                transform: Transform::default(),
+            },
+        });
+        Ok(FrameItem::Group(FrameGroup {
+            source_id: renderer_node.id,
+            kind: FrameGroupKind::Node,
+            width: self.width,
+            height: self.height,
+            background_color: transparent(),
+            transform: Transform::default(),
+            blend_mode: renderer_node.blend_mode,
+            effect_time: OrderedFloat(self.local_time.to_seconds_f64()),
+            effects: Vec::new(),
+            items: vec![object],
+        }))
+    }
+
+    fn sample_point_grid(&mut self, node_id: uuid::Uuid) -> Result<PointSceneSource, LibraryError> {
+        let node = self
+            .definition
+            .nodes
+            .get(&node_id)
+            .cloned()
+            .ok_or_else(|| {
+                LibraryError::Validation(format!(
+                    "Compiled Point Grid reaches missing Node {node_id}"
+                ))
+            })?;
+        let values = self.node_values(&node)?;
+        let parameters = PointGridParameters {
+            counts: [
+                required_u32(&values, "count_x", "Point Grid")?,
+                required_u32(&values, "count_y", "Point Grid")?,
+                required_u32(&values, "count_z", "Point Grid")?,
+            ],
+            spacing: required_vec3(&values, "spacing", "Point Grid")?,
+            center: required_vec3(&values, "center", "Point Grid")?,
+            size: finite_f32(
+                required_number(&values, "size", "Point Grid")?,
+                "Point Grid size",
+            )?,
+            seed: required_u32(&values, "seed", "Point Grid")?,
+        };
+        Ok(PointSceneSource::Grid(parameters))
+    }
+
     pub(super) fn sample_point_program(
         &mut self,
         compiled: &CompiledPointProgram,

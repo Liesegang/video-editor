@@ -77,11 +77,11 @@ struct AuthoringExportRenderer {
 }
 
 #[derive(Default)]
-struct AuthoringParticlePreflight {
+struct AuthoringPointPreflight {
     target_sizes: BTreeSet<(u32, u32)>,
 }
 
-impl AuthoringParticlePreflight {
+impl AuthoringPointPreflight {
     fn requires_gpu(&self) -> bool {
         !self.target_sizes.is_empty()
     }
@@ -92,7 +92,7 @@ impl AuthoringParticlePreflight {
 
     fn include_frame(&mut self, frame_info: &FrameInfo) -> Result<(), LibraryError> {
         let root = authoring_export_dimensions(frame_info)?;
-        collect_particle_target_sizes(&frame_info.items, root, &mut self.target_sizes)
+        collect_point_target_sizes(&frame_info.items, root, &mut self.target_sizes)
     }
 }
 
@@ -113,7 +113,7 @@ impl AuthoringExportRenderer {
             Some(Arc::clone(&cache_manager)),
         )?;
         if requires_gpu && renderer.get_gpu_context().is_none() {
-            return Err(particle_gpu_unavailable());
+            return Err(point_gpu_unavailable());
         }
         Ok(Self {
             service: RenderService::new(renderer, plugin_manager, cache_manager),
@@ -147,19 +147,19 @@ impl AuthoringExportRenderer {
         project: &AuthoringProject,
         frame_info: &FrameInfo,
     ) -> Result<ExportFrame, LibraryError> {
-        if frame_uses_gpu_particle(&frame_info.items)
+        if frame_uses_gpu_point(&frame_info.items)
             && self.service.renderer.get_gpu_context().is_none()
         {
-            return Err(particle_gpu_unavailable());
+            return Err(point_gpu_unavailable());
         }
         self.service
             .render_authoring_export_frame(project, frame_info)
     }
 }
 
-fn particle_gpu_unavailable() -> LibraryError {
+fn point_gpu_unavailable() -> LibraryError {
     LibraryError::Render(
-        "GPU Particle export is unavailable: the export worker could not create an OpenGL GPU session; desktop OpenGL 4.3 compute/SSBO support is required"
+        "GPU Point export is unavailable: the export worker could not create an OpenGL GPU session; desktop OpenGL 4.3 compute/SSBO support is required"
             .to_string(),
     )
 }
@@ -168,11 +168,11 @@ fn ensure_authoring_export_renderer(
     renderer: &mut Option<AuthoringExportRenderer>,
     project: &AuthoringProject,
     frame_info: &FrameInfo,
-    particle_preflight: &AuthoringParticlePreflight,
+    point_preflight: &AuthoringPointPreflight,
     plugin_manager: &Arc<PluginManager>,
     cache_manager: &SharedCacheManager,
 ) -> Result<(), LibraryError> {
-    let requires_gpu = particle_preflight.requires_gpu();
+    let requires_gpu = point_preflight.requires_gpu();
     if renderer
         .as_ref()
         .is_none_or(|renderer| renderer.requires_gpu != requires_gpu)
@@ -190,27 +190,27 @@ fn ensure_authoring_export_renderer(
     })?;
     renderer.prepare(frame_info)?;
     if requires_gpu {
-        renderer.service.preflight_authoring_particle_backend(
+        renderer.service.preflight_authoring_point_backend(
             project,
             RenderDestination::Export,
-            &particle_preflight.target_sizes(),
+            &point_preflight.target_sizes(),
         )?;
     }
     Ok(())
 }
 
-fn frame_uses_gpu_particle(items: &[FrameItem]) -> bool {
+fn frame_uses_gpu_point(items: &[FrameItem]) -> bool {
     items.iter().any(|item| match item {
-        FrameItem::Object(object) => matches!(&object.content, FrameContent::ParticleScene { .. }),
-        FrameItem::Group(group) => frame_uses_gpu_particle(&group.items),
+        FrameItem::Object(object) => matches!(&object.content, FrameContent::PointScene { .. }),
+        FrameItem::Group(group) => frame_uses_gpu_point(&group.items),
         FrameItem::Transition(transition) => {
-            frame_uses_gpu_particle(std::slice::from_ref(&transition.from.item))
-                || frame_uses_gpu_particle(std::slice::from_ref(&transition.to.item))
+            frame_uses_gpu_point(std::slice::from_ref(&transition.from.item))
+                || frame_uses_gpu_point(std::slice::from_ref(&transition.to.item))
         }
     })
 }
 
-fn collect_particle_target_sizes(
+fn collect_point_target_sizes(
     items: &[FrameItem],
     current_target: (u32, u32),
     targets: &mut BTreeSet<(u32, u32)>,
@@ -218,7 +218,7 @@ fn collect_particle_target_sizes(
     for item in items {
         match item {
             FrameItem::Object(object) => {
-                if matches!(&object.content, FrameContent::ParticleScene { .. }) {
+                if matches!(&object.content, FrameContent::PointScene { .. }) {
                     targets.insert(current_target);
                 }
             }
@@ -234,15 +234,15 @@ fn collect_particle_target_sizes(
                 } else {
                     current_target
                 };
-                collect_particle_target_sizes(&group.items, child_target, targets)?;
+                collect_point_target_sizes(&group.items, child_target, targets)?;
             }
             FrameItem::Transition(transition) => {
-                collect_particle_target_sizes(
+                collect_point_target_sizes(
                     std::slice::from_ref(&transition.from.item),
                     current_target,
                     targets,
                 )?;
-                collect_particle_target_sizes(
+                collect_point_target_sizes(
                     std::slice::from_ref(&transition.to.item),
                     current_target,
                     targets,
@@ -256,12 +256,12 @@ fn collect_particle_target_sizes(
 fn preflight_dimension(value: u64, axis: &str) -> Result<u32, LibraryError> {
     u32::try_from(value.max(1)).map_err(|_| {
         LibraryError::Render(format!(
-            "GPU Particle nested target {axis} {value} exceeds the renderer limit"
+            "GPU Point nested target {axis} {value} exceeds the renderer limit"
         ))
     })
 }
 
-fn preflight_authoring_video_particle_targets(
+fn preflight_authoring_video_point_targets(
     project: &AuthoringProject,
     plan: &RenderPlan,
     plugin_manager: &PluginManager,
@@ -269,7 +269,7 @@ fn preflight_authoring_video_particle_targets(
     instance_path: Option<&InstancePath>,
     frame_count: u64,
     cancellation: &ExportCancellation,
-) -> Result<AuthoringParticlePreflight, LibraryError> {
+) -> Result<AuthoringPointPreflight, LibraryError> {
     cancellation.check()?;
     if !plan.timeline_may_require_capability(
         project,
@@ -277,10 +277,10 @@ fn preflight_authoring_video_particle_targets(
         instance_path,
         RenderCapability::Gpu,
     )? {
-        return Ok(AuthoringParticlePreflight::default());
+        return Ok(AuthoringPointPreflight::default());
     }
 
-    let mut preflight = AuthoringParticlePreflight::default();
+    let mut preflight = AuthoringPointPreflight::default();
     // The hierarchical query is intentionally conservative around nested
     // TimeMap policies. Resolve exact reachability and target dimensions
     // through the production evaluator before any export side effect.
@@ -312,7 +312,7 @@ pub(super) fn preflight_authoring_video_requires_gpu(
     instance_path: Option<&InstancePath>,
     frame_count: u64,
 ) -> Result<bool, LibraryError> {
-    Ok(preflight_authoring_video_particle_targets(
+    Ok(preflight_authoring_video_point_targets(
         project,
         plan,
         plugin_manager,
@@ -535,8 +535,8 @@ fn run_authoring_png_export(
             };
         }
     };
-    let mut particle_preflight = AuthoringParticlePreflight::default();
-    let preflight_result = particle_preflight.include_frame(&frame_info);
+    let mut point_preflight = AuthoringPointPreflight::default();
+    let preflight_result = point_preflight.include_frame(&frame_info);
 
     let output = (|| {
         request.cancellation.check()?;
@@ -557,7 +557,7 @@ fn run_authoring_png_export(
             renderer,
             request.project.as_ref(),
             &frame_info,
-            &particle_preflight,
+            &point_preflight,
             plugin_manager,
             cache_manager,
         )?;
@@ -647,7 +647,7 @@ fn run_authoring_video_export(
             };
         }
     };
-    let particle_preflight = match preflight_authoring_video_particle_targets(
+    let point_preflight = match preflight_authoring_video_point_targets(
         request.project.as_ref(),
         request.plan.as_ref(),
         plugin_manager.as_ref(),
@@ -688,7 +688,7 @@ fn run_authoring_video_export(
             renderer,
             request.project.as_ref(),
             &frame_info,
-            &particle_preflight,
+            &point_preflight,
             plugin_manager,
             cache_manager,
         )?;

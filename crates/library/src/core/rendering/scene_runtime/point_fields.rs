@@ -14,6 +14,7 @@ use crate::rendering::gl_resources::link_program;
 
 use super::gl_backend::{PARTICLE_WORKGROUP_SIZE, required_uniform};
 use super::shaders::{PARTICLE_RANDOM_FUNCTIONS, PARTICLE_STRUCT_GLSL};
+use super::source::{PointSourceBinding, PointSourceKind, PointSourceUniforms, RENDER_POINT_GLSL};
 use super::{drain_gl_errors, gl_operation_result};
 
 const COLOR_STRIDE_BYTES: u64 = 16;
@@ -80,13 +81,19 @@ pub(super) struct PointFieldPipeline {
     capacity: glow::UniformLocation,
     seed: Option<glow::UniformLocation>,
     attribute_offsets: Option<glow::UniformLocation>,
+    source: PointSourceUniforms,
+    pub source_kind: PointSourceKind,
     pub source_hash: [u8; 32],
 }
 
 impl PointFieldPipeline {
-    pub fn create(gl: &glow::Context, program: &PointRenderProgram) -> Result<Self, LibraryError> {
+    pub fn create(
+        gl: &glow::Context,
+        source_kind: PointSourceKind,
+        program: &PointRenderProgram,
+    ) -> Result<Self, LibraryError> {
         program.validate().map_err(LibraryError::Validation)?;
-        let source = compute_source(program)?;
+        let source = compute_source(source_kind, program)?;
         let source_hash = Sha256::digest(source.as_bytes()).into();
         let compute_program = link_program(
             gl,
@@ -125,9 +132,10 @@ impl PointFieldPipeline {
                         "uAttributeOffsets[0]",
                     )?)
                 },
+                PointSourceUniforms::new(gl, compute_program, source_kind, false)?,
             ))
         })();
-        let (capacity, seed, attribute_offsets) = match uniforms {
+        let (capacity, seed, attribute_offsets, source) = match uniforms {
             Ok(uniforms) => uniforms,
             Err(error) => {
                 // SAFETY: both resources were created by this context and
@@ -145,6 +153,8 @@ impl PointFieldPipeline {
             capacity,
             seed,
             attribute_offsets,
+            source,
+            source_kind,
             source_hash,
         })
     }
@@ -154,7 +164,7 @@ impl PointFieldPipeline {
         gl: &glow::Context,
         program: &PointRenderProgram,
         buffers: &PointFieldBuffers,
-        particle_buffer: glow::Buffer,
+        point_source: &PointSourceBinding<'_>,
         seed: u32,
     ) -> Result<(), LibraryError> {
         program.validate().map_err(LibraryError::Validation)?;
@@ -165,7 +175,13 @@ impl PointFieldPipeline {
                 "Point field schema changed without rebuilding its GPU columns".to_string(),
             ));
         }
-        let source_hash: [u8; 32] = Sha256::digest(compute_source(program)?.as_bytes()).into();
+        if point_source.kind() != self.source_kind {
+            return Err(LibraryError::Validation(
+                "Point source changed without rebuilding its field pipeline".to_string(),
+            ));
+        }
+        let source_hash: [u8; 32] =
+            Sha256::digest(compute_source(self.source_kind, program)?.as_bytes()).into();
         if source_hash != self.source_hash {
             return Err(LibraryError::Validation(
                 "Point field instruction shape changed without rebuilding its GPU pipeline"
@@ -185,10 +201,10 @@ impl PointFieldPipeline {
             gl.bind_buffer(glow::SHADER_STORAGE_BUFFER, Some(self.program_data));
             gl.buffer_sub_data_u8_slice(glow::SHADER_STORAGE_BUFFER, 0, &data);
             gl.use_program(Some(self.compute_program));
-            gl.bind_buffer_base(glow::SHADER_STORAGE_BUFFER, 0, Some(particle_buffer));
             gl.bind_buffer_base(glow::SHADER_STORAGE_BUFFER, 1, Some(buffers.columns));
             gl.bind_buffer_base(glow::SHADER_STORAGE_BUFFER, 2, Some(buffers.colors));
             gl.bind_buffer_base(glow::SHADER_STORAGE_BUFFER, 3, Some(self.program_data));
+            point_source.bind(gl, &self.source)?;
             gl.uniform_1_u32(Some(&self.capacity), buffers.layout.capacity);
             if let Some(location) = &self.seed {
                 gl.uniform_1_u32(Some(location), seed);
@@ -218,23 +234,29 @@ impl PointFieldPipeline {
 }
 
 pub(super) fn source_hash(
+    source_kind: PointSourceKind,
     program: Option<&PointRenderProgram>,
 ) -> Result<Option<[u8; 32]>, LibraryError> {
     program
         .map(|program| {
             program.validate().map_err(LibraryError::Validation)?;
-            Ok(Sha256::digest(compute_source(program)?.as_bytes()).into())
+            Ok(Sha256::digest(compute_source(source_kind, program)?.as_bytes()).into())
         })
         .transpose()
 }
 
 pub(super) fn required_invocation_bytes(
+    has_particle_state: bool,
     program: Option<&PointRenderProgram>,
     capacity: u32,
 ) -> Result<u64, LibraryError> {
-    let particle_bytes = u64::from(capacity)
-        .checked_mul(super::gl_backend::PARTICLE_STRIDE_BYTES)
-        .ok_or_else(|| LibraryError::Render("GPU Particle state size overflow".to_string()))?;
+    let particle_bytes = if has_particle_state {
+        u64::from(capacity)
+            .checked_mul(super::gl_backend::PARTICLE_STRIDE_BYTES)
+            .ok_or_else(|| LibraryError::Render("GPU Particle state size overflow".to_string()))?
+    } else {
+        0
+    };
     let Some(program) = program else {
         return Ok(particle_bytes);
     };
@@ -291,10 +313,24 @@ fn allocate_buffer(
     }
 }
 
-fn compute_source(program: &PointRenderProgram) -> Result<String, LibraryError> {
+fn compute_source(
+    source_kind: PointSourceKind,
+    program: &PointRenderProgram,
+) -> Result<String, LibraryError> {
     program.validate().map_err(LibraryError::Validation)?;
-    let mut body =
-        String::from("    bool valid = true;\n    pointColumns[slot] = particle.identity.x;\n");
+    if source_kind == PointSourceKind::Grid
+        && program.instructions.iter().any(|instruction| {
+            matches!(
+                instruction,
+                PointInstruction::Age | PointInstruction::NormalizedAge
+            )
+        })
+    {
+        return Err(LibraryError::Validation(
+            "Point Age and Normalized Age require a Particle source".to_string(),
+        ));
+    }
+    let mut body = String::from("    bool valid = true;\n    pointColumns[slot] = point.serial;\n");
     for (index, instruction) in program.instructions.iter().enumerate() {
         let register = format!("r{index}");
         match instruction {
@@ -302,13 +338,13 @@ fn compute_source(program: &PointRenderProgram) -> Result<String, LibraryError> 
                 body.push_str(&format!("    vec4 {register} = pointData[{index}];\n"));
             }
             PointInstruction::Age => body.push_str(&format!(
-                "    vec4 {register} = vec4(particle.position_age.w, 0.0, 0.0, 0.0);\n"
+                "    float {register}_value = 0.0;\n    if (!load_point_age(slot, {register}_value)) valid = false;\n    vec4 {register} = vec4({register}_value, 0.0, 0.0, 0.0);\n"
             )),
             PointInstruction::NormalizedAge => body.push_str(&format!(
-                "    vec4 {register} = vec4(clamp(particle.position_age.w / particle.velocity_lifetime.w, 0.0, 1.0), 0.0, 0.0, 0.0);\n"
+                "    float {register}_value = 0.0;\n    if (!load_point_normalized_age(slot, {register}_value)) valid = false;\n    vec4 {register} = vec4({register}_value, 0.0, 0.0, 0.0);\n"
             )),
             PointInstruction::Random { channel } => body.push_str(&format!(
-                "    vec4 {register} = vec4(random_01(uSeed, particle.identity.x, {channel}u), 0.0, 0.0, 0.0);\n"
+                "    vec4 {register} = vec4(random_01(uSeed, point.serial, {channel}u), 0.0, 0.0, 0.0);\n"
             )),
             PointInstruction::LoadAttribute { attribute } => body.push_str(&format!(
                 "    vec4 {register} = vec4(uintBitsToFloat(pointColumns[uAttributeOffsets[{attribute}] + slot]), 0.0, 0.0, 0.0);\n"
@@ -365,8 +401,11 @@ fn compute_source(program: &PointRenderProgram) -> Result<String, LibraryError> 
         .any(|instruction| matches!(instruction, PointInstruction::ColorRamp { .. }))
         .then(ramp_source)
         .unwrap_or_default();
+    let point_source = source_kind
+        .shader()
+        .replace("// PARTICLE_STRUCT", PARTICLE_STRUCT_GLSL);
     Ok(format!(
-        "#version 430 core\nlayout(local_size_x = 64) in;\n{PARTICLE_STRUCT_GLSL}\nlayout(std430, binding = 0) readonly buffer ParticleBuffer {{ Particle particles[]; }};\nlayout(std430, binding = 1) buffer PointColumns {{ uint pointColumns[]; }};\nlayout(std430, binding = 2) buffer PointColors {{ vec4 pointColors[]; }};\nlayout(std430, binding = 3) readonly buffer PointProgramData {{ vec4 pointData[]; }};\nuniform uint uCapacity;\nuniform uint uSeed;\nuniform uint uAttributeOffsets[{POINT_MAX_ATTRIBUTE_COUNT}];\n{PARTICLE_RANDOM_FUNCTIONS}\n{ramp_function}\nvoid main() {{\n    uint slot = gl_GlobalInvocationID.x;\n    if (slot >= uCapacity) return;\n    Particle particle = particles[slot];\n    if (particle.position_age.w < 0.0 || particle.position_age.w >= particle.velocity_lifetime.w) {{\n        pointColors[slot] = vec4(0.0);\n        return;\n    }}\n{body}}}\n"
+        "#version 430 core\nlayout(local_size_x = 64) in;\n{RENDER_POINT_GLSL}\n{point_source}\nlayout(std430, binding = 1) buffer PointColumns {{ uint pointColumns[]; }};\nlayout(std430, binding = 2) buffer PointColors {{ vec4 pointColors[]; }};\nlayout(std430, binding = 3) readonly buffer PointProgramData {{ vec4 pointData[]; }};\nuniform uint uCapacity;\nuniform uint uSeed;\nuniform uint uAttributeOffsets[{POINT_MAX_ATTRIBUTE_COUNT}];\n{PARTICLE_RANDOM_FUNCTIONS}\n{ramp_function}\nvoid main() {{\n    uint slot = gl_GlobalInvocationID.x;\n    if (slot >= uCapacity) return;\n    RenderPoint point = load_render_point(slot);\n    if (!point.alive) {{\n        pointColors[slot] = vec4(0.0);\n        return;\n    }}\n{body}}}\n"
     ))
 }
 

@@ -5,9 +5,8 @@ use crate::editor::project_service::{GeneratorNodeRequest, test_generator_node};
 use crate::model::authoring::{InstancePath, ModuleInstanceId, ModuleOutputId, TimelineId};
 use crate::model::frame::color::Color;
 use crate::model::frame::frame::Region;
-use crate::model::frame::particle::{
-    ParticleSceneFrame, ParticleSceneParameters, SceneInvocationKey,
-};
+use crate::model::frame::particle::ParticleSceneParameters;
+use crate::model::frame::point::{PointSceneFrame, PointSceneSource, SceneInvocationKey};
 use crate::model::project::{
     Composition, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, NodeContainer,
     PortAddress, PortOwner,
@@ -171,9 +170,9 @@ impl Renderer for TexturePathRenderer {
         Ok(())
     }
 
-    fn rasterize_particle_layer(
+    fn rasterize_point_layer(
         &mut self,
-        _request: ParticleRasterRequest<'_>,
+        _request: PointRasterRequest<'_>,
     ) -> Result<RenderOutput, LibraryError> {
         self.particle_rasterizations += 1;
         Ok(RenderOutput::Image(crate::model::frame::Image::new(
@@ -183,9 +182,9 @@ impl Renderer for TexturePathRenderer {
         )))
     }
 
-    fn draw_particle_layer(
+    fn draw_point_layer(
         &mut self,
-        _request: ParticleRasterRequest<'_>,
+        _request: PointRasterRequest<'_>,
         _opacity: f64,
         _blend_mode: BlendMode,
     ) -> Result<(), LibraryError> {
@@ -537,7 +536,7 @@ fn hierarchical_rendering_preserves_texture_layers_and_root_texture_output() {
 
 #[test]
 fn particle_without_effects_uses_the_backend_native_draw_boundary() {
-    let scene = ParticleSceneFrame {
+    let scene = PointSceneFrame {
         point_program: None,
         invocation: SceneInvocationKey {
             instance_path: InstancePath::root(TimelineId::new()),
@@ -545,43 +544,45 @@ fn particle_without_effects_uses_the_backend_native_draw_boundary() {
             state_slot_id: uuid::Uuid::new_v4(),
             output_id: ModuleOutputId::new(),
         },
-        random_stream_id: uuid::Uuid::new_v4(),
+        source_node_id: uuid::Uuid::new_v4(),
         executable_hash: [1; 32],
-        target_step: 1,
+        color: Color::white(),
         logical_width: 1,
         logical_height: 1,
-        parameters: ParticleSceneParameters {
-            capacity: 1,
-            emission_rate: OrderedFloat(1.0),
-            lifetime_seconds: OrderedFloat(1.0),
-            seed: 1,
-            emitter_shape: crate::model::frame::particle::ParticleEmitterShape::Point,
-            emitter_position: crate::model::property::Vec3 {
-                x: OrderedFloat(0.0),
-                y: OrderedFloat(0.0),
-                z: OrderedFloat(0.0),
+        source: PointSceneSource::Particle {
+            target_step: 1,
+            parameters: ParticleSceneParameters {
+                capacity: 1,
+                emission_rate: OrderedFloat(1.0),
+                lifetime_seconds: OrderedFloat(1.0),
+                seed: 1,
+                emitter_shape: crate::model::frame::particle::ParticleEmitterShape::Point,
+                emitter_position: crate::model::property::Vec3 {
+                    x: OrderedFloat(0.0),
+                    y: OrderedFloat(0.0),
+                    z: OrderedFloat(0.0),
+                },
+                emitter_radius: OrderedFloat(0.0),
+                emitter_size: crate::model::property::Vec3 {
+                    x: OrderedFloat(0.0),
+                    y: OrderedFloat(0.0),
+                    z: OrderedFloat(0.0),
+                },
+                emitter_surface_only: false,
+                velocity_min: crate::model::property::Vec3 {
+                    x: OrderedFloat(0.0),
+                    y: OrderedFloat(0.0),
+                    z: OrderedFloat(0.0),
+                },
+                velocity_max: crate::model::property::Vec3 {
+                    x: OrderedFloat(0.0),
+                    y: OrderedFloat(0.0),
+                    z: OrderedFloat(0.0),
+                },
+                forces: Vec::new(),
+                size_min: OrderedFloat(1.0),
+                size_max: OrderedFloat(1.0),
             },
-            emitter_radius: OrderedFloat(0.0),
-            emitter_size: crate::model::property::Vec3 {
-                x: OrderedFloat(0.0),
-                y: OrderedFloat(0.0),
-                z: OrderedFloat(0.0),
-            },
-            emitter_surface_only: false,
-            velocity_min: crate::model::property::Vec3 {
-                x: OrderedFloat(0.0),
-                y: OrderedFloat(0.0),
-                z: OrderedFloat(0.0),
-            },
-            velocity_max: crate::model::property::Vec3 {
-                x: OrderedFloat(0.0),
-                y: OrderedFloat(0.0),
-                z: OrderedFloat(0.0),
-            },
-            forces: Vec::new(),
-            size_min: OrderedFloat(1.0),
-            size_max: OrderedFloat(1.0),
-            color: Color::white(),
         },
     };
     let frame = FrameInfo {
@@ -597,7 +598,7 @@ fn particle_without_effects_uses_the_backend_native_draw_boundary() {
             spatial_transform_node_id: None,
             spatial_transform: Box::default(),
             content_bounds: None,
-            content: FrameContent::ParticleScene {
+            content: FrameContent::PointScene {
                 scene,
                 effects: Vec::new(),
                 transform: Transform::default(),

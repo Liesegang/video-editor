@@ -2613,6 +2613,7 @@ Sprite Renderer:
   runtime_status: implemented
   inputs:
     - name: particles
+      label: Points
       type: PointSource
     - name: color
       type: Color
@@ -2654,6 +2655,30 @@ Ribbon Renderer:
       type: Image
 
 # --- Points ---
+Point Grid:
+  category: Points
+  catalog_status: native
+  catalog_id: native.point.grid
+  runtime_status: implemented
+  description: Generate a centered 3D lattice with stable coordinate identities for shared Point fields and Sprite rendering
+  inputs:
+    - name: count_x
+      type: Integer
+    - name: count_y
+      type: Integer
+    - name: count_z
+      type: Integer
+    - name: spacing
+      type: Vector3
+    - name: center
+      type: Vector3
+    - name: size
+      type: Scalar
+    - name: seed
+      type: Integer
+  outputs:
+    - name: points
+      type: PointSource
 Point Info:
   category: Points
   catalog_status: native

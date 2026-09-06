@@ -5,8 +5,8 @@ use crate::model::frame::color::Color;
 use crate::model::frame::entity::SkSLColorDomain;
 use crate::rendering::blend::{BlendRuntime, with_restored_canvas};
 use crate::rendering::renderer::{
-    Affine2D, ParticleRasterRequest, RenderOutput, Renderer, RetainedRenderLayer,
-    ShapeRasterRequest, SkSLRasterRequest, TextRasterRequest, TextureInfo, WorkingSurfaceContract,
+    Affine2D, PointRasterRequest, RenderOutput, Renderer, RetainedRenderLayer, ShapeRasterRequest,
+    SkSLRasterRequest, TextRasterRequest, TextureInfo, WorkingSurfaceContract,
 };
 #[cfg(feature = "gl")]
 use crate::rendering::scene_runtime::SceneRuntime;
@@ -28,7 +28,7 @@ mod layer_styles;
 mod legacy_backplate;
 mod output_compositing;
 mod paint;
-mod particle;
+mod point;
 mod terminal;
 #[cfg(feature = "gl")]
 mod terminal_compute;
@@ -524,27 +524,24 @@ impl Renderer for SkiaRenderer {
         self.draw_native_layer_surface(layer, opacity, blend_mode)
     }
 
-    fn rasterize_particle_layer(
+    fn rasterize_point_layer(
         &mut self,
-        request: ParticleRasterRequest<'_>,
+        request: PointRasterRequest<'_>,
     ) -> Result<RenderOutput, LibraryError> {
-        self.rasterize_particle_output(request)
+        self.rasterize_point_output(request)
     }
 
-    fn preflight_particle_backend(
-        &mut self,
-        target_sizes: &[(u32, u32)],
-    ) -> Result<(), LibraryError> {
-        self.preflight_particle_output(target_sizes)
+    fn preflight_point_backend(&mut self, target_sizes: &[(u32, u32)]) -> Result<(), LibraryError> {
+        self.preflight_point_output(target_sizes)
     }
 
-    fn draw_particle_layer(
+    fn draw_point_layer(
         &mut self,
-        request: ParticleRasterRequest<'_>,
+        request: PointRasterRequest<'_>,
         opacity: f64,
         blend_mode: crate::model::BlendMode,
     ) -> Result<(), LibraryError> {
-        self.draw_particle_output(request, opacity, blend_mode)
+        self.draw_point_output(request, opacity, blend_mode)
     }
 
     fn rasterize_text_layer(

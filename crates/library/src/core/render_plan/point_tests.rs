@@ -177,13 +177,48 @@ fn append_store(fixture: &mut ParticleFixture, nodes: &PointNodes, name: &str) -
     store_id
 }
 
+pub(super) fn replace_fixture_source_with_grid(
+    fixture: &mut ParticleFixture,
+    nodes: &PointNodes,
+    info_output: &str,
+) -> uuid::Uuid {
+    let definition = fixture
+        .project
+        .module_definitions
+        .get_mut(&fixture.definition_id)
+        .unwrap();
+    let grid = Node::new_catalog_node(PointNodeRole::Grid.catalog_id()).unwrap();
+    let grid_id = grid.id;
+    definition.graph.nodes.insert(grid_id, grid);
+    for connection in &mut definition.graph.connections {
+        if (connection.to.node_id == nodes.info || connection.to.node_id == nodes.store)
+            && connection.to.port == POINT_SOURCE_PORT
+        {
+            connection.from = ModulePortAddress {
+                node_id: grid_id,
+                port: POINT_SOURCE_PORT.to_string(),
+            };
+        }
+        if connection.from.node_id == nodes.info
+            && matches!(
+                connection.from.port.as_str(),
+                "age" | "normalized_age" | "random"
+            )
+        {
+            connection.from.port = info_output.to_string();
+        }
+    }
+    definition.topology_revision += 1;
+    grid_id
+}
+
 #[test]
 fn heat_field_compiles_store_before_load_and_color_ramp() {
     let (fixture, nodes) = point_fixture(1);
     let definition = &fixture.project.module_definitions[&fixture.definition_id];
     let compiled = compile_module(definition).expect("Point heat program");
     assert!(compiled.outputs.contains_key(&fixture.output_id));
-    let program = compiled.particle_renderers[&nodes.renderer]
+    let program = compiled.point_renderers[&nodes.renderer]
         .point_program
         .as_ref()
         .expect("varying Point program");
@@ -224,6 +259,143 @@ fn heat_field_compiles_store_before_load_and_color_ramp() {
         })
         .expect("Color Ramp instruction");
     assert!(store < load && load < ramp);
+}
+
+#[test]
+fn grid_random_uses_the_same_store_field_and_sprite_consumer() {
+    let (mut fixture, nodes) = point_fixture(1);
+    let grid = replace_fixture_source_with_grid(&mut fixture, &nodes, "random");
+    let definition = &fixture.project.module_definitions[&fixture.definition_id];
+    let compiled = compile_module(definition).expect("Grid Point field");
+    let renderer = &compiled.point_renderers[&nodes.renderer];
+    assert!(compiled.outputs[&fixture.output_id].requires(super::RenderCapability::Gpu));
+    assert_eq!(
+        renderer.source,
+        super::CompiledPointSource::Grid { node_id: grid }
+    );
+    let program = renderer.point_program.as_ref().expect("Grid Point program");
+    assert!(
+        program.instructions.iter().any(|instruction| matches!(
+            instruction,
+            super::CompiledPointInstruction::Random { .. }
+        ))
+    );
+    assert!(program.instructions.iter().any(|instruction| matches!(
+        instruction,
+        super::CompiledPointInstruction::StoreNumber { .. }
+    )));
+}
+
+#[test]
+fn grid_with_uniform_color_compiles_the_existing_sprite_fast_path() {
+    let mut fixture = particle_fixture(1);
+    let renderer = particle_node_id(
+        &fixture,
+        crate::model::node::ParticleNodeRole::SpriteRenderer.catalog_id(),
+    );
+    let definition = fixture
+        .project
+        .module_definitions
+        .get_mut(&fixture.definition_id)
+        .unwrap();
+    definition.graph.connections.retain(|connection| {
+        !(connection.to.node_id == renderer && connection.to.port == PARTICLE_SYSTEM_PORT)
+    });
+    let grid = Node::new_catalog_node(PointNodeRole::Grid.catalog_id()).unwrap();
+    let grid_id = grid.id;
+    definition.graph.nodes.insert(grid_id, grid);
+    definition.graph.connections.push(connection(
+        grid_id,
+        POINT_SOURCE_PORT,
+        renderer,
+        PARTICLE_SYSTEM_PORT,
+        0,
+    ));
+    definition.topology_revision += 1;
+
+    let compiled = compile_module(definition).expect("uniform Grid Sprite");
+    let point_renderer = &compiled.point_renderers[&renderer];
+    assert_eq!(
+        point_renderer.source,
+        super::CompiledPointSource::Grid { node_id: grid_id }
+    );
+    assert!(point_renderer.point_program.is_none());
+}
+
+#[test]
+fn one_definition_compiles_particle_and_grid_sprite_endpoints_together() {
+    let mut fixture = particle_fixture(1);
+    let (particle_renderer, output) = particle_renderer_and_output(&fixture);
+    let definition = fixture
+        .project
+        .module_definitions
+        .get_mut(&fixture.definition_id)
+        .unwrap();
+    definition.graph.connections.retain(|connection| {
+        !(connection.from.node_id == particle_renderer
+            && connection.from.port == IMAGE_OUTPUT_PORT
+            && connection.to.node_id == output)
+    });
+    let grid = Node::new_catalog_node(PointNodeRole::Grid.catalog_id()).unwrap();
+    let grid_id = grid.id;
+    let grid_renderer =
+        Node::new_catalog_node(crate::model::node::ParticleNodeRole::SpriteRenderer.catalog_id())
+            .unwrap();
+    let grid_renderer_id = grid_renderer.id;
+    let merge = Node::new_merge("Particle and Grid");
+    let merge_id = merge.id;
+    definition.graph.nodes.extend([
+        (grid_id, grid),
+        (grid_renderer_id, grid_renderer),
+        (merge_id, merge),
+    ]);
+    definition.graph.connections.extend([
+        connection(
+            grid_id,
+            POINT_SOURCE_PORT,
+            grid_renderer_id,
+            PARTICLE_SYSTEM_PORT,
+            0,
+        ),
+        connection(
+            particle_renderer,
+            IMAGE_OUTPUT_PORT,
+            merge_id,
+            MERGE_IMAGES_PORT,
+            0,
+        ),
+        connection(
+            grid_renderer_id,
+            IMAGE_OUTPUT_PORT,
+            merge_id,
+            MERGE_IMAGES_PORT,
+            1,
+        ),
+        connection(merge_id, IMAGE_OUTPUT_PORT, output, IMAGE_INPUT_PORT, 0),
+    ]);
+    definition.topology_revision += 1;
+
+    let compiled = compile_module(definition).expect("mixed Point sources");
+    assert_eq!(compiled.point_renderers.len(), 2);
+    assert!(matches!(
+        &compiled.point_renderers[&particle_renderer].source,
+        super::CompiledPointSource::Particle(_)
+    ));
+    assert_eq!(
+        compiled.point_renderers[&grid_renderer_id].source,
+        super::CompiledPointSource::Grid { node_id: grid_id }
+    );
+}
+
+#[test]
+fn grid_rejects_particle_age_fields_without_inventing_a_lifetime() {
+    for output in ["age", "normalized_age"] {
+        let (mut fixture, nodes) = point_fixture(1);
+        replace_fixture_source_with_grid(&mut fixture, &nodes, output);
+        let definition = &fixture.project.module_definitions[&fixture.definition_id];
+        let error = compile_module(definition).expect_err("Grid must not expose Particle age");
+        assert!(error.contains("requires a Particle source"), "{error}");
+    }
 }
 
 #[test]
@@ -280,13 +452,13 @@ fn renaming_store_changes_display_only_and_project_round_trip_retains_identity()
     let before = compile_module(definition).unwrap();
     definition.graph.nodes.get_mut(&nodes.store).unwrap().name = "temperature".to_string();
     let after = compile_module(definition).unwrap();
-    let before_attribute = &before.particle_renderers[&nodes.renderer]
+    let before_attribute = &before.point_renderers[&nodes.renderer]
         .point_program
         .as_ref()
         .unwrap()
         .schema
         .attributes()[0];
-    let after_attribute = &after.particle_renderers[&nodes.renderer]
+    let after_attribute = &after.point_renderers[&nodes.renderer]
         .point_program
         .as_ref()
         .unwrap()
@@ -300,7 +472,7 @@ fn renaming_store_changes_display_only_and_project_round_trip_retains_identity()
     let compiled = super::RenderPlanCompiler::compile(&restored).unwrap();
     let definition = &compiled.module_definitions[&fixture.definition_id];
     assert_eq!(
-        definition.particle_renderers[&nodes.renderer]
+        definition.point_renderers[&nodes.renderer]
             .point_program
             .as_ref()
             .unwrap()
@@ -332,7 +504,7 @@ fn warm_cache_recompiles_when_the_semantic_store_name_changes() {
     assert_eq!(renamed.compiled_definitions, 1);
     assert_eq!(renamed.reused_definitions, 0);
     assert_eq!(
-        plan.module_definitions[&fixture.definition_id].particle_renderers[&nodes.renderer]
+        plan.module_definitions[&fixture.definition_id].point_renderers[&nodes.renderer]
             .point_program
             .as_ref()
             .unwrap()
@@ -397,7 +569,7 @@ fn instance_store_rename_recompiles_only_the_copy_on_write_definition() {
 
     let plan = super::RenderPlanCompiler::compile(&project).unwrap();
     let attribute_name = |definition_id| {
-        plan.module_definitions[&definition_id].particle_renderers[&nodes.renderer]
+        plan.module_definitions[&definition_id].point_renderers[&nodes.renderer]
             .point_program
             .as_ref()
             .unwrap()
@@ -456,7 +628,7 @@ fn store_with_uniform_published_sprite_color_still_uses_point_program() {
     ]);
     definition.topology_revision += 1;
     let compiled = compile_module(definition).expect("published uniform Sprite color");
-    let program = compiled.particle_renderers[&renderer]
+    let program = compiled.point_renderers[&renderer]
         .point_program
         .as_ref()
         .expect("Store requires a Point program");

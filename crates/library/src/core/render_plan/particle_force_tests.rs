@@ -5,12 +5,20 @@ use super::compiler::compile_module;
 use super::evaluate_render_plan_frame;
 use super::particle_tests::{
     connection, particle_fixture, particle_node_id, particle_renderer_and_output, particle_scenes,
+    particle_source as scene_particle_source,
 };
 use crate::model::frame::particle::{PARTICLE_MAX_FORCES, ParticleForce};
 use crate::model::node::{Node, PARTICLE_SYSTEM_PORT, ParticleNodeRole};
 use crate::model::project::property::{Property, PropertyValue};
 use crate::model::property::Vec3;
 use crate::plugin::PluginManager;
+
+fn particle_source(renderer: &super::CompiledPointRenderer) -> &super::CompiledParticleSource {
+    let super::CompiledPointSource::Particle(source) = &renderer.source else {
+        panic!("expected Particle Point source");
+    };
+    source
+}
 
 fn vec3(x: f64, y: f64, z: f64) -> Vec3 {
     Vec3 {
@@ -89,7 +97,7 @@ fn repeated_force_kinds_compile_in_authored_execution_order() {
     );
 
     let compiled = compile_module(definition).expect("compile repeated force chain");
-    let forces = &compiled.particle_renderers[&renderer].force_nodes;
+    let forces = &particle_source(&compiled.point_renderers[&renderer]).force_nodes;
     assert_eq!(
         forces
             .iter()
@@ -117,7 +125,7 @@ fn force_chain_rejects_cross_stage_cycles_and_more_than_the_bounded_limit() {
     assert!(
         compile_module(&cross_stage)
             .expect("invalid Particle stage is a stable no-image plan")
-            .particle_renderers
+            .point_renderers
             .is_empty()
     );
 
@@ -149,7 +157,7 @@ fn force_chain_rejects_cross_stage_cycles_and_more_than_the_bounded_limit() {
         assert_eq!(
             compile_module(&bounded)
                 .expect("bounded Particle plan")
-                .particle_renderers
+                .point_renderers
                 .contains_key(&renderer),
             expected,
             "force count {count}"
@@ -184,7 +192,7 @@ fn bypassed_force_is_omitted_without_reordering_neighboring_forces() {
 
     let compiled = compile_module(definition).expect("compile bypassed force");
     assert_eq!(
-        compiled.particle_renderers[&renderer]
+        particle_source(&compiled.point_renderers[&renderer])
             .force_nodes
             .iter()
             .map(|force| force.role)
@@ -296,7 +304,9 @@ fn all_force_property_values_map_to_the_scene_in_exact_order() {
     )
     .expect("evaluated force project");
     assert_eq!(
-        particle_scenes(&frame.items)[0].parameters.forces,
+        scene_particle_source(particle_scenes(&frame.items)[0])
+            .1
+            .forces,
         vec![
             ParticleForce::Gravity {
                 acceleration: vec3(1.0, 2.0, 3.0),
@@ -368,7 +378,7 @@ fn instance_force_overrides_share_one_compiled_executable() {
     assert_eq!(
         scenes
             .iter()
-            .map(|scene| match &scene.parameters.forces[0] {
+            .map(|scene| match &scene_particle_source(scene).1.forces[0] {
                 ParticleForce::Gravity { acceleration } => *acceleration,
                 force => panic!("first force is not Gravity: {force:?}"),
             })
@@ -396,5 +406,5 @@ fn disabled_new_force_produces_no_particle_image() {
     replace_particle_chain(definition, &[emitter, shape, initialize, point, renderer]);
 
     let compiled = compile_module(definition).expect("disabled force compiles to no image");
-    assert!(compiled.particle_renderers.is_empty());
+    assert!(compiled.point_renderers.is_empty());
 }

@@ -315,7 +315,7 @@ fn object_bounds(object: &FrameObject) -> Option<egui::Rect> {
         | FrameContent::Video { .. }
         | FrameContent::Image { .. }
         | FrameContent::Shape { .. }
-        | FrameContent::ParticleScene { .. } => None,
+        | FrameContent::PointScene { .. } => None,
     }
 }
 

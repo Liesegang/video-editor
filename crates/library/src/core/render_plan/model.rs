@@ -120,12 +120,12 @@ pub struct CompiledModuleDefinition {
     pub parameters: HashMap<PublishedParameterId, PublishedParameter>,
     pub media_inputs: HashMap<PublishedMediaInputId, PublishedMediaInput>,
     pub outputs: HashMap<ModuleOutputId, CompiledModuleOutput>,
-    /// GPU particle executables keyed by their Sprite Renderer Node. A
+    /// GPU Point executables keyed by their Sprite Renderer Node. A
     /// renderer is an ordinary Image-producing graph source, so its result can
     /// flow through Merge, effects, and transforms before reaching an Output.
     /// The topology is compiled once per definition and never expanded per
     /// Timeline item.
-    pub particle_renderers: HashMap<uuid::Uuid, CompiledParticleDefinition>,
+    pub point_renderers: HashMap<uuid::Uuid, CompiledPointRenderer>,
     /// Retained at the compiled boundary for the future stateful/event runtime;
     /// the first stateless Image slice does not evaluate these interfaces.
     pub signals: HashMap<PublishedSignalId, PublishedSignal>,
@@ -133,7 +133,25 @@ pub struct CompiledModuleDefinition {
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub struct CompiledParticleDefinition {
+pub struct CompiledPointRenderer {
+    pub source: CompiledPointSource,
+    /// Render-stage Point fields compiled from the same Module graph. `None`
+    /// preserves the existing uniform Sprite fast path.
+    pub(crate) point_program: Option<CompiledPointProgram>,
+    pub renderer_node_id: uuid::Uuid,
+    /// Stable Module-owned mutable state slot. Runtime keys combine it with
+    /// InstancePath and ModuleInstanceId before allocating any buffer.
+    pub state_slot_id: uuid::Uuid,
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum CompiledPointSource {
+    Particle(CompiledParticleSource),
+    Grid { node_id: uuid::Uuid },
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct CompiledParticleSource {
     pub emitter_node_id: uuid::Uuid,
     /// Optional pass-through modifier stages. A bypassed Particle modifier is
     /// absent here and the runtime applies the neutral value for that stage.
@@ -142,13 +160,6 @@ pub struct CompiledParticleDefinition {
     /// Authored force stages in their exact upstream-to-downstream execution
     /// order. Repeated force kinds remain distinct executable stages.
     pub(crate) force_nodes: Vec<CompiledParticleForce>,
-    /// Render-stage Point fields compiled from the same Module graph. `None`
-    /// preserves the existing uniform Sprite fast path.
-    pub(crate) point_program: Option<CompiledPointProgram>,
-    pub renderer_node_id: uuid::Uuid,
-    /// Stable Module-owned mutable state slot. Runtime keys combine it with
-    /// InstancePath and ModuleInstanceId before allocating any buffer.
-    pub state_slot_id: uuid::Uuid,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]

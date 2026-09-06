@@ -49,7 +49,7 @@ runtime.
 
 Inside a Particle Node Clip, add **Point Info** and **Store Number Attribute**
 from the context menu. Connect the final Force's Particles output to both
-Points inputs; connect Store's Points output to Sprite Renderer's Particles
+Points inputs; connect Store's Points output to Sprite Renderer's Points
 input. Feed Normalized Age, Age, or Random from Point Info into Store's Value.
 Store's Attribute output can then drive ordinary arithmetic Nodes and a
 **Color Ramp**. The factory Sprite Color is initially published to the Inspector:
@@ -64,9 +64,17 @@ identity does not depend on that name. Stores can be chained, and later fields
 read earlier attributes through their Attribute outputs. A field cannot read
 another Point stream implicitly.
 
-This first execution slice supports Number attributes, computed on the GPU
-after simulation at each rendered frame. It does not yet accumulate attributes
-across simulation steps or provide procedural non-particle Point producers.
+For procedural points without simulation, add **Point Grid** from the same
+context menu and use its Points output in place of the Particle stream. Count
+X/Y/Z, Spacing, Center, Size, and Seed are ordinary editable Node inputs. Grid
+uses the same Store, arithmetic, Color Ramp, and Sprite renderer. Use Point
+Info's **Random** output with Grid; Age and Normalized Age require particles.
+Lattice point identities survive axis-count changes, so surviving points keep
+their random values. Each axis supports up to 1,024 points, with 100,000 total.
+
+This execution slice supports Number attributes, computed on the GPU at each
+rendered frame (after simulation for particles). It does not yet accumulate
+attributes across simulation steps.
 Programs are bounded to 16 attributes, 64 instructions, and 8 Color Ramps with
 64 stops each. Invalid per-point arithmetic produces a transparent Sprite for
 that point. Runtime arrays and GPU programs are not saved into Projects.

@@ -3,6 +3,8 @@
 //! Authored strings never enter these sources. Module graph compilation only
 //! selects this fixed ABI and supplies validated uniforms.
 
+use super::source::{PointSourceKind, RENDER_POINT_GLSL};
+
 pub(super) fn particle_compute_source() -> String {
     PARTICLE_COMPUTE
         .replace("// PARTICLE_STRUCT", PARTICLE_STRUCT_GLSL)
@@ -175,9 +177,13 @@ void main() {
 }
 "#;
 
-pub(super) fn particle_vertex_source(point_fields: bool) -> String {
-    PARTICLE_VERTEX
-        .replace("// PARTICLE_STRUCT", PARTICLE_STRUCT_GLSL)
+pub(super) fn point_vertex_source(kind: PointSourceKind, point_fields: bool) -> String {
+    let source = kind
+        .shader()
+        .replace("// PARTICLE_STRUCT", PARTICLE_STRUCT_GLSL);
+    POINT_VERTEX
+        .replace("// RENDER_POINT_STRUCT", RENDER_POINT_GLSL)
+        .replace("// POINT_SOURCE", &source)
         .replace(
             "// POINT_COLOR_BUFFER",
             if point_fields { POINT_COLOR_BUFFER } else { "" },
@@ -208,12 +214,9 @@ pub(super) fn particle_vertex_source(point_fields: bool) -> String {
         )
 }
 
-const PARTICLE_VERTEX: &str = r#"#version 430 core
-// PARTICLE_STRUCT
-
-layout(std430, binding = 0) readonly buffer ParticleBuffer {
-    Particle particles[];
-};
+const POINT_VERTEX: &str = r#"#version 430 core
+// RENDER_POINT_STRUCT
+// POINT_SOURCE
 // POINT_COLOR_BUFFER
 
 uniform vec2 uLogicalSize;
@@ -233,20 +236,19 @@ const vec2 QUAD_CORNERS[6] = vec2[6](
 void main() {
     uint particle_index = uint(gl_VertexID) / 6u;
     uint corner_index = uint(gl_VertexID) % 6u;
-    Particle particle = particles[particle_index];
-    float age = particle.position_age.w;
-    if (age < 0.0 || age >= particle.velocity_lifetime.w) {
+    RenderPoint point = load_render_point(particle_index);
+    if (!point.alive) {
         gl_Position = vec4(2.0, 2.0, 1.0, 1.0);
         vSpriteCoord = vec2(-1.0);
         // POINT_COLOR_HIDDEN
         return;
     }
 
-    vec3 position = particle.position_age.xyz;
+    vec3 position = point.position_size.xyz;
     float perspective = uFocalLength / max(1.0, uFocalLength + position.z);
     vec2 corner = QUAD_CORNERS[corner_index];
     vec2 local_center = uLogicalSize * 0.5 + position.xy * perspective;
-    vec2 local = local_center + corner * particle.appearance.w * perspective;
+    vec2 local = local_center + corner * point.position_size.w * perspective;
     vec2 screen = vec2(
         dot(uAffineX, vec3(local, 1.0)),
         dot(uAffineY, vec3(local, 1.0))
@@ -262,7 +264,7 @@ void main() {
 }
 "#;
 
-pub(super) fn particle_fragment_source(point_fields: bool) -> String {
+pub(super) fn point_fragment_source(point_fields: bool) -> String {
     PARTICLE_FRAGMENT
         .replace(
             "// COLOR_UNIFORMS",

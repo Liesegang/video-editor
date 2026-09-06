@@ -437,15 +437,15 @@ impl ModuleImageRuntime<'_> {
         match catalog_id {
             crate::model::node::APPEARANCE_STACK_CATALOG_ID => self.appearance_stack_image(node),
             crate::model::node::PARTICLE_SPRITE_RENDERER_CATALOG_ID => {
-                let Some(particle) = self.definition.particle_renderers.get(&node.id).cloned()
+                let Some(point_renderer) = self.definition.point_renderers.get(&node.id).cloned()
                 else {
-                    // The compiler validates Particle topology even when a
+                    // The compiler validates Point-source topology even when a
                     // chain is inactive. A disabled stage, or an endpoint
                     // with no type-preserving bypass, deterministically
                     // produces no Image like every other disabled Module path.
                     return Ok(None);
                 };
-                self.evaluate_particle_renderer(self.invocation.output_id, &particle)
+                self.evaluate_point_renderer(self.invocation.output_id, &point_renderer)
                     .map(Some)
             }
             TRANSITION_IMAGE_INPUT_NODE_ID => self.single_image_input(node.id, IMAGE_INPUT_PORT),

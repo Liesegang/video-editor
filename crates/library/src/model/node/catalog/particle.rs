@@ -176,7 +176,7 @@ const COLLISION_DEPTH_INPUTS: &[PortSpec] = &[
     PortSpec::single("thickness", "Thickness", PortDataType::Number),
 ];
 const SPRITE_RENDERER_INPUTS: &[PortSpec] = &[
-    PortSpec::single(PARTICLE_SYSTEM_PORT, "Particles", PortDataType::PointSource),
+    PortSpec::single(PARTICLE_SYSTEM_PORT, "Points", PortDataType::PointSource),
     PortSpec::single("color", "Color", PortDataType::Color),
 ];
 const PARTICLE_FIXED_STEP_REASON: &str = "deterministic Particle simulation needs a fixed-step parameter schedule, which is not implemented yet";

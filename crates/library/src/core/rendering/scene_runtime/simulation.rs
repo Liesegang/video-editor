@@ -48,7 +48,7 @@ pub(super) fn delete_particle_buffer(gl: &glow::Context, buffer: glow::Buffer) {
 
 pub(super) fn reset_particles(
     gl: &glow::Context,
-    pipeline: &ParticlePipeline,
+    pipeline: &ParticleSimulationPipeline,
     buffer: glow::Buffer,
     capacity: u32,
 ) -> Result<(), LibraryError> {
@@ -76,7 +76,7 @@ pub(super) struct ParticleSimulationRequest<'a> {
 
 pub(super) fn simulate_particles(
     gl: &glow::Context,
-    pipeline: &ParticlePipeline,
+    pipeline: &ParticleSimulationPipeline,
     request: ParticleSimulationRequest<'_>,
 ) -> Result<(), LibraryError> {
     let start_step = u32::try_from(request.start_step).map_err(|_| {

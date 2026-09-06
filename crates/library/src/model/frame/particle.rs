@@ -4,14 +4,9 @@
 //! are the compact command crossing the RenderPlan -> renderer boundary; no
 //! particle array or GPU handle enters the Project model.
 
-use serde::{Deserialize, Serialize};
-use uuid::Uuid;
-
-use crate::model::authoring::{
-    InstancePath, MediaTime, ModuleInstanceId, ModuleOutputId, RationalRate,
-};
-use crate::model::frame::color::Color;
+use crate::model::authoring::{MediaTime, RationalRate};
 use crate::model::property::Vec3;
+use serde::{Deserialize, Serialize};
 
 pub const PARTICLE_FIXED_STEP_HZ: i64 = 120;
 pub const PARTICLE_MAX_CAPACITY: u32 = 100_000;
@@ -270,17 +265,6 @@ fn validate_particle_force_replay_budget(
     Ok(())
 }
 
-/// Mutable scene state address. Module-internal topology contributes only the
-/// stable state slot; placement identity is always instance-scoped.
-#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug, Hash)]
-#[serde(deny_unknown_fields)]
-pub struct SceneInvocationKey {
-    pub instance_path: InstancePath,
-    pub module_instance_id: ModuleInstanceId,
-    pub state_slot_id: Uuid,
-    pub output_id: ModuleOutputId,
-}
-
 /// Uniform-only controls sampled from published parameters at a fixed-step
 /// boundary. Allocation-changing `capacity` is kept explicit for cache keys.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug, Hash)]
@@ -300,10 +284,15 @@ pub struct ParticleSceneParameters {
     pub forces: Vec<ParticleForce>,
     pub size_min: ordered_float::OrderedFloat<f32>,
     pub size_max: ordered_float::OrderedFloat<f32>,
-    pub color: Color,
 }
 
 impl ParticleSceneParameters {
+    pub fn target_step_for_time(time: MediaTime) -> Result<u64, String> {
+        let rate = RationalRate::new(PARTICLE_FIXED_STEP_HZ, 1)?;
+        let step = time.checked_frame_index(rate)?;
+        u64::try_from(step).map_err(|_| "Particle local time must be non-negative".to_string())
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         if self.capacity == 0 || self.capacity > PARTICLE_MAX_CAPACITY {
             return Err(format!(
@@ -382,43 +371,6 @@ impl ParticleSceneParameters {
     }
 }
 
-/// One deterministic scene evaluation request. Preview and export both create
-/// this exact command and pass it through the same renderer method.
-#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug, Hash)]
-#[serde(deny_unknown_fields)]
-pub struct ParticleSceneFrame {
-    pub invocation: SceneInvocationKey,
-    /// Stable identity of the authored emitter that owns the random stream.
-    /// Renderer branches keep separate mutable state slots while replaying the
-    /// same emissions when they share an emitter.
-    pub random_stream_id: uuid::Uuid,
-    pub executable_hash: [u8; 32],
-    pub target_step: u64,
-    pub logical_width: u32,
-    pub logical_height: u32,
-    pub parameters: ParticleSceneParameters,
-    pub point_program: Option<crate::model::point::PointRenderProgram>,
-}
-
-impl ParticleSceneFrame {
-    pub fn target_step_for_time(time: MediaTime) -> Result<u64, String> {
-        let rate = RationalRate::new(PARTICLE_FIXED_STEP_HZ, 1)?;
-        let step = time.checked_frame_index(rate)?;
-        u64::try_from(step).map_err(|_| "Particle local time must be non-negative".to_string())
-    }
-
-    pub fn validate(&self) -> Result<(), String> {
-        if self.logical_width == 0 || self.logical_height == 0 {
-            return Err("Particle render dimensions must be positive".to_string());
-        }
-        self.parameters.validate()?;
-        if let Some(program) = &self.point_program {
-            program.validate()?;
-        }
-        Ok(())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -448,18 +400,17 @@ mod tests {
             forces: Vec::new(),
             size_min: OrderedFloat(1.0),
             size_max: OrderedFloat(1.0),
-            color: Color::white(),
         }
     }
 
     #[test]
     fn exact_media_time_maps_to_fixed_step_without_float_rounding() {
         assert_eq!(
-            ParticleSceneFrame::target_step_for_time(MediaTime::new(1, 30).unwrap()).unwrap(),
+            ParticleSceneParameters::target_step_for_time(MediaTime::new(1, 30).unwrap()).unwrap(),
             4
         );
         assert_eq!(
-            ParticleSceneFrame::target_step_for_time(MediaTime::new(1, 120).unwrap()).unwrap(),
+            ParticleSceneParameters::target_step_for_time(MediaTime::new(1, 120).unwrap()).unwrap(),
             1
         );
     }

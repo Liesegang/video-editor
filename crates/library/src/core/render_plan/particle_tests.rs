@@ -16,7 +16,8 @@ use crate::model::authoring::{
 };
 use crate::model::authoring::{ModuleConnection, ModuleConnectionId};
 use crate::model::frame::entity::{FrameContent, FrameGroupKind, FrameItem};
-use crate::model::frame::particle::{ParticleEmitterShape, ParticleForce, ParticleSceneFrame};
+use crate::model::frame::particle::{ParticleEmitterShape, ParticleForce, ParticleSceneParameters};
+use crate::model::frame::point::{PointSceneFrame, PointSceneSource};
 use crate::model::node::{Node, NodeContent};
 use crate::model::project::property::{PropertyMap, PropertyValue};
 use crate::model::project::{IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT};
@@ -196,23 +197,41 @@ pub(super) fn particle_node_id(fixture: &ParticleFixture, catalog_id: &str) -> u
         .id
 }
 
-pub(super) fn particle_scenes(items: &[FrameItem]) -> Vec<&ParticleSceneFrame> {
+pub(super) fn point_scenes(items: &[FrameItem]) -> Vec<&PointSceneFrame> {
     let mut scenes = Vec::new();
     for item in items {
         match item {
             FrameItem::Object(object) => {
-                if let FrameContent::ParticleScene { scene, .. } = &object.content {
+                if let FrameContent::PointScene { scene, .. } = &object.content {
                     scenes.push(scene);
                 }
             }
-            FrameItem::Group(group) => scenes.extend(particle_scenes(&group.items)),
+            FrameItem::Group(group) => scenes.extend(point_scenes(&group.items)),
             FrameItem::Transition(transition) => {
-                scenes.extend(particle_scenes(std::slice::from_ref(&transition.from.item)));
-                scenes.extend(particle_scenes(std::slice::from_ref(&transition.to.item)));
+                scenes.extend(point_scenes(std::slice::from_ref(&transition.from.item)));
+                scenes.extend(point_scenes(std::slice::from_ref(&transition.to.item)));
             }
         }
     }
     scenes
+}
+
+pub(super) fn particle_scenes(items: &[FrameItem]) -> Vec<&PointSceneFrame> {
+    point_scenes(items)
+        .into_iter()
+        .filter(|scene| matches!(&scene.source, PointSceneSource::Particle { .. }))
+        .collect()
+}
+
+pub(super) fn particle_source(scene: &PointSceneFrame) -> (u64, &ParticleSceneParameters) {
+    let PointSceneSource::Particle {
+        target_step,
+        parameters,
+    } = &scene.source
+    else {
+        panic!("expected Particle source");
+    };
+    (*target_step, parameters)
 }
 
 #[test]
@@ -227,7 +246,7 @@ fn repeated_particle_items_share_compiled_definition_but_not_invocation_state_ke
             .all(|invocation| invocation.definition_id == fixture.definition_id)
     );
     let compiled = Arc::clone(&plan.module_definitions[&fixture.definition_id]);
-    assert_eq!(compiled.particle_renderers.len(), 1);
+    assert_eq!(compiled.point_renderers.len(), 1);
     assert!(compiled.outputs[&fixture.output_id].requires(RenderCapability::Gpu));
 
     let frame = evaluate_render_plan_frame(
@@ -261,7 +280,7 @@ fn evaluating_the_same_exact_time_produces_the_same_preview_export_command() {
     let preview_scene = particle_scenes(&preview.items)[0];
     let export_scene = particle_scenes(&export.items)[0];
     assert_eq!(preview_scene, export_scene);
-    assert_eq!(preview_scene.target_step, 292);
+    assert_eq!(particle_source(preview_scene).0, 292);
 }
 
 #[test]
@@ -405,14 +424,15 @@ fn authored_particle_clip_parameters_reach_the_scene_command() {
     let scenes = particle_scenes(&frame.items);
     assert_eq!(scenes.len(), 1);
     let scene = scenes[0];
-    assert_eq!(scene.target_step, 120);
-    assert_eq!(scene.parameters.emission_rate, OrderedFloat(360.0));
-    assert_eq!(scene.parameters.emitter_shape, ParticleEmitterShape::Sphere);
-    assert_eq!(scene.parameters.emitter_position, expected_emitter_position);
-    assert_eq!(scene.parameters.emitter_radius, OrderedFloat(84.0));
-    assert!(scene.parameters.emitter_surface_only);
+    let (target_step, parameters) = particle_source(scene);
+    assert_eq!(target_step, 120);
+    assert_eq!(parameters.emission_rate, OrderedFloat(360.0));
+    assert_eq!(parameters.emitter_shape, ParticleEmitterShape::Sphere);
+    assert_eq!(parameters.emitter_position, expected_emitter_position);
+    assert_eq!(parameters.emitter_radius, OrderedFloat(84.0));
+    assert!(parameters.emitter_surface_only);
     assert_eq!(
-        scene.parameters.forces,
+        parameters.forces,
         vec![
             ParticleForce::Gravity {
                 acceleration: expected_gravity,
@@ -429,7 +449,7 @@ fn authored_particle_clip_parameters_reach_the_scene_command() {
             },
         ]
     );
-    assert_eq!(scene.parameters.color, color);
+    assert_eq!(scene.color, color);
 }
 
 #[test]
@@ -494,8 +514,11 @@ fn implemented_particle_modifiers_are_optional_in_canonical_order() {
         .validate()
         .expect("model-valid reduced chain");
     let plan = RenderPlanCompiler::compile(&fixture.project).expect("compiled reduced chain");
-    let particle =
-        &plan.module_definitions[&fixture.definition_id].particle_renderers[&renderer_id];
+    let point_renderer =
+        &plan.module_definitions[&fixture.definition_id].point_renderers[&renderer_id];
+    let super::CompiledPointSource::Particle(particle) = &point_renderer.source else {
+        panic!("expected Particle Point source");
+    };
     assert_eq!(particle.shape_location_node_id, None);
     assert_eq!(
         particle
@@ -514,7 +537,8 @@ fn implemented_particle_modifiers_are_optional_in_canonical_order() {
         None,
     )
     .unwrap();
-    let parameters = &particle_scenes(&frame.items)[0].parameters;
+    let scene = particle_scenes(&frame.items)[0];
+    let (_, parameters) = particle_source(scene);
     assert_eq!(parameters.emitter_shape, ParticleEmitterShape::Point);
     assert_eq!(parameters.emitter_position, zero_vec3());
     assert_eq!(
@@ -578,7 +602,7 @@ fn particle_renderer_branches_own_distinct_runtime_state_slots() {
     definition.topology_revision += 1;
 
     let plan = RenderPlanCompiler::compile(&fixture.project).expect("compiled Particle branches");
-    let particles = &plan.module_definitions[&fixture.definition_id].particle_renderers;
+    let particles = &plan.module_definitions[&fixture.definition_id].point_renderers;
     assert_eq!(particles.len(), 2);
     assert_eq!(
         particles[&first_renderer_id].state_slot_id,
@@ -625,7 +649,7 @@ fn particle_on_a_dead_output_branch_does_not_require_gpu() {
 
     let plan = RenderPlanCompiler::compile(&fixture.project).expect("dead Particle branch");
     let compiled = &plan.module_definitions[&fixture.definition_id];
-    assert!(compiled.particle_renderers.is_empty());
+    assert!(compiled.point_renderers.is_empty());
     assert!(!compiled.outputs[&fixture.output_id].requires(RenderCapability::Gpu));
     let frame = evaluate_render_plan_frame(
         &fixture.project,
@@ -676,7 +700,7 @@ fn disabled_downstream_node_hides_an_incomplete_particle_branch() {
     let compiled = &plan.module_definitions[&fixture.definition_id];
     assert_eq!(compiled.nodes.len(), 1);
     assert!(compiled.nodes.contains_key(&blur_id));
-    assert!(compiled.particle_renderers.is_empty());
+    assert!(compiled.point_renderers.is_empty());
     assert!(!compiled.outputs[&fixture.output_id].requires(RenderCapability::Gpu));
     let frame = evaluate_render_plan_frame(&fixture.project, &plan, &plugins, 30, 1.0, None)
         .expect("disabled consumer evaluates to no image");
@@ -705,7 +729,7 @@ fn disabling_any_particle_stage_compiles_to_no_image() {
         let plan = RenderPlanCompiler::compile(&fixture.project)
             .unwrap_or_else(|error| panic!("disabled {catalog_id} must compile: {error}"));
         let compiled = &plan.module_definitions[&fixture.definition_id];
-        assert!(compiled.particle_renderers.is_empty(), "{catalog_id}");
+        assert!(compiled.point_renderers.is_empty(), "{catalog_id}");
         assert!(
             !compiled.outputs[&fixture.output_id].requires(RenderCapability::Gpu),
             "{catalog_id}"
@@ -788,23 +812,22 @@ fn bypassed_particle_modifiers_use_neutral_stage_values() {
         )
         .unwrap_or_else(|error| panic!("bypassed {catalog_id} must evaluate: {error}"));
         let scene = particle_scenes(&frame.items)[0];
+        let (_, parameters) = particle_source(scene);
         match stage {
             Stage::Initialize => {
-                assert_eq!(scene.parameters.velocity_min, zero_vec3());
-                assert_eq!(scene.parameters.velocity_max, zero_vec3());
-                assert_eq!(scene.parameters.size_min, OrderedFloat(1.0));
-                assert_eq!(scene.parameters.size_max, OrderedFloat(1.0));
+                assert_eq!(parameters.velocity_min, zero_vec3());
+                assert_eq!(parameters.velocity_max, zero_vec3());
+                assert_eq!(parameters.size_min, OrderedFloat(1.0));
+                assert_eq!(parameters.size_max, OrderedFloat(1.0));
             }
             Stage::Gravity => assert!(
-                scene
-                    .parameters
+                parameters
                     .forces
                     .iter()
                     .all(|force| !matches!(force, ParticleForce::Gravity { .. }))
             ),
             Stage::Drag => assert!(
-                scene
-                    .parameters
+                parameters
                     .forces
                     .iter()
                     .all(|force| !matches!(force, ParticleForce::Drag { .. }))
@@ -846,7 +869,7 @@ fn particle_sprite_flows_through_an_effect_before_output() {
     let plan = RenderPlanCompiler::compile(&fixture.project).expect("compiled Particle effect");
     assert_eq!(
         plan.module_definitions[&fixture.definition_id]
-            .particle_renderers
+            .point_renderers
             .len(),
         1
     );
@@ -889,7 +912,7 @@ fn bypassed_downstream_effect_preserves_particle_reachability() {
 
     let plan = RenderPlanCompiler::compile(&fixture.project).expect("bypassed Particle effect");
     let compiled = &plan.module_definitions[&fixture.definition_id];
-    assert_eq!(compiled.particle_renderers.len(), 1);
+    assert_eq!(compiled.point_renderers.len(), 1);
     assert!(compiled.outputs[&fixture.output_id].requires(RenderCapability::Gpu));
     let frame = evaluate_render_plan_frame(&fixture.project, &plan, &plugins, 30, 1.0, None)
         .expect("bypassed effect must pass through its Image input");

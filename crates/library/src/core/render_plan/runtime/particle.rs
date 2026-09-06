@@ -2,23 +2,21 @@
 
 use ordered_float::OrderedFloat;
 
-use super::frame_values::{required_color, required_number, required_string, transparent};
-use super::*;
-use crate::core::render_plan::CompiledParticleDefinition;
-use crate::model::authoring::ModuleOutputId;
-use crate::model::frame::particle::{
-    ParticleEmitterShape, ParticleForce, ParticleSceneFrame, ParticleSceneParameters,
-    SceneInvocationKey,
+use super::frame_values::{
+    finite_f32, required_number, required_string, required_u32, required_vec3,
 };
+use super::*;
+use crate::core::render_plan::CompiledParticleSource;
+use crate::model::frame::particle::{ParticleEmitterShape, ParticleForce, ParticleSceneParameters};
+use crate::model::frame::point::PointSceneSource;
 use crate::model::node::ParticleNodeRole;
 use crate::model::property::Vec3;
 
 impl ModuleImageRuntime<'_> {
-    pub(super) fn evaluate_particle_renderer(
+    pub(super) fn sample_particle_source(
         &mut self,
-        output_id: ModuleOutputId,
-        particle: &CompiledParticleDefinition,
-    ) -> Result<FrameItem, LibraryError> {
+        particle: &CompiledParticleSource,
+    ) -> Result<PointSceneSource, LibraryError> {
         let emitter = self.particle_node_values(particle.emitter_node_id)?;
         let initialize = particle
             .initialize_node_id
@@ -36,31 +34,8 @@ impl ModuleImageRuntime<'_> {
                     .and_then(|values| particle_force(force.role, &values))
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let renderer_node = self.particle_node(particle.renderer_node_id)?;
-        let point_program = particle
-            .point_program
-            .as_ref()
-            .map(|program| self.sample_point_program(program))
-            .transpose()?;
-        let color = if point_program.is_some() {
-            // The Point program owns per-point color. Never send a varying
-            // branch through the ordinary frame-uniform property evaluator.
-            crate::model::frame::color::Color::white()
-        } else {
-            required_color(
-                &self.node_values(&renderer_node)?,
-                "color",
-                "Sprite Renderer",
-            )?
-        };
         let capacity = required_u32(&emitter, "capacity", "Particle Emitter")?;
         let seed = required_u32(&emitter, "seed", "Particle Emitter")?;
-        let logical_width = u32::try_from(self.width).map_err(|_| {
-            LibraryError::Validation("Particle canvas width exceeds GPU limits".to_string())
-        })?;
-        let logical_height = u32::try_from(self.height).map_err(|_| {
-            LibraryError::Validation("Particle canvas height exceeds GPU limits".to_string())
-        })?;
         let parameters = ParticleSceneParameters {
             capacity,
             emission_rate: finite_f32(
@@ -125,53 +100,12 @@ impl ModuleImageRuntime<'_> {
                 1.0,
                 "maximum size",
             )?,
-            color,
         };
-        let scene = ParticleSceneFrame {
-            invocation: SceneInvocationKey {
-                instance_path: self.instance_path.clone(),
-                module_instance_id: self.invocation.instance_id,
-                state_slot_id: particle.state_slot_id,
-                output_id,
-            },
-            random_stream_id: particle.emitter_node_id,
-            executable_hash: self.definition.fingerprint,
-            target_step: ParticleSceneFrame::target_step_for_time(self.local_time)
+        Ok(PointSceneSource::Particle {
+            target_step: ParticleSceneParameters::target_step_for_time(self.local_time)
                 .map_err(LibraryError::Validation)?,
-            logical_width,
-            logical_height,
             parameters,
-            point_program,
-        };
-        scene.validate().map_err(LibraryError::Validation)?;
-        let object = FrameItem::Object(FrameObject {
-            source_node_id: particle.renderer_node_id,
-            spatial_transform_node_id: None,
-            spatial_transform: Box::default(),
-            content_bounds: Some(FrameBounds::new(
-                0.0,
-                0.0,
-                logical_width as f32,
-                logical_height as f32,
-            )),
-            content: FrameContent::ParticleScene {
-                scene,
-                effects: Vec::new(),
-                transform: Transform::default(),
-            },
-        });
-        Ok(FrameItem::Group(FrameGroup {
-            source_id: renderer_node.id,
-            kind: FrameGroupKind::Node,
-            width: self.width,
-            height: self.height,
-            background_color: transparent(),
-            transform: Transform::default(),
-            blend_mode: renderer_node.blend_mode,
-            effect_time: OrderedFloat(self.local_time.to_seconds_f64()),
-            effects: Vec::new(),
-            items: vec![object],
-        }))
+        })
     }
 
     fn particle_node_values(
@@ -300,45 +234,4 @@ fn required_f32(
     label: &str,
 ) -> Result<OrderedFloat<f32>, LibraryError> {
     finite_f32(required_number(values, key, owner)?, label)
-}
-
-fn finite_f32(value: f64, label: &str) -> Result<OrderedFloat<f32>, LibraryError> {
-    let value = value as f32;
-    if value.is_finite() {
-        Ok(OrderedFloat(value))
-    } else {
-        Err(LibraryError::Validation(format!(
-            "Particle {label} must fit a finite GPU float"
-        )))
-    }
-}
-
-fn required_u32(
-    values: &HashMap<String, PropertyValue>,
-    key: &str,
-    owner: &str,
-) -> Result<u32, LibraryError> {
-    let value = match values.get(key) {
-        Some(PropertyValue::Integer(value)) => *value,
-        _ => {
-            return Err(frame_values::type_error(
-                &format!("{owner} {key}"),
-                "Integer",
-            ));
-        }
-    };
-    u32::try_from(value).map_err(|_| {
-        LibraryError::Validation(format!("{owner} {key} must fit an unsigned 32-bit value"))
-    })
-}
-
-fn required_vec3(
-    values: &HashMap<String, PropertyValue>,
-    key: &str,
-    owner: &str,
-) -> Result<Vec3, LibraryError> {
-    match values.get(key) {
-        Some(PropertyValue::Vec3(value)) => Ok(*value),
-        _ => Err(frame_values::type_error(&format!("{owner} {key}"), "Vec3")),
-    }
 }

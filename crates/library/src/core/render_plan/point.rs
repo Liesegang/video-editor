@@ -17,7 +17,9 @@ use crate::model::point::{
 use crate::model::project::NUMBER_RESULT_OUTPUT_PORT;
 use crate::model::property::PropertyValue;
 
-use super::{CompiledPointInstruction, CompiledPointProgram};
+use super::{
+    CompiledPointInstruction, CompiledPointProgram, CompiledPointRenderer, CompiledPointSource,
+};
 
 const POINT_AGE_OUTPUT_PORT: &str = "age";
 const POINT_NORMALIZED_AGE_OUTPUT_PORT: &str = "normalized_age";
@@ -26,12 +28,92 @@ const SPRITE_COLOR_INPUT_PORT: &str = "color";
 
 /// Point stream selected by one Sprite endpoint before Particle stage
 /// recognition. Stores are ordered upstream-to-downstream.
-pub(super) struct PointStreamTrace {
-    pub particle_source: ModulePortAddress,
+struct PointStreamTrace {
+    pub terminal_source: ModulePortAddress,
     stores: Vec<uuid::Uuid>,
 }
 
-pub(super) fn trace_point_stream(
+#[derive(Clone, Copy)]
+struct PointSourceCapabilities {
+    age: bool,
+}
+
+struct PointSourceCompilation {
+    source: CompiledPointSource,
+    lineage: HashSet<ModulePortAddress>,
+    capabilities: PointSourceCapabilities,
+}
+
+pub(super) fn compile_point_renderers(
+    definition: &ModuleDefinition,
+    active_nodes: &HashSet<uuid::Uuid>,
+) -> Result<HashMap<uuid::Uuid, CompiledPointRenderer>, String> {
+    validate_point_field_consumers(definition, active_nodes)?;
+    let mut compiled = HashMap::new();
+    let mut candidate_ids = active_nodes.iter().copied().collect::<Vec<_>>();
+    candidate_ids.sort_unstable();
+    for renderer_node_id in candidate_ids {
+        let Some(renderer) = definition.graph.nodes.get(&renderer_node_id) else {
+            continue;
+        };
+        if !particle_sprite(renderer) || !renderer.enabled || renderer.bypassed {
+            continue;
+        }
+        let Some(trace) = trace_point_stream(definition, renderer_node_id)? else {
+            continue;
+        };
+        let Some(source) = compile_point_source(definition, &trace.terminal_source)? else {
+            continue;
+        };
+        let point_program = compile_point_program(
+            definition,
+            renderer_node_id,
+            &trace,
+            &source.lineage,
+            source.capabilities,
+        )?;
+        compiled.insert(
+            renderer_node_id,
+            CompiledPointRenderer {
+                source: source.source,
+                point_program,
+                renderer_node_id,
+                // Each renderer branch owns independent derived GPU resources.
+                state_slot_id: renderer_node_id,
+            },
+        );
+    }
+    Ok(compiled)
+}
+
+fn compile_point_source(
+    definition: &ModuleDefinition,
+    terminal: &ModulePortAddress,
+) -> Result<Option<PointSourceCompilation>, String> {
+    let Some(node) = definition.graph.nodes.get(&terminal.node_id) else {
+        return Ok(None);
+    };
+    if point_role(node) == Some(PointNodeRole::Grid) {
+        if terminal.port != POINT_SOURCE_PORT || !node.enabled || node.bypassed {
+            return Ok(None);
+        }
+        return Ok(Some(PointSourceCompilation {
+            source: CompiledPointSource::Grid { node_id: node.id },
+            lineage: HashSet::from([terminal.clone()]),
+            capabilities: PointSourceCapabilities { age: false },
+        }));
+    }
+    let Some(particle) = super::particle::compile_particle_source(definition, terminal)? else {
+        return Ok(None);
+    };
+    Ok(Some(PointSourceCompilation {
+        source: CompiledPointSource::Particle(particle.source),
+        lineage: particle.lineage,
+        capabilities: PointSourceCapabilities { age: true },
+    }))
+}
+
+fn trace_point_stream(
     definition: &ModuleDefinition,
     renderer_node_id: uuid::Uuid,
 ) -> Result<Option<PointStreamTrace>, String> {
@@ -61,21 +143,19 @@ pub(super) fn trace_point_stream(
         };
         source = upstream;
     }
-    if source.port != PARTICLE_SYSTEM_PORT {
-        return Ok(None);
-    }
     stores.reverse();
     Ok(Some(PointStreamTrace {
-        particle_source: source,
+        terminal_source: source,
         stores,
     }))
 }
 
-pub(super) fn compile_point_program(
+fn compile_point_program(
     definition: &ModuleDefinition,
     renderer_node_id: uuid::Uuid,
     trace: &PointStreamTrace,
-    particle_lineage: &HashSet<ModulePortAddress>,
+    source_lineage: &HashSet<ModulePortAddress>,
+    capabilities: PointSourceCapabilities,
 ) -> Result<Option<CompiledPointProgram>, String> {
     let mut definitions = Vec::with_capacity(trace.stores.len());
     for store_id in &trace.stores {
@@ -92,7 +172,7 @@ pub(super) fn compile_point_program(
     }
     let schema = PointAttributeSchema::new(definitions)?;
     let mut builder = PointProgramBuilder::new(definition, schema);
-    let mut allowed_streams = particle_lineage.clone();
+    let mut allowed_streams = source_lineage.clone();
 
     for (attribute, store_id) in trace.stores.iter().enumerate() {
         let point_input = address(*store_id, POINT_SOURCE_PORT);
@@ -107,6 +187,7 @@ pub(super) fn compile_point_program(
         let context = FieldContext {
             allowed_streams: &allowed_streams,
             available_attributes: attribute,
+            capabilities,
         };
         let value = builder.compile_input(
             &address(*store_id, POINT_ATTRIBUTE_VALUE_PORT),
@@ -131,6 +212,7 @@ pub(super) fn compile_point_program(
     let context = FieldContext {
         allowed_streams: &allowed_streams,
         available_attributes: trace.stores.len(),
+        capabilities,
     };
     let color = builder.compile_input(&color_target, PointAttributeElementType::Color, &context)?;
     let program = CompiledPointProgram {
@@ -172,6 +254,7 @@ pub(super) fn validate_point_field_consumers(
                     connection.to.port == POINT_ATTRIBUTE_VALUE_PORT
                 }
                 Some(PointNodeRole::Info) => false,
+                Some(PointNodeRole::Grid) => false,
                 None => particle_sprite(target) && connection.to.port == SPRITE_COLOR_INPUT_PORT,
             },
             _ => false,
@@ -192,6 +275,7 @@ pub(super) fn validate_point_field_consumers(
 struct FieldContext<'a> {
     allowed_streams: &'a HashSet<ModulePortAddress>,
     available_attributes: usize,
+    capabilities: PointSourceCapabilities,
 }
 
 #[derive(Clone, Default)]
@@ -337,7 +421,9 @@ impl<'a> PointProgramBuilder<'a> {
                 Some(PointNodeRole::StoreNumberAttribute) => {
                     self.compile_attribute_load(&node, source, context)?
                 }
-                None => return Err(unsupported_field_node(&node, source)),
+                Some(PointNodeRole::Grid) | None => {
+                    return Err(unsupported_field_node(&node, source));
+                }
             },
             NodeContent::Value(operation) if source.port == NUMBER_RESULT_OUTPUT_PORT => {
                 let left = self.compile_input(
@@ -422,8 +508,16 @@ impl<'a> PointProgramBuilder<'a> {
         dependencies.point_streams.insert(point_stream);
         dependencies.validate(context)?;
         let instruction = match source.port.as_str() {
-            POINT_AGE_OUTPUT_PORT => CompiledPointInstruction::Age,
-            POINT_NORMALIZED_AGE_OUTPUT_PORT => CompiledPointInstruction::NormalizedAge,
+            POINT_AGE_OUTPUT_PORT if context.capabilities.age => CompiledPointInstruction::Age,
+            POINT_NORMALIZED_AGE_OUTPUT_PORT if context.capabilities.age => {
+                CompiledPointInstruction::NormalizedAge
+            }
+            POINT_AGE_OUTPUT_PORT | POINT_NORMALIZED_AGE_OUTPUT_PORT => {
+                return Err(format!(
+                    "Point Info output '{}' requires a Particle source with lifetime data",
+                    source.port
+                ));
+            }
             POINT_RANDOM_OUTPUT_PORT => CompiledPointInstruction::Random { channel: 0 },
             _ => {
                 return Err(format!(
@@ -543,6 +637,7 @@ impl<'a> PointDependencyResolver<'a> {
                 POINT_AGE_OUTPUT_PORT | POINT_NORMALIZED_AGE_OUTPUT_PORT | POINT_RANDOM_OUTPUT_PORT
             ),
             PointNodeRole::StoreNumberAttribute => source.port == POINT_ATTRIBUTE_OUTPUT_PORT,
+            PointNodeRole::Grid => false,
         }) {
             return true;
         }

@@ -594,13 +594,12 @@ pub(super) fn compile_module(
             right.id,
         ))
     });
-    let particle_renderers =
-        super::particle::compile_particle_renderers(definition, &active_nodes)?;
+    let point_renderers = super::point::compile_point_renderers(definition, &active_nodes)?;
     for output in outputs.values_mut() {
         if output
             .evaluation_order
             .iter()
-            .any(|node_id| particle_renderers.contains_key(node_id))
+            .any(|node_id| point_renderers.contains_key(node_id))
         {
             output.required_capabilities.insert(RenderCapability::Gpu);
         }
@@ -628,7 +627,7 @@ pub(super) fn compile_module(
             .map(|input| (input.id, input))
             .collect(),
         outputs,
-        particle_renderers,
+        point_renderers,
         signals: definition
             .interface
             .signals

@@ -1,12 +1,11 @@
+use super::point_support::{test_gradient, test_random};
 use super::*;
 use crate::model::frame::particle::ParticleForce;
 use crate::model::point::{
     NumericBinaryOperation, PointAttributeDefinition, PointAttributeElementType, PointAttributeId,
     PointAttributeSchema, PointInstruction, PointRenderProgram,
 };
-use crate::model::property::{
-    ColorValue, GradientGeometry, GradientSpread, GradientStop, GradientValue, PropertyValue, Vec2,
-};
+use crate::model::property::{GradientSpread, PropertyValue};
 
 #[test]
 #[ignore = "requires an idle desktop OpenGL 4.3 GPU"]
@@ -23,10 +22,10 @@ fn gpu_particle_force_stack_changes_motion_and_replays_exactly() {
         "force QA requires a real GPU context"
     );
     let mut baseline = particle_scene(180);
-    baseline.parameters.velocity_min = particle_vec3(-15.0, -25.0, -5.0);
-    baseline.parameters.velocity_max = particle_vec3(15.0, 25.0, 5.0);
-    baseline.parameters.forces.clear();
-    let still = render_particle_test_scene(&mut renderer, &baseline).unwrap();
+    particle_parameters_mut(&mut baseline).velocity_min = particle_vec3(-15.0, -25.0, -5.0);
+    particle_parameters_mut(&mut baseline).velocity_max = particle_vec3(15.0, 25.0, 5.0);
+    particle_parameters_mut(&mut baseline).forces.clear();
+    let still = render_point_test_scene(&mut renderer, &baseline).unwrap();
     assert!(still.data.chunks_exact(4).any(|rgba| rgba[3] > 0));
     let turbulence = |strength, frequency, seed| ParticleForce::Turbulence {
         strength: OrderedFloat(strength),
@@ -36,32 +35,34 @@ fn gpu_particle_force_stack_changes_motion_and_replays_exactly() {
         seed,
     };
     let mut neutral = baseline.clone();
-    neutral.parameters.forces.push(turbulence(0.0, 0.02, 7));
+    particle_parameters_mut(&mut neutral)
+        .forces
+        .push(turbulence(0.0, 0.02, 7));
     assert_eq!(
-        render_particle_test_scene(&mut renderer, &neutral)
+        render_point_test_scene(&mut renderer, &neutral)
             .unwrap()
             .data,
         still.data,
         "a neutral factory force must not alter existing motion"
     );
     let mut swirling = baseline.clone();
-    swirling.parameters.forces = vec![turbulence(80.0, 0.02, 7)];
-    let first = render_particle_test_scene(&mut renderer, &swirling).unwrap();
+    particle_parameters_mut(&mut swirling).forces = vec![turbulence(80.0, 0.02, 7)];
+    let first = render_point_test_scene(&mut renderer, &swirling).unwrap();
     assert_ne!(
         first.data, still.data,
         "turbulence must visibly affect motion"
     );
     assert_eq!(
-        render_particle_test_scene(&mut renderer, &swirling)
+        render_point_test_scene(&mut renderer, &swirling)
             .unwrap()
             .data,
         first.data
     );
     let mut earlier = swirling.clone();
-    earlier.target_step = 70;
-    render_particle_test_scene(&mut renderer, &earlier).unwrap();
+    set_particle_step(&mut earlier, 70);
+    render_point_test_scene(&mut renderer, &earlier).unwrap();
     assert_eq!(
-        render_particle_test_scene(&mut renderer, &swirling)
+        render_point_test_scene(&mut renderer, &swirling)
             .unwrap()
             .data,
         first.data,
@@ -69,14 +70,14 @@ fn gpu_particle_force_stack_changes_motion_and_replays_exactly() {
     );
     for changed_force in [turbulence(80.0, 0.04, 7), turbulence(80.0, 0.02, 99)] {
         let mut changed = swirling.clone();
-        changed.parameters.forces = vec![changed_force];
-        let changed_image = render_particle_test_scene(&mut renderer, &changed).unwrap();
+        particle_parameters_mut(&mut changed).forces = vec![changed_force];
+        let changed_image = render_point_test_scene(&mut renderer, &changed).unwrap();
         assert_ne!(
             changed_image.data, first.data,
             "field edits must invalidate simulation history"
         );
         assert_eq!(
-            render_particle_test_scene(&mut renderer, &swirling)
+            render_point_test_scene(&mut renderer, &swirling)
                 .unwrap()
                 .data,
             first.data
@@ -84,9 +85,7 @@ fn gpu_particle_force_stack_changes_motion_and_replays_exactly() {
     }
     let mut cold = SkiaRenderer::new(256, 144, transparent, true, None, None).unwrap();
     assert_eq!(
-        render_particle_test_scene(&mut cold, &swirling)
-            .unwrap()
-            .data,
+        render_point_test_scene(&mut cold, &swirling).unwrap().data,
         first.data,
         "an independent export-style session must reproduce the same simulation"
     );
@@ -107,10 +106,10 @@ fn gpu_particle_vortex_point_and_force_order_are_executable() {
         "force QA requires a real GPU context"
     );
     let mut baseline = particle_scene(180);
-    baseline.parameters.velocity_min = particle_vec3(-15.0, -25.0, -5.0);
-    baseline.parameters.velocity_max = particle_vec3(15.0, 25.0, 5.0);
-    baseline.parameters.forces.clear();
-    let reference = render_particle_test_scene(&mut renderer, &baseline).unwrap();
+    particle_parameters_mut(&mut baseline).velocity_min = particle_vec3(-15.0, -25.0, -5.0);
+    particle_parameters_mut(&mut baseline).velocity_max = particle_vec3(15.0, 25.0, 5.0);
+    particle_parameters_mut(&mut baseline).forces.clear();
+    let reference = render_point_test_scene(&mut renderer, &baseline).unwrap();
     for force in [
         ParticleForce::Vortex {
             axis: particle_vec3(0.0, 0.0, 1.0),
@@ -131,13 +130,13 @@ fn gpu_particle_vortex_point_and_force_order_are_executable() {
         },
     ] {
         let mut scene = baseline.clone();
-        scene.parameters.forces = vec![force];
-        let image = render_particle_test_scene(&mut renderer, &scene).unwrap();
+        particle_parameters_mut(&mut scene).forces = vec![force];
+        let image = render_point_test_scene(&mut renderer, &scene).unwrap();
         assert!(image.data.chunks_exact(4).any(|rgba| rgba[3] > 0));
         assert_ne!(image.data, reference.data);
     }
     let mut ordered = baseline.clone();
-    ordered.parameters.forces = vec![
+    particle_parameters_mut(&mut ordered).forces = vec![
         ParticleForce::Gravity {
             acceleration: particle_vec3(35.0, 60.0, 0.0),
         },
@@ -145,10 +144,10 @@ fn gpu_particle_vortex_point_and_force_order_are_executable() {
             coefficient: OrderedFloat(3.0),
         },
     ];
-    let first = render_particle_test_scene(&mut renderer, &ordered).unwrap();
-    ordered.parameters.forces.reverse();
+    let first = render_point_test_scene(&mut renderer, &ordered).unwrap();
+    particle_parameters_mut(&mut ordered).forces.reverse();
     assert_ne!(
-        render_particle_test_scene(&mut renderer, &ordered)
+        render_point_test_scene(&mut renderer, &ordered)
             .unwrap()
             .data,
         first.data,
@@ -219,7 +218,7 @@ fn gpu_point_fields_store_math_random_ramp_and_checkpoint_exactly() {
     let mut scene = particle_scene(180);
     scene.executable_hash = [81; 32];
     scene.point_program = Some(program);
-    let first = render_particle_test_scene(&mut renderer, &scene).unwrap();
+    let first = render_point_test_scene(&mut renderer, &scene).unwrap();
     let first_fields = renderer
         .scene_runtime
         .as_ref()
@@ -242,7 +241,7 @@ fn gpu_point_fields_store_math_random_ramp_and_checkpoint_exactly() {
     );
     let field_seed = crate::rendering::scene_runtime::invocation_seed(&scene);
     for point in &first_fields {
-        let normalized_age = (point.age / point.lifetime).clamp(0.0, 1.0);
+        let normalized_age = (point.age.unwrap() / point.lifetime.unwrap()).clamp(0.0, 1.0);
         assert!((point.attributes[0] - normalized_age).abs() <= 2.0e-6);
         let factor = point.attributes[0] + test_random(field_seed, point.serial, 1) * 0.25;
         let expected = crate::color_management::sample_gradient_at(&ramp, f64::from(factor))
@@ -258,12 +257,10 @@ fn gpu_point_fields_store_math_random_ramp_and_checkpoint_exactly() {
         "per-point program must produce varied colors"
     );
     let mut later = scene.clone();
-    later.target_step = 480;
-    render_particle_test_scene(&mut renderer, &later).unwrap();
+    set_particle_step(&mut later, 480);
+    render_point_test_scene(&mut renderer, &later).unwrap();
     assert_eq!(
-        render_particle_test_scene(&mut renderer, &scene)
-            .unwrap()
-            .data,
+        render_point_test_scene(&mut renderer, &scene).unwrap().data,
         first.data
     );
     assert_eq!(
@@ -278,44 +275,9 @@ fn gpu_point_fields_store_math_random_ramp_and_checkpoint_exactly() {
     );
     let mut cold = SkiaRenderer::new(256, 144, transparent, true, None, None).unwrap();
     assert_eq!(
-        render_particle_test_scene(&mut cold, &scene).unwrap().data,
+        render_point_test_scene(&mut cold, &scene).unwrap().data,
         first.data
     );
-}
-
-fn test_gradient(spread: GradientSpread, stops: &[(f64, Color)]) -> GradientValue {
-    GradientValue::new(
-        GradientGeometry::Linear {
-            start: Vec2 {
-                x: OrderedFloat(0.0),
-                y: OrderedFloat(0.5),
-            },
-            end: Vec2 {
-                x: OrderedFloat(1.0),
-                y: OrderedFloat(0.5),
-            },
-        },
-        spread,
-        stops
-            .iter()
-            .map(|(offset, color)| {
-                GradientStop::new(*offset, ColorValue::from_straight_srgba8(color)).unwrap()
-            })
-            .collect(),
-    )
-    .unwrap()
-}
-
-fn test_random(seed: u32, serial: u32, channel: u32) -> f32 {
-    fn hash(mut value: u32) -> u32 {
-        value ^= value >> 16;
-        value = value.wrapping_mul(0x7feb_352d);
-        value ^= value >> 15;
-        value = value.wrapping_mul(0x846c_a68b);
-        value ^ (value >> 16)
-    }
-    let bits = hash(seed ^ hash(serial.wrapping_add(channel.wrapping_mul(0x9e37_79b9))));
-    (bits & 0x00ff_ffff) as f32 / 16_777_216.0
 }
 
 /// Exercises the transaction used when Preview adopts a newly shared WGL
@@ -339,7 +301,7 @@ fn gpu_render_target_replacement_restores_and_activates_the_owner_context() {
         panic!("GPU renderer did not leave its WGL context current");
     };
     let scene = particle_scene(240);
-    let first = match render_particle_test_scene(&mut renderer, &scene) {
+    let first = match render_point_test_scene(&mut renderer, &scene) {
         Ok(image) => image,
         Err(diagnostic) if diagnostic.contains("GPU Particle unavailable") => {
             eprintln!("skipping unsupported device: {diagnostic}");
@@ -359,7 +321,7 @@ fn gpu_render_target_replacement_restores_and_activates_the_owner_context() {
     });
     assert!(rejected.is_err());
     assert_eq!(get_current_context_handle(), Some(previous_handle));
-    let restored = render_particle_test_scene(&mut renderer, &scene)
+    let restored = render_point_test_scene(&mut renderer, &scene)
         .expect("old SceneRuntime must remain usable after replacement rollback");
     assert_eq!(restored.data, first.data);
 
@@ -390,7 +352,7 @@ fn gpu_render_target_replacement_restores_and_activates_the_owner_context() {
         )
         .expect("GPU target replacement");
     assert_eq!(get_current_context_handle(), Some(incoming_handle));
-    let replaced = render_particle_test_scene(&mut renderer, &scene)
+    let replaced = render_point_test_scene(&mut renderer, &scene)
         .expect("new SceneRuntime must use the replacement context");
     assert_eq!(replaced.data, first.data);
 }

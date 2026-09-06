@@ -595,6 +595,154 @@ fn point_catalog_uses_node_identity_for_named_number_attributes() {
 }
 
 #[test]
+fn point_grid_catalog_exposes_bounded_lattice_properties_and_point_output() {
+    use crate::model::frame::point::{POINT_GRID_MAX_AXIS, POINT_GRID_MAX_SIZE};
+    use crate::model::property::Vec3;
+
+    let descriptor = native_node_descriptor("native.point.grid").unwrap();
+    assert!(descriptor.supports_general_module_creation());
+    assert_eq!(descriptor.factory(), NativeNodeFactory::NativeOperation);
+    assert_eq!(descriptor.qa_id(), "node_editor.menu.create.point_grid");
+    let input_keys = descriptor
+        .ports()
+        .iter()
+        .filter(|port| port.direction == PortDirection::Input)
+        .map(|port| port.key.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        input_keys,
+        [
+            "count_x", "count_y", "count_z", "spacing", "center", "size", "seed"
+        ]
+    );
+    let outputs = descriptor
+        .ports()
+        .iter()
+        .filter(|port| port.direction == PortDirection::Output)
+        .collect::<Vec<_>>();
+    assert_eq!(outputs.len(), 1);
+    assert_eq!(outputs[0].key, POINT_SOURCE_PORT);
+    assert_eq!(outputs[0].data_type, PortDataType::PointSource);
+    let input = |key| {
+        descriptor
+            .ports()
+            .iter()
+            .find(|port| port.direction == PortDirection::Input && port.key == key)
+            .unwrap()
+    };
+    for key in ["count_x", "count_y", "count_z", "seed"] {
+        assert_eq!(input(key).data_type, PortDataType::Integer);
+    }
+    for key in ["spacing", "center"] {
+        assert_eq!(input(key).data_type, PortDataType::Vec3);
+    }
+    assert_eq!(input("size").data_type, PortDataType::Number);
+
+    let node = Node::new_catalog_node(descriptor.catalog_id()).unwrap();
+    let value = |key| {
+        node.properties()
+            .get(key)
+            .unwrap()
+            .get_static_value()
+            .unwrap()
+    };
+    assert_eq!(value("count_x"), &PropertyValue::Integer(8));
+    assert_eq!(value("count_y"), &PropertyValue::Integer(8));
+    assert_eq!(value("count_z"), &PropertyValue::Integer(1));
+    assert_eq!(
+        value("spacing"),
+        &PropertyValue::Vec3(Vec3 {
+            x: OrderedFloat(24.0),
+            y: OrderedFloat(24.0),
+            z: OrderedFloat(24.0),
+        })
+    );
+    assert_eq!(
+        value("center"),
+        &PropertyValue::Vec3(Vec3 {
+            x: OrderedFloat(0.0),
+            y: OrderedFloat(0.0),
+            z: OrderedFloat(0.0),
+        })
+    );
+    assert_eq!(value("size"), &PropertyValue::Number(OrderedFloat(8.0)));
+    assert_eq!(value("seed"), &PropertyValue::Integer(1));
+    descriptor
+        .validate_native_properties(node.properties())
+        .unwrap();
+    let definitions = descriptor.property_definitions();
+    let definition = |key| {
+        definitions
+            .iter()
+            .find(|definition| definition.name() == key)
+            .unwrap()
+    };
+    assert!(matches!(
+        definition("count_x").ui_type(),
+        PropertyUiType::Integer { min: 1, max, min_hard_limit: true, max_hard_limit: true, .. }
+            if *max == i64::from(POINT_GRID_MAX_AXIS)
+    ));
+    assert!(matches!(
+        definition("size").ui_type(),
+        PropertyUiType::Float { min, max, min_hard_limit: true, max_hard_limit: true, .. }
+            if *min > 0.0 && *max == f64::from(POINT_GRID_MAX_SIZE)
+    ));
+
+    let mut negative_spacing = node.properties().clone();
+    negative_spacing.set(
+        "spacing".to_string(),
+        Property::constant(PropertyValue::Vec3(Vec3 {
+            x: OrderedFloat(-24.0),
+            y: OrderedFloat(0.0),
+            z: OrderedFloat(24.0),
+        })),
+    );
+    descriptor
+        .validate_native_properties(&negative_spacing)
+        .unwrap();
+
+    let mut invalid_count = node.properties().clone();
+    invalid_count.set(
+        "count_x".to_string(),
+        Property::constant(PropertyValue::Integer(0)),
+    );
+    assert!(
+        descriptor
+            .validate_native_properties(&invalid_count)
+            .unwrap_err()
+            .contains("cannot be less than 1")
+    );
+
+    let mut invalid_spacing = node.properties().clone();
+    invalid_spacing.set(
+        "spacing".to_string(),
+        Property::constant(PropertyValue::Vec3(Vec3 {
+            x: OrderedFloat(f64::NAN),
+            y: OrderedFloat(-24.0),
+            z: OrderedFloat(24.0),
+        })),
+    );
+    assert!(
+        descriptor
+            .validate_native_properties(&invalid_spacing)
+            .unwrap_err()
+            .contains("must be finite")
+    );
+
+    let mut invalid_size = node.properties().clone();
+    invalid_size.set(
+        "size".to_string(),
+        Property::constant(PropertyValue::Number(OrderedFloat(0.0))),
+    );
+    assert!(
+        descriptor
+            .validate_native_properties(&invalid_size)
+            .unwrap_err()
+            .contains("cannot be less than")
+    );
+}
+
+#[test]
 fn native_particle_descriptor_rejects_schema_and_typed_value_drift() {
     let descriptor = native_node_descriptor("native.particle.emitter").unwrap();
     let emitter = Node::new_catalog_node(descriptor.catalog_id()).unwrap();

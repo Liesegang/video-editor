@@ -1,8 +1,10 @@
 use ordered_float::OrderedFloat;
 
 use super::*;
-use crate::model::frame::color::Color;
 use crate::model::frame::particle::{ParticleEmitterShape, ParticleForce};
+use crate::model::point::{PointAttributeSchema, PointInstruction, PointRenderProgram};
+use crate::model::property::Vec3;
+use crate::model::property::{GradientValue, PropertyValue};
 
 fn vec3(x: f64, y: f64, z: f64) -> Vec3 {
     Vec3 {
@@ -35,17 +37,11 @@ fn parameters() -> ParticleSceneParameters {
         ],
         size_min: OrderedFloat(6.0),
         size_max: OrderedFloat(18.0),
-        color: Color {
-            r: 20,
-            g: 40,
-            b: 60,
-            a: 200,
-        },
     }
 }
 
-fn scene(target_step: u64) -> ParticleSceneFrame {
-    ParticleSceneFrame {
+fn scene(target_step: u64) -> PointSceneFrame {
+    PointSceneFrame {
         invocation: SceneInvocationKey {
             instance_path: crate::model::authoring::InstancePath::root(
                 crate::model::authoring::TimelineId::new(),
@@ -54,26 +50,27 @@ fn scene(target_step: u64) -> ParticleSceneFrame {
             state_slot_id: uuid::Uuid::from_u128(1),
             output_id: crate::model::authoring::ModuleOutputId::new(),
         },
-        random_stream_id: uuid::Uuid::from_u128(2),
+        source_node_id: uuid::Uuid::from_u128(2),
         executable_hash: [7; 32],
-        point_program: None,
-        target_step,
         logical_width: 1920,
         logical_height: 1080,
-        parameters: parameters(),
+        source: PointSceneSource::Particle {
+            target_step,
+            parameters: parameters(),
+        },
+        color: crate::model::frame::color::Color {
+            r: 20,
+            g: 40,
+            b: 60,
+            a: 200,
+        },
+        point_program: None,
     }
 }
 
 #[test]
 fn render_only_color_does_not_invalidate_simulation_history() {
     let first = parameters();
-    let mut recolored = first.clone();
-    recolored.color = Color::white();
-    assert_eq!(
-        stable_parameter_hash(&first),
-        stable_parameter_hash(&recolored)
-    );
-
     let mut changed_force = first.clone();
     changed_force.forces[0] = ParticleForce::Gravity {
         acceleration: vec3(0.0, 200.0, 0.0),
@@ -121,16 +118,31 @@ fn replay_and_target_allocations_fail_at_explicit_bounds() {
 #[test]
 fn arbitrary_seek_replays_only_the_live_particle_history() {
     let mut scene = scene(21_600);
-    assert_eq!(bounded_replay_origin(&scene), 21_120);
+    let (target_step, parameters) = match &mut scene.source {
+        PointSceneSource::Particle {
+            target_step,
+            parameters,
+        } => (target_step, parameters),
+        PointSceneSource::Grid(_) => panic!("test fixture must remain a Particle source"),
+    };
+    assert_eq!(bounded_replay_origin(parameters, *target_step), 21_120);
     assert_eq!(
-        validate_replay(bounded_replay_origin(&scene), scene.target_step).unwrap(),
+        validate_replay(
+            bounded_replay_origin(parameters, *target_step),
+            *target_step
+        )
+        .unwrap(),
         480
     );
 
-    scene.parameters.lifetime_seconds = OrderedFloat(120.0);
-    assert_eq!(bounded_replay_origin(&scene), 7_200);
+    parameters.lifetime_seconds = OrderedFloat(120.0);
+    assert_eq!(bounded_replay_origin(parameters, *target_step), 7_200);
     assert_eq!(
-        validate_replay(bounded_replay_origin(&scene), scene.target_step).unwrap(),
+        validate_replay(
+            bounded_replay_origin(parameters, *target_step),
+            *target_step
+        )
+        .unwrap(),
         PARTICLE_MAX_REPLAY_STEPS
     );
 }
@@ -147,10 +159,60 @@ fn renderer_branches_keep_the_emitters_random_stream() {
         "renderer-owned state and output identities must not perturb a shared emitter stream"
     );
 
-    second_renderer.random_stream_id = uuid::Uuid::from_u128(4);
+    second_renderer.source_node_id = uuid::Uuid::from_u128(4);
     assert_ne!(
         invocation_seed(&second_renderer),
         first_seed,
         "distinct emitters need independent deterministic streams"
     );
+}
+
+fn constant_color_program(use_last_stop: bool) -> PointRenderProgram {
+    let gradient = GradientValue::default();
+    let stop = if use_last_stop {
+        gradient.stops().last().unwrap()
+    } else {
+        gradient.stops().first().unwrap()
+    };
+    PointRenderProgram {
+        schema: PointAttributeSchema::new(Vec::new()).unwrap(),
+        instructions: vec![PointInstruction::Constant {
+            value: PropertyValue::ColorValue(stop.color().clone()),
+        }],
+        ramps: Vec::new(),
+        color_register: 0,
+    }
+}
+
+#[test]
+fn point_pipeline_keys_are_source_and_shader_shape_specific() {
+    let first = constant_color_program(false);
+    let recolored = constant_color_program(true);
+    let particle_hash = point_fields::source_hash(PointSourceKind::Particle, Some(&first)).unwrap();
+    assert_eq!(
+        particle_hash,
+        point_fields::source_hash(PointSourceKind::Particle, Some(&recolored)).unwrap(),
+        "uniform program values must reuse one compiled shader"
+    );
+    assert_ne!(
+        PointPipelineKey {
+            source_kind: PointSourceKind::Particle,
+            field_source_hash: particle_hash,
+        },
+        PointPipelineKey {
+            source_kind: PointSourceKind::Grid,
+            field_source_hash: point_fields::source_hash(PointSourceKind::Grid, Some(&first))
+                .unwrap(),
+        },
+        "one Module executable may contain both Particle and Grid producers"
+    );
+}
+
+#[test]
+fn grid_field_shader_rejects_age_without_a_fake_lifetime() {
+    let mut program = constant_color_program(false);
+    program.instructions.insert(0, PointInstruction::Age);
+    program.color_register = 1;
+    let error = point_fields::source_hash(PointSourceKind::Grid, Some(&program)).unwrap_err();
+    assert!(error.to_string().contains("require a Particle source"));
 }
