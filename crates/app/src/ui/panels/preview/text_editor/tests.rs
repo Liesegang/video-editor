@@ -6,6 +6,9 @@ use library::model::property::PropertyValue;
 use ordered_float::OrderedFloat;
 use pan_zoom_ui::CanvasState;
 
+mod caret_metrics;
+mod node_clip;
+
 #[test]
 fn transient_digest_includes_the_target_identity() {
     let mut state = AuthoringUiState::new(library::model::authoring::TimelineId::new());

@@ -75,7 +75,9 @@ pub use edit_plan::{
 };
 pub use interface::{ModuleInterfaceCommand, ModuleInterfaceEditImpact, ModuleInterfaceEditResult};
 pub use keyframe_automation::AuthoringKeyframeTarget;
-pub use text_ensemble::{NodeClipTextEnsembleEntry, NodeClipTextEnsembleStack};
+pub use text_ensemble::{
+    NodeClipTextContent, NodeClipTextEnsembleEntry, NodeClipTextEnsembleStack,
+};
 pub use transition::TransitionPlacement;
 
 use std::collections::HashMap;

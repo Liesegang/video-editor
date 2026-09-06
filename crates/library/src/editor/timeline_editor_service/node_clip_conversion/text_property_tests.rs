@@ -206,6 +206,11 @@ fn text_conversion_publishes_the_direct_surface_in_stable_semantic_order() {
         ))
     );
     let content_id = content.id;
+    let content_control = TimelineEditorService::inspect_node_clip_text_content(&after, item_id)
+        .expect("inspect Node Clip Text")
+        .expect("converted Text has one published Content control");
+    assert_eq!(content_control.instance_id, result.instance_id);
+    assert_eq!(content_control.parameter_id, content_id);
     let converted = after.clone();
     let revision = service.revision().unwrap();
     assert!(
@@ -216,14 +221,33 @@ fn text_conversion_publishes_the_direct_surface_in_stable_semantic_order() {
     assert_eq!(service.revision().unwrap(), revision);
     assert_eq!(service.snapshot().unwrap().as_ref(), converted.as_ref());
 
+    let projected = TimelineEditorService::project_module_parameter_value(
+        &converted,
+        item_id,
+        content_control.instance_id,
+        content_control.parameter_id,
+        PropertyValue::String("Edited Node Clip content".to_string()),
+        AuthoringPropertyValueTarget::Constant,
+    )
+    .expect("project the published Content parameter");
+    assert_eq!(service.revision().unwrap(), revision);
+    assert_eq!(service.snapshot().unwrap().as_ref(), converted.as_ref());
+    assert_eq!(
+        evaluated_text(&projected, &plugins),
+        "Edited Node Clip content"
+    );
+    assert_eq!(projected.module_definitions, converted.module_definitions);
+    assert_eq!(projected.items[&sibling_id], converted.items[&sibling_id]);
+
     service
-        .set_module_parameter(
-            result.instance_id,
+        .set_module_parameter_constant(
+            item_id,
             content_id,
             PropertyValue::String("Edited Node Clip content".to_string()),
         )
         .expect("edit the published Content parameter");
     let edited = service.snapshot().unwrap();
+    assert_eq!(edited.as_ref(), &projected);
     assert_eq!(
         edited.module_instances[&result.instance_id].parameter_overrides[&content_id],
         PropertyValue::String("Edited Node Clip content".to_string())

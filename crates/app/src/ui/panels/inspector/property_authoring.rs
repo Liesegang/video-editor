@@ -7,8 +7,7 @@
 use egui::{Align2, FontId, Response, Sense, TextStyle, Ui};
 use library::editor::{AuthoringPropertyOwner, TimelineEditorService, TransitionAutomationOwner};
 use library::model::authoring::{
-    AttachmentId, AutomationTrack, MediaTime, ModuleInstanceId, ProjectPalette,
-    PublishedParameterId, TimelineItemId,
+    AttachmentId, AutomationTrack, MediaTime, ProjectPalette, PublishedParameterId, TimelineItemId,
 };
 use library::model::property::{Property, PropertyDefinition, PropertyValue};
 
@@ -265,28 +264,6 @@ pub(super) fn commit_expression_source(
         .set_authored_property(owner, key.to_string(), property)
         .map(|_| ())
         .map_err(|error| error.to_string())
-}
-
-pub(super) fn commit_module_parameter_value(
-    service: &TimelineEditorService,
-    item_id: TimelineItemId,
-    instance_id: ModuleInstanceId,
-    parameter_id: PublishedParameterId,
-    automation: Option<&AutomationTrack>,
-    value: PropertyValue,
-    local_time: MediaTime,
-) -> Result<(), String> {
-    if automation.is_some() {
-        service
-            .upsert_module_parameter_keyframe(item_id, parameter_id, local_time, value, None)
-            .map(|_| ())
-            .map_err(|error| error.to_string())
-    } else {
-        service
-            .set_module_parameter(instance_id, parameter_id, value)
-            .map(|_| ())
-            .map_err(|error| error.to_string())
-    }
 }
 
 pub(super) fn apply_module_parameter_mode_action(

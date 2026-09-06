@@ -290,6 +290,82 @@ fn arbitrary_graph_edit_hides_structured_facade_without_projecting_fake_state() 
             .unwrap()
             .is_none()
     );
+    let project = service.snapshot().unwrap();
+    assert!(
+        TimelineEditorService::inspect_node_clip_text_content(&project, item_id)
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn unpublished_text_input_is_not_exposed_as_canvas_content() {
+    let (service, _, item_id, instance_id) = converted_text_stack();
+    let project = service.snapshot().unwrap();
+    let content = TimelineEditorService::inspect_node_clip_text_content(&project, item_id)
+        .unwrap()
+        .expect("converted Text Content");
+    let stack = service
+        .node_clip_text_ensemble_stack(item_id)
+        .unwrap()
+        .unwrap();
+    let mut project = service.snapshot().unwrap().as_ref().clone();
+    project
+        .module_definitions
+        .get_mut(&stack.definition_id)
+        .unwrap()
+        .interface
+        .parameters
+        .retain(|parameter| parameter.id != content.parameter_id);
+    project
+        .module_instances
+        .get_mut(&instance_id)
+        .unwrap()
+        .parameter_overrides
+        .remove(&content.parameter_id);
+    let SourceRef::Module(invocation) = &mut project.items.get_mut(&item_id).unwrap().source else {
+        panic!("converted Text must remain a Node Clip")
+    };
+    invocation.automation_tracks.remove(&content.parameter_id);
+    let unpublished = TimelineEditorService::new(project).unwrap();
+
+    let project = unpublished.snapshot().unwrap();
+    assert!(
+        TimelineEditorService::inspect_node_clip_text_content(&project, item_id)
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn ambiguous_published_text_inputs_are_not_exposed_as_canvas_content() {
+    let (service, _, item_id, _) = converted_text_stack();
+    let stack = service
+        .node_clip_text_ensemble_stack(item_id)
+        .unwrap()
+        .unwrap();
+    let mut project = service.snapshot().unwrap().as_ref().clone();
+    let definition = project
+        .module_definitions
+        .get_mut(&stack.definition_id)
+        .unwrap();
+    let mut duplicate = definition
+        .interface
+        .parameters
+        .iter()
+        .find(|parameter| {
+            parameter.target.node_id == stack.text_node_id && parameter.target.port == "text"
+        })
+        .unwrap()
+        .clone();
+    duplicate.id = PublishedParameterId::new();
+    definition.interface.parameters.push(duplicate);
+
+    assert!(
+        TimelineEditorService::inspect_node_clip_text_content(&project, item_id)
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]

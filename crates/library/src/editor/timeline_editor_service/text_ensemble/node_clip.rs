@@ -35,6 +35,17 @@ pub struct NodeClipTextEnsembleStack {
     pub operations: Vec<NodeClipTextEnsembleEntry>,
 }
 
+/// Published Text content control for a recognizable Text Node Clip.
+///
+/// Module-internal Node identities deliberately stay private. Canvas and
+/// Inspector edits use the ordinary instance parameter and Timeline
+/// automation APIs through these two stable external identities.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NodeClipTextContent {
+    pub instance_id: ModuleInstanceId,
+    pub parameter_id: PublishedParameterId,
+}
+
 struct RecognizedStack {
     text_node_id: uuid::Uuid,
     appearance_anchor_node_id: uuid::Uuid,
@@ -45,34 +56,46 @@ struct RecognizedStack {
 }
 
 impl TimelineEditorService {
+    pub fn inspect_node_clip_text_content(
+        project: &AuthoringProject,
+        item_id: TimelineItemId,
+    ) -> Result<Option<NodeClipTextContent>, LibraryError> {
+        let Some((instance_id, definition, recognized)) = recognize_item(project, item_id)? else {
+            return Ok(None);
+        };
+        let mut parameters = definition.interface.parameters.iter().filter(|parameter| {
+            parameter.target.node_id == recognized.text_node_id
+                && parameter.target.port == "text"
+                && parameter.data_type == crate::model::project::PortDataType::String
+                && matches!(parameter.default_value, PropertyValue::String(_))
+        });
+        let Some(parameter) = parameters.next() else {
+            return Ok(None);
+        };
+        if parameters.next().is_some() {
+            return Ok(None);
+        }
+        Ok(Some(NodeClipTextContent {
+            instance_id,
+            parameter_id: parameter.id,
+        }))
+    }
+
     pub fn node_clip_text_ensemble_stack(
         &self,
         item_id: TimelineItemId,
     ) -> Result<Option<NodeClipTextEnsembleStack>, LibraryError> {
         let project = self.snapshot()?;
-        let Some((instance_id, output_id)) = module_item_ids(&project, item_id)? else {
-            return Ok(None);
-        };
-        let instance = project.module_instances.get(&instance_id).ok_or_else(|| {
-            LibraryError::Validation(format!("Missing Module instance {instance_id}"))
-        })?;
-        let definition = project
-            .module_definitions
-            .get(&instance.definition_id)
-            .ok_or_else(|| {
-                LibraryError::Validation(format!(
-                    "Missing Module definition {}",
-                    instance.definition_id
-                ))
-            })?;
         Ok(
-            recognize(definition, output_id)?.map(|recognized| NodeClipTextEnsembleStack {
-                item_id,
-                instance_id,
-                definition_id: definition.id,
-                text_node_id: recognized.text_node_id,
-                appearance_anchor_node_id: recognized.appearance_anchor_node_id,
-                operations: recognized.operations,
+            recognize_item(&project, item_id)?.map(|(instance_id, definition, recognized)| {
+                NodeClipTextEnsembleStack {
+                    item_id,
+                    instance_id,
+                    definition_id: definition.id,
+                    text_node_id: recognized.text_node_id,
+                    appearance_anchor_node_id: recognized.appearance_anchor_node_id,
+                    operations: recognized.operations,
+                }
             }),
         )
     }
@@ -495,6 +518,28 @@ impl TimelineEditorService {
             .map(|(_, changes)| changes)
             .map_err(LibraryError::Validation)
     }
+}
+
+fn recognize_item(
+    project: &AuthoringProject,
+    item_id: TimelineItemId,
+) -> Result<Option<(ModuleInstanceId, &ModuleDefinition, RecognizedStack)>, LibraryError> {
+    let Some((instance_id, output_id)) = module_item_ids(project, item_id)? else {
+        return Ok(None);
+    };
+    let instance = project.module_instances.get(&instance_id).ok_or_else(|| {
+        LibraryError::Validation(format!("Missing Module instance {instance_id}"))
+    })?;
+    let definition = project
+        .module_definitions
+        .get(&instance.definition_id)
+        .ok_or_else(|| {
+            LibraryError::Validation(format!(
+                "Missing Module definition {}",
+                instance.definition_id
+            ))
+        })?;
+    Ok(recognize(definition, output_id)?.map(|recognized| (instance_id, definition, recognized)))
 }
 
 fn recognize(

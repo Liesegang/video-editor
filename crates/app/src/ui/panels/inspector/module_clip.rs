@@ -17,8 +17,7 @@ use crate::ui::property_metadata::{
 use crate::ui::widgets::property_mode::PropertyModeState;
 
 use super::property_authoring::{
-    apply_module_parameter_mode_action, commit_module_parameter_value, property_row,
-    PropertyRowSpec,
+    apply_module_parameter_mode_action, property_row, PropertyRowSpec,
 };
 use super::{item_local_time, mode_action_label, value_provenance};
 
@@ -184,49 +183,50 @@ pub(super) fn published_parameter_row(
         });
         if let Err(error) = validation {
             state.error = Some(error);
-        } else if let (Some(source_revision), Ok(local_time)) =
-            (state.inspector.synced_revision, &local_time)
-        {
-            let target = if automation.is_some() {
-                AuthoringPropertyValueTarget::Keyframe {
-                    local_time: *local_time,
-                }
-            } else {
-                AuthoringPropertyValueTarget::Constant
-            };
-            state.inspector.transient_property_edit =
-                Some(TransientPropertyEdit::module_parameter(
-                    source_revision,
-                    context.item.id,
-                    context.instance.id,
-                    parameter.id,
-                    edited_value.clone(),
-                    target,
-                ));
+        } else if let Some(edit) = module_parameter_edit(
+            state.inspector.synced_revision,
+            context,
+            parameter,
+            automation,
+            &local_time,
+            edited_value.clone(),
+        ) {
+            state.inspector.transient_property_edit = Some(edit);
         }
     }
-    if finished
+    let active_edit = if finished
         && state
             .inspector
             .transient_property_edit
             .as_ref()
             .is_some_and(|edit| edit.matches_module_parameter(context.item.id, parameter.id))
     {
-        state.inspector.transient_property_edit = None;
-    }
+        state.inspector.transient_property_edit.take()
+    } else {
+        None
+    };
     if finished && edited_value != model_value {
-        let result = match &local_time {
-            Ok(time) => commit_module_parameter_value(
-                context.service,
-                context.item.id,
-                context.instance.id,
-                parameter.id,
-                automation,
-                edited_value.clone(),
-                *time,
-            ),
-            Err(error) => Err(error.clone()),
-        };
+        let result =
+            active_edit
+                .or_else(|| {
+                    module_parameter_edit(
+                        state.inspector.synced_revision,
+                        context,
+                        parameter,
+                        automation,
+                        &local_time,
+                        edited_value.clone(),
+                    )
+                })
+                .ok_or_else(|| {
+                    local_time.as_ref().err().cloned().unwrap_or_else(|| {
+                        "Inspector has no synchronized Project revision".to_string()
+                    })
+                })
+                .and_then(|edit| {
+                    edit.commit(context.service)
+                        .map_err(|error| error.to_string())
+                });
         if let Err(error) = result {
             state.error = Some(error);
         }
@@ -259,6 +259,31 @@ pub(super) fn published_parameter_row(
             .parameter_overrides
             .contains_key(&parameter.id),
     );
+}
+
+fn module_parameter_edit(
+    source_revision: Option<library::model::authoring::ProjectRevision>,
+    context: &ModuleParameterContext<'_>,
+    parameter: &PublishedParameter,
+    automation: Option<&library::model::authoring::AutomationTrack>,
+    local_time: &Result<library::model::authoring::MediaTime, String>,
+    value: library::model::property::PropertyValue,
+) -> Option<TransientPropertyEdit> {
+    let source_revision = source_revision?;
+    let local_time = *local_time.as_ref().ok()?;
+    let target = if automation.is_some() {
+        AuthoringPropertyValueTarget::Keyframe { local_time }
+    } else {
+        AuthoringPropertyValueTarget::Constant
+    };
+    Some(TransientPropertyEdit::module_parameter(
+        source_revision,
+        context.item.id,
+        context.instance.id,
+        parameter.id,
+        value,
+        target,
+    ))
 }
 
 fn published_parameter_definition(

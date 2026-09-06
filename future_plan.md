@@ -89,7 +89,26 @@ Rust workspace は 1,651 件成功、16 件 ignored、失敗 0 件で、strict C
     Canvas下側で長い文字を入力してもPreviewのtoolbarとcanvasの座標が変わらないことをnative HTTP QAで確認した。
     通常Textの既存クリック、未選択からの作成、空文字からの再入力、入力中のProjectと履歴の不変、確定前後の画素一致、EscapeとUndoによる画素復元も通過した（`target/qa-runs/20260906T-text-tool-preview-r2/preview`）。
     空文字で編集欄が消える修正前の再現は`20260906T-preview-text-tool-red-r1`、親Dockが動く再現は`20260906T-text-tool-preview-r1`に保持した。
-    明示Node Clip内のTextをCanvasから編集する対応は、後段のText編集能力の項目と併せて継続する。
+  - [x] 認識可能な明示Node ClipのTextも同じCanvas編集欄で編集し、公開Contentのinstance値または現在のlocal timeのキーだけを更新する。
+    変換後の文字をクリックすると別のTextが追加される不具合を、通常releaseのnative HTTP QAで再現した（`target/qa-runs/20260906T-node-clip-text-canvas-red-r1/preview`）。
+    既存のText chain認識を使って公開parameterを特定し、内部Node UUIDをCanvasへ渡さない。
+    一時投影と確定はInspectorと共通の型付き編集を使い、既存のautomationを定数へ戻さない。
+    非公開Contentや曖昧なText graphは編集対象を推測せず、既存文字の上へ新しいClipを追加しない。
+    frame、Timeline、Instance Path、revisionが変わった入力は破棄する。
+    キャレットのサイズも評価済みTextから既存Gizmoと同じ探索で取得し、共通Canvasのzoomを適用する。
+    変換前64px、変換後64px、アニメーション後96pxとzoom 1.5倍、空文字でのサイズ保持を検証した。
+    TimeMapの開始時刻、source start、再生速度を変えたContentのキー編集は、既存キーのIDと他の値を保ち、一回のUndoで戻る。
+    Inspectorの一時編集と確定も同じ型付き編集へ統一し、定数の編集で既存のキーフレーム評価を置換しないようにした。
+    通常releaseのnative HTTP QAで、変換前後の描画一致、同一Clipの編集開始、入力中のProjectと履歴の不変、確定前後の画素一致、EscapeとUndoを確認した。
+    ModuleDefinition、配置、兄弟instanceの不変も通過し、入力中の実画面を確認した（`target/qa-runs/20260906T-node-clip-text-final/preview/node-clip-text-draft.png`）。
+    全体QAは25/25、workspace全targetは1,762 passed / 0 failed / 17 ignoredで、strict Clippy、fmt、QA runner 27 tests、831 filesの行数制限を通過した（`target/qa-workspace-test-20260906-node-clip-text-final.log`）。
+    50本のapp/suite logにERROR、panic、描画失敗はなく、QA appは終了した。
+    検証した通常の`target/release/app.exe`のSHA-256は`9EE990AB80E896B4958CF46C62AFE84E6A938CFACC8568022A1FBA5ECFF890A7`。
+  - [ ] キーがない時刻での一時編集にも、確定後と同じKeyframe IDを使う。
+    現行の共通upsertは投影と確定で別々に新しいIDを生成する。
+    既存時刻のキーはIDを維持するが、新規時刻では値と描画が一致してもProject全体の完全一致にはならない。
+    新規キーのIDを編集開始時に確保し、既存のauthored propertyと公開parameterのmutationへ渡す契約を整理する。
+    キーのない時刻での編集を制限して回避せず、投影、確定、UndoのIDを回帰テストで確認する。
   - 最終releaseのnative HTTP QAは25/25で、Text入力中の実画面も確認した（`target/qa-runs/20260906T-text-tool-final/preview/text-tool-draft.png`）。
     workspace全targetは1,745 passed / 0 failed / 17 ignoredで、strict Clippy、fmt、QA runner 27 tests、829 filesの1,000行制限を通過した（`target/qa-workspace-test-20260906-text-tool-final-r2.log`）。
     全25シナリオの記録が一致し、50本のapp/suite logにERROR、panic、描画失敗はなく、QA appは終了した。

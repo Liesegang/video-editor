@@ -3,7 +3,7 @@ use crate::editor::{TextEnsembleOperationFactory, TextEnsembleOperationKind};
 
 #[path = "text_ensemble/node_clip.rs"]
 mod node_clip;
-pub use node_clip::{NodeClipTextEnsembleEntry, NodeClipTextEnsembleStack};
+pub use node_clip::{NodeClipTextContent, NodeClipTextEnsembleEntry, NodeClipTextEnsembleStack};
 
 impl TimelineEditorService {
     pub fn add_text_ensemble_operation_by_id(

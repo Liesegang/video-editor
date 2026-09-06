@@ -20,6 +20,9 @@ pub(super) struct ItemGizmoGeometry {
     pub local_bounds: egui::Rect,
     pub parent_transform: Affine2D,
     pub item_transform: Transform,
+    /// Evaluated Text size from the same Clip contents that produced these
+    /// outlines. This is presentation metadata, not a Module graph address.
+    pub text_font_size: Option<f32>,
     local_outlines: Vec<[egui::Pos2; 4]>,
 }
 
@@ -67,14 +70,37 @@ pub(super) fn hit_test_item(
     selectable: &HashSet<TimelineItemId>,
     world_position: egui::Pos2,
 ) -> Option<TimelineItemId> {
+    hit_test_content_item(frame, selectable, world_position, |_| true)
+}
+
+/// Text-tool picking uses the same ordering, bounds and viewport as Select.
+/// Inspect evaluated content so an unpublished/custom Text graph is not
+/// mistaken for blank canvas and silently covered by a newly created Clip.
+pub(super) fn hit_test_text_item(
+    frame: &FrameInfo,
+    selectable: &HashSet<TimelineItemId>,
+    world_position: egui::Pos2,
+) -> Option<TimelineItemId> {
+    hit_test_content_item(frame, selectable, world_position, |geometry| {
+        geometry.text_font_size.is_some()
+    })
+}
+
+fn hit_test_content_item(
+    frame: &FrameInfo,
+    selectable: &HashSet<TimelineItemId>,
+    world_position: egui::Pos2,
+    accepts: impl Fn(&ItemGizmoGeometry) -> bool,
+) -> Option<TimelineItemId> {
     let mut render_order = Vec::new();
     collect_render_order(&frame.items, selectable, &mut render_order);
     render_order.into_iter().rev().find(|item_id| {
         item_gizmo_geometry(frame, *item_id).is_some_and(|geometry| {
-            geometry
-                .outlines
-                .iter()
-                .any(|outline| convex_quad_contains(*outline, world_position))
+            accepts(&geometry)
+                && geometry
+                    .outlines
+                    .iter()
+                    .any(|outline| convex_quad_contains(*outline, world_position))
         })
     })
 }
@@ -167,7 +193,8 @@ fn find_item_geometry(
             if let Some(inner) = find_item_geometry(&group.items, item_id, transform) {
                 return Some(inner);
             }
-            let local_outlines = collect_outlines(&group.items, Affine2D::IDENTITY);
+            let visuals = collect_visuals(&group.items, Affine2D::IDENTITY);
+            let local_outlines = visuals.outlines;
             if local_outlines.is_empty() {
                 return None;
             }
@@ -196,6 +223,7 @@ fn find_item_geometry(
                 local_bounds,
                 parent_transform: parent,
                 item_transform: group.transform.clone(),
+                text_font_size: visuals.text_font_size,
                 local_outlines,
             });
         }
@@ -206,17 +234,31 @@ fn find_item_geometry(
     None
 }
 
-fn collect_outlines(items: &[FrameItem], parent: Affine2D) -> Vec<[egui::Pos2; 4]> {
-    let mut outlines = Vec::new();
+#[derive(Default)]
+struct CollectedVisuals {
+    outlines: Vec<[egui::Pos2; 4]>,
+    text_font_size: Option<f32>,
+}
+
+fn collect_visuals(items: &[FrameItem], parent: Affine2D) -> CollectedVisuals {
+    let mut visuals = CollectedVisuals::default();
     for item in items {
         match item {
             FrameItem::Object(object) => {
+                if visuals.text_font_size.is_none() {
+                    if let FrameContent::Text { size, .. } = &object.content {
+                        let size = *size as f32;
+                        if size.is_finite() && size > 0.0 {
+                            visuals.text_font_size = Some(size);
+                        }
+                    }
+                }
                 let Some(bounds) = object_bounds(object) else {
                     continue;
                 };
                 let transform = parent.compose(Affine2D::from(object.content.transform()));
                 if let Some(outline) = map_rect(transform, bounds) {
-                    outlines.push(outline);
+                    visuals.outlines.push(outline);
                 }
             }
             FrameItem::Group(group) if group.kind == FrameGroupKind::Composition => {
@@ -226,26 +268,35 @@ fn collect_outlines(items: &[FrameItem], parent: Affine2D) -> Vec<[egui::Pos2; 4
                     egui::vec2(group.width as f32, group.height as f32),
                 );
                 if let Some(outline) = map_rect(transform, bounds) {
-                    outlines.push(outline);
+                    visuals.outlines.push(outline);
                 }
             }
             FrameItem::Group(group) => {
                 let transform = parent.compose(Affine2D::from(&group.transform));
-                outlines.extend(collect_outlines(&group.items, transform));
+                visuals.extend(collect_visuals(&group.items, transform));
             }
             FrameItem::Transition(transition) => {
-                outlines.extend(collect_outlines(
+                visuals.extend(collect_visuals(
                     std::slice::from_ref(&transition.from.item),
                     parent,
                 ));
-                outlines.extend(collect_outlines(
+                visuals.extend(collect_visuals(
                     std::slice::from_ref(&transition.to.item),
                     parent,
                 ));
             }
         }
     }
-    outlines
+    visuals
+}
+
+impl CollectedVisuals {
+    fn extend(&mut self, other: Self) {
+        self.outlines.extend(other.outlines);
+        if self.text_font_size.is_none() {
+            self.text_font_size = other.text_font_size;
+        }
+    }
 }
 
 fn object_bounds(object: &FrameObject) -> Option<egui::Rect> {

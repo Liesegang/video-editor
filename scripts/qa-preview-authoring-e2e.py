@@ -6,9 +6,11 @@ import pathlib
 
 from qa_support import (
     QaFailure,
+    activate_dock_tab,
     capture_viewport,
     component_center,
     component_point,
+    convert_timeline_item_to_node_clip,
     item_by_name,
     run_suite_main,
     settled_preview_state,
@@ -110,6 +112,268 @@ def _canvas_margin_point(canvas_component, content_component):
     if gap <= 4.0:
         raise QaFailure("Preview has no grid margin for an unambiguous deselect click")
     return point
+
+
+def _node_clip_text_context(state, item_id):
+    item = state["project"]["items"][item_id]
+    source = item.get("source") or {}
+    if source.get("kind") != "module":
+        raise QaFailure("converted Text is not a Node Clip")
+    instance_id = (source.get("value") or {}).get("instance_id")
+    instance = state["project"]["module_instances"].get(instance_id)
+    if instance is None:
+        raise QaFailure("converted Text refers to a missing Module instance")
+    definition_id = instance.get("definition_id")
+    definition = state["project"]["module_definitions"].get(definition_id)
+    if definition is None:
+        raise QaFailure("converted Text refers to a missing Module definition")
+    parameters = [
+        parameter
+        for parameter in definition["interface"]["parameters"]
+        if parameter.get("name") == "Content"
+    ]
+    if len(parameters) != 1:
+        raise QaFailure("converted Text must publish exactly one Content parameter")
+    parameter = parameters[0]
+    value = (instance.get("parameter_overrides") or {}).get(
+        parameter["id"], parameter.get("default_value")
+    )
+    if not isinstance(value, str):
+        raise QaFailure("converted Text Content is not a string instance value")
+    return {
+        "instance_id": instance_id,
+        "definition_id": definition_id,
+        "parameter_id": parameter["id"],
+        "value": value,
+    }
+
+
+def _exercise_node_clip_text_canvas(client, item_id):
+    before = client.state()
+    frame = before["editor"]["timeline"]["current_frame"]
+    direct_value = _text_value(before, item_id)
+    before_render = _settled_preview(
+        client,
+        before["history"]["revision"],
+        frame,
+        "settled Text Preview before Node Clip conversion",
+    )
+    before_hash = before_render["editor"]["preview"]["pixel_hash"]
+    converted = convert_timeline_item_to_node_clip(
+        client, item_id, before["history"]["revision"]
+    )
+    context = _node_clip_text_context(converted, item_id)
+    if context["value"] != direct_value:
+        raise QaFailure("Node Clip conversion changed the published Content value")
+    if len(converted["project"]["items"]) != len(before["project"]["items"]):
+        raise QaFailure("Node Clip conversion changed the Timeline item count")
+
+    activate_dock_tab(
+        client,
+        "dock.tab:preview",
+        "Preview",
+        "converted Text Canvas editing",
+    )
+    baseline = _settled_preview(
+        client,
+        converted["history"]["revision"],
+        frame,
+        "settled converted Text Preview",
+    )
+    baseline_hash = baseline["editor"]["preview"]["pixel_hash"]
+    if baseline_hash != before_hash:
+        raise QaFailure("Node Clip conversion changed Text Preview pixels")
+    content_control_id = "inspector.property:module_instance:{}:{}".format(
+        context["instance_id"], context["parameter_id"]
+    )
+    _, content_control = client.wait_component_settled(content_control_id)
+    content_metadata = content_control.get("metadata") or {}
+    if content_metadata.get("editor_kind") != "multiline_text":
+        raise QaFailure("converted Text Content is not shown by its shared Inspector editor")
+
+    gizmo = _metadata(client, "preview.position_gizmo")
+    bounds = gizmo.get("screen_bounds") or {}
+    try:
+        text_click = {
+            "x": (float(bounds["min"]["x"]) + float(bounds["max"]["x"])) * 0.5,
+            "y": (float(bounds["min"]["y"]) + float(bounds["max"]["y"])) * 0.5,
+        }
+    except (KeyError, TypeError, ValueError) as error:
+        raise QaFailure("converted Text gizmo omitted usable screen bounds") from error
+
+    # The Text tool must resolve the published Content owner of this exact
+    # Node Clip. It must not fall through to blank-canvas Text creation.
+    client.click_component("preview.tool.text")
+    client.inject(
+        "click", {**text_click, "button": "primary", "coordinate_space": "points"}
+    )
+    editor = _metadata(client, "preview.text.editor")
+    after_hit = client.state()
+    if editor.get("item_id") != item_id:
+        raise QaFailure("converted Text click created or targeted a different Text Item")
+    if (
+        after_hit["project"] != converted["project"]
+        or after_hit["history"] != converted["history"]
+    ):
+        raise QaFailure("opening converted Text Canvas editing mutated the Project")
+
+    cancelled_value = "Cancelled Node Clip Canvas text"
+    client.key("a", True, command=True)
+    client.key("a", False, command=True)
+    client.inject("text", {"text": cancelled_value})
+    client.wait_until(
+        "converted Text transient Content",
+        lambda: metadata
+        if (metadata := _metadata(client, "preview.text.editor")).get("buffer")
+        == cancelled_value
+        and metadata.get("item_id") == item_id
+        else None,
+    )
+    cancelled_draft = _settled_preview(
+        client,
+        converted["history"]["revision"],
+        frame,
+        "settled converted Text cancelled draft",
+    )
+    cancelled_hash = cancelled_draft["editor"]["preview"]["pixel_hash"]
+    if cancelled_hash == baseline_hash:
+        raise QaFailure("converted Text transient Content did not change Preview pixels")
+    if (
+        cancelled_draft["project"] != converted["project"]
+        or cancelled_draft["history"] != converted["history"]
+    ):
+        raise QaFailure("converted Text transient Content mutated the Project")
+    client.key("escape", True)
+    client.key("escape", False)
+    escaped = client.wait_until(
+        "converted Text Canvas Escape",
+        lambda: state
+        if not (state := client.state())["editor"]["preview"]["text_editor"]["editing"]
+        and state["editor"]["preview"]["active_tool"] == "select"
+        else None,
+    )
+    if escaped["project"] != converted["project"] or escaped["history"] != converted["history"]:
+        raise QaFailure("converted Text Escape committed its transient Content")
+    escaped_render = _settled_preview(
+        client,
+        converted["history"]["revision"],
+        frame,
+        "settled converted Text Escape Preview",
+    )
+    if escaped_render["editor"]["preview"]["pixel_hash"] != baseline_hash:
+        raise QaFailure("converted Text Escape did not restore Preview pixels")
+
+    accepted_value = "Accepted Node Clip Canvas text"
+    client.click_component("preview.tool.text")
+    client.inject(
+        "click", {**text_click, "button": "primary", "coordinate_space": "points"}
+    )
+    reopened = _metadata(client, "preview.text.editor")
+    if reopened.get("item_id") != item_id:
+        raise QaFailure("reopened converted Text targeted a different Item")
+    client.key("a", True, command=True)
+    client.key("a", False, command=True)
+    client.inject("text", {"text": accepted_value})
+    client.wait_until(
+        "converted Text accepted draft buffer",
+        lambda: metadata
+        if (metadata := _metadata(client, "preview.text.editor")).get("buffer")
+        == accepted_value
+        else None,
+    )
+    accepted_draft = _settled_preview(
+        client,
+        converted["history"]["revision"],
+        frame,
+        "settled converted Text accepted draft",
+    )
+    accepted_draft_hash = accepted_draft["editor"]["preview"]["pixel_hash"]
+    if accepted_draft_hash == baseline_hash:
+        raise QaFailure("converted Text accepted draft did not change Preview pixels")
+    if (
+        accepted_draft["project"] != converted["project"]
+        or accepted_draft["history"] != converted["history"]
+    ):
+        raise QaFailure("converted Text accepted draft mutated the Project before commit")
+    node_clip_draft_capture = capture_viewport(
+        client,
+        pathlib.Path(
+            os.environ.get("RUVIE_QA_ARTIFACT_DIR", "target/qa-preview-authoring")
+        )
+        / "node-clip-text-draft.png",
+    )
+    client.click_component("preview.tool.select")
+
+    def accepted_content():
+        state = client.state()
+        value = _node_clip_text_context(state, item_id)["value"]
+        return state if value == accepted_value else None
+
+    accepted = client.wait_until("converted Text Canvas Content commit", accepted_content)
+    if accepted["history"]["revision"] != converted["history"]["revision"] + 1:
+        raise QaFailure("converted Text Canvas edit was not one transaction")
+    if accepted["project"]["module_definitions"] != converted["project"]["module_definitions"]:
+        raise QaFailure("converted Text Canvas edit mutated its Module definition")
+    if accepted["project"]["items"] != converted["project"]["items"]:
+        raise QaFailure("converted Text Canvas edit mutated Timeline placement or siblings")
+    before_instances = converted["project"]["module_instances"]
+    after_instances = accepted["project"]["module_instances"]
+    for instance_id, instance in before_instances.items():
+        if instance_id != context["instance_id"] and after_instances.get(instance_id) != instance:
+            raise QaFailure("converted Text Canvas edit mutated a sibling instance")
+    before_instance = before_instances[context["instance_id"]]
+    after_instance = after_instances[context["instance_id"]]
+    if {
+        key: value for key, value in after_instance.items() if key != "parameter_overrides"
+    } != {key: value for key, value in before_instance.items() if key != "parameter_overrides"}:
+        raise QaFailure("converted Text Canvas edit changed instance structure")
+    before_overrides = before_instance.get("parameter_overrides") or {}
+    after_overrides = after_instance.get("parameter_overrides") or {}
+    if any(
+        after_overrides.get(key) != value
+        for key, value in before_overrides.items()
+        if key != context["parameter_id"]
+    ) or set(after_overrides) - set(before_overrides) - {context["parameter_id"]}:
+        raise QaFailure("converted Text Canvas edit changed unrelated instance parameters")
+    accepted_render = _settled_preview(
+        client,
+        accepted["history"]["revision"],
+        frame,
+        "settled converted Text Canvas commit",
+    )
+    if accepted_render["editor"]["preview"]["pixel_hash"] != accepted_draft_hash:
+        raise QaFailure("converted Text committed pixels differ from its transient draft")
+
+    client.key("z", True, command=True)
+    client.key("z", False, command=True)
+    undone = client.wait_until(
+        "converted Text Canvas Undo",
+        lambda: state
+        if (state := client.state())["project"] == converted["project"]
+        else None,
+    )
+    undone_render = _settled_preview(
+        client,
+        undone["history"]["revision"],
+        frame,
+        "settled converted Text Canvas Undo Preview",
+    )
+    if undone_render["editor"]["preview"]["pixel_hash"] != baseline_hash:
+        raise QaFailure("converted Text Undo did not restore baseline pixels")
+    return {
+        "instance_id": context["instance_id"],
+        "definition_id": context["definition_id"],
+        "parameter_id": context["parameter_id"],
+        "before": direct_value,
+        "cancelled": cancelled_value,
+        "accepted": accepted_value,
+        "baseline_hash": baseline_hash,
+        "cancelled_hash": cancelled_hash,
+        "accepted_hash": accepted_draft_hash,
+        "undo_hash": undone_render["editor"]["preview"]["pixel_hash"],
+        "draft_capture": node_clip_draft_capture,
+        "content_control": content_metadata,
+    }
 
 
 def run_suite(client):
@@ -590,6 +854,7 @@ def run_suite(client):
         else None,
         timeout=20.0,
     )
+    node_clip_text = _exercise_node_clip_text_canvas(client, text_item["id"])
     return {
         "suite": "preview-authoring",
         "item_id": text_item["id"],
@@ -622,6 +887,7 @@ def run_suite(client):
             "playing": playing["editor"]["timeline"]["current_frame"],
             "stopped": stopped["editor"]["timeline"]["current_frame"],
         },
+        "node_clip_text": node_clip_text,
         "actions": client.evidence,
     }
 
