@@ -101,7 +101,7 @@ pub(crate) struct SavedGlState {
     sampler: Option<glow::Sampler>,
     texture_unit: u32,
     shader_storage_buffer: Option<glow::Buffer>,
-    shader_storage_bindings: [Option<glow::Buffer>; 4],
+    shader_storage_bindings: [Option<glow::Buffer>; 5],
     copy_read_buffer: Option<glow::Buffer>,
     copy_write_buffer: Option<glow::Buffer>,
     pixel_unpack_buffer: Option<glow::Buffer>,

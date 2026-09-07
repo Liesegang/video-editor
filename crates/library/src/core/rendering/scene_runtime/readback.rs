@@ -10,9 +10,15 @@ pub(crate) struct PointFieldReadback {
     pub serial: u32,
     pub age: Option<f32>,
     pub lifetime: Option<f32>,
+    /// Authoritative simulated position before render-stage fields. Grid has
+    /// no mutable producer buffer, so its source position is `None` here.
+    pub source_position: Option<[f32; 3]>,
     pub attributes: Vec<PointAttributeGpuDefault>,
     pub attribute_words: Vec<[u32; 4]>,
     pub color: [f32; 4],
+    /// Derived producer-local position consumed by Sprite rendering. `None`
+    /// proves the source geometry fast path remained active.
+    pub position: Option<[f32; 3]>,
 }
 
 impl SceneRuntime {
@@ -37,6 +43,9 @@ impl SceneRuntime {
             .transpose()?;
         let mut columns = vec![0_u8; fields.layout.byte_len as usize];
         let mut colors = vec![0_u8; invocation.capacity as usize * 16];
+        let mut positions = fields
+            .positions
+            .map(|_| vec![0_u8; invocation.capacity as usize * 16]);
         let saved = SavedGlState::capture(&self.gl);
         // SAFETY: test-only inspection runs with SceneRuntime's context current;
         // every range exactly matches an owned buffer allocation.
@@ -55,21 +64,33 @@ impl SceneRuntime {
                 .bind_buffer(glow::SHADER_STORAGE_BUFFER, Some(fields.colors));
             self.gl
                 .get_buffer_sub_data(glow::SHADER_STORAGE_BUFFER, 0, &mut colors);
+            if let (Some(buffer), Some(bytes)) = (fields.positions, positions.as_mut()) {
+                self.gl
+                    .bind_buffer(glow::SHADER_STORAGE_BUFFER, Some(buffer));
+                self.gl
+                    .get_buffer_sub_data(glow::SHADER_STORAGE_BUFFER, 0, bytes);
+            }
         }
         saved.restore(&self.gl);
         gl_operation_result(&self.gl, "Point field test readback")?;
         let mut result = Vec::new();
         for slot in 0..invocation.capacity as usize {
-            let (age, lifetime) = if let Some(particles) = &particles {
+            let (age, lifetime, source_position) = if let Some(particles) = &particles {
                 let particle = slot * PARTICLE_STRIDE_BYTES as usize;
                 let age = read_f32(particles, particle + 12);
                 let lifetime = read_f32(particles, particle + 28);
                 if age < 0.0 || age >= lifetime {
                     continue;
                 }
-                (Some(age), Some(lifetime))
+                (
+                    Some(age),
+                    Some(lifetime),
+                    Some(std::array::from_fn(|component| {
+                        read_f32(particles, particle + component * 4)
+                    })),
+                )
             } else {
-                (None, None)
+                (None, None, None)
             };
             let serial_offset = fields.layout.serial_offset_bytes as usize
                 + slot * fields.layout.serial_stride_bytes as usize;
@@ -105,13 +126,19 @@ impl SceneRuntime {
             let color_offset = slot * 16;
             let color =
                 std::array::from_fn(|component| read_f32(&colors, color_offset + component * 4));
+            let position = positions.as_ref().map(|positions| {
+                let offset = slot * 16;
+                std::array::from_fn(|component| read_f32(positions, offset + component * 4))
+            });
             result.push(PointFieldReadback {
                 serial,
                 age,
                 lifetime,
+                source_position,
                 attributes,
                 attribute_words,
                 color,
+                position,
             });
         }
         Ok(result)

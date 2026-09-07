@@ -245,6 +245,7 @@ impl ModuleImageRuntime<'_> {
             instructions,
             ramps,
             color_register: compiled.color_register,
+            position_register: compiled.position_register,
         };
         program.validate().map_err(LibraryError::Validation)?;
         Ok(program)

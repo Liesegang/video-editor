@@ -15,10 +15,14 @@ use crate::rendering::gl_resources::link_program;
 
 use super::gl_backend::{PARTICLE_WORKGROUP_SIZE, required_uniform};
 use super::shaders::{PARTICLE_RANDOM_FUNCTIONS, PARTICLE_STRUCT_GLSL};
-use super::source::{PointSourceBinding, PointSourceKind, PointSourceUniforms, RENDER_POINT_GLSL};
+use super::source::{
+    PointSourceBinding, PointSourceKind, PointSourceRequirements, PointSourceUniforms,
+    RENDER_POINT_GLSL,
+};
 use super::{drain_gl_errors, gl_operation_result};
 
 const COLOR_STRIDE_BYTES: u64 = 16;
+const POSITION_STRIDE_BYTES: u64 = 16;
 const PROGRAM_HEADER_VEC4S: usize = POINT_MAX_INSTRUCTIONS + POINT_MAX_RAMPS;
 const RAMP_STOP_VEC4S: usize = 2;
 const PROGRAM_DATA_VEC4S: usize =
@@ -28,6 +32,7 @@ const PROGRAM_DATA_BYTES: usize = PROGRAM_DATA_VEC4S * 16;
 pub(super) struct PointFieldBuffers {
     pub columns: glow::Buffer,
     pub colors: glow::Buffer,
+    pub positions: Option<glow::Buffer>,
     pub layout: PointColumnLayout,
 }
 
@@ -40,6 +45,7 @@ impl PointFieldBuffers {
         let layout = PointColumnLayout::derive(&program.schema, capacity)
             .map_err(LibraryError::Validation)?;
         let color_bytes = color_bytes(capacity)?;
+        let position_bytes = position_bytes(program, capacity)?;
         let columns = allocate_buffer(gl, layout.byte_len, glow::DYNAMIC_COPY, "Point columns")?;
         let colors = match allocate_buffer(gl, color_bytes, glow::DYNAMIC_COPY, "Point colors") {
             Ok(buffer) => buffer,
@@ -49,20 +55,41 @@ impl PointFieldBuffers {
                 return Err(error);
             }
         };
+        let positions = match position_bytes
+            .map(|bytes| allocate_buffer(gl, bytes, glow::DYNAMIC_COPY, "Point positions"))
+            .transpose()
+        {
+            Ok(buffer) => buffer,
+            Err(error) => {
+                // SAFETY: both earlier allocations remain exclusively owned
+                // by this failed constructor.
+                unsafe {
+                    gl.delete_buffer(columns);
+                    gl.delete_buffer(colors);
+                }
+                return Err(error);
+            }
+        };
         Ok(Self {
             columns,
             colors,
+            positions,
             layout,
         })
     }
 
     pub fn byte_len(&self) -> u64 {
-        self.layout.byte_len + u64::from(self.layout.capacity) * COLOR_STRIDE_BYTES
+        self.layout.byte_len
+            + u64::from(self.layout.capacity) * COLOR_STRIDE_BYTES
+            + self.positions.map_or(0, |_| {
+                u64::from(self.layout.capacity) * POSITION_STRIDE_BYTES
+            })
     }
 
     pub fn matches(&self, program: &PointRenderProgram) -> bool {
-        PointColumnLayout::derive(&program.schema, self.layout.capacity)
-            .is_ok_and(|layout| layout == self.layout)
+        self.positions.is_some() == program.position_register.is_some()
+            && PointColumnLayout::derive(&program.schema, self.layout.capacity)
+                .is_ok_and(|layout| layout == self.layout)
     }
 
     pub fn destroy(self, gl: &glow::Context) {
@@ -71,6 +98,9 @@ impl PointFieldBuffers {
         unsafe {
             gl.delete_buffer(self.columns);
             gl.delete_buffer(self.colors);
+            if let Some(positions) = self.positions {
+                gl.delete_buffer(positions);
+            }
         }
     }
 }
@@ -133,7 +163,12 @@ impl PointFieldPipeline {
                         "uAttributeOffsets[0]",
                     )?)
                 },
-                PointSourceUniforms::new(gl, compute_program, source_kind, false)?,
+                PointSourceUniforms::new(
+                    gl,
+                    compute_program,
+                    source_kind,
+                    PointSourceRequirements::Optional,
+                )?,
             ))
         })();
         let (capacity, seed, attribute_offsets, source) = match uniforms {
@@ -205,6 +240,9 @@ impl PointFieldPipeline {
             gl.bind_buffer_base(glow::SHADER_STORAGE_BUFFER, 1, Some(buffers.columns));
             gl.bind_buffer_base(glow::SHADER_STORAGE_BUFFER, 2, Some(buffers.colors));
             gl.bind_buffer_base(glow::SHADER_STORAGE_BUFFER, 3, Some(self.program_data));
+            if let Some(positions) = buffers.positions {
+                gl.bind_buffer_base(glow::SHADER_STORAGE_BUFFER, 4, Some(positions));
+            }
             point_source.bind(gl, &self.source)?;
             gl.uniform_1_u32(Some(&self.capacity), buffers.layout.capacity);
             if let Some(location) = &self.seed {
@@ -263,13 +301,12 @@ pub(super) fn required_invocation_bytes(
     };
     let layout =
         PointColumnLayout::derive(&program.schema, capacity).map_err(LibraryError::Validation)?;
+    let color_bytes = color_bytes(capacity)?;
+    let position_bytes = position_bytes(program, capacity)?.unwrap_or(0);
     particle_bytes
         .checked_add(layout.byte_len)
-        .and_then(|bytes| {
-            color_bytes(capacity)
-                .ok()
-                .and_then(|color| bytes.checked_add(color))
-        })
+        .and_then(|bytes| bytes.checked_add(color_bytes))
+        .and_then(|bytes| bytes.checked_add(position_bytes))
         .ok_or_else(|| LibraryError::Render("GPU Point field state size overflow".to_string()))
 }
 
@@ -277,6 +314,22 @@ fn color_bytes(capacity: u32) -> Result<u64, LibraryError> {
     u64::from(capacity)
         .checked_mul(COLOR_STRIDE_BYTES)
         .ok_or_else(|| LibraryError::Render("GPU Point color buffer size overflow".to_string()))
+}
+
+fn position_bytes(
+    program: &PointRenderProgram,
+    capacity: u32,
+) -> Result<Option<u64>, LibraryError> {
+    program
+        .position_register
+        .map(|_| {
+            u64::from(capacity)
+                .checked_mul(POSITION_STRIDE_BYTES)
+                .ok_or_else(|| {
+                    LibraryError::Render("GPU Point position buffer size overflow".to_string())
+                })
+        })
+        .transpose()
 }
 
 fn allocate_buffer(
@@ -409,9 +462,15 @@ fn compute_source(
         }
     }
     body.push_str(&format!(
-        "    vec4 result = r{};\n    if (any(isnan(result)) || any(isinf(result))) valid = false;\n    pointColors[slot] = valid ? result : vec4(0.0);\n",
+        "    vec4 result = r{};\n    if (any(isnan(result)) || any(isinf(result))) valid = false;\n",
         program.color_register
     ));
+    if let Some(position_register) = program.position_register {
+        body.push_str(&format!(
+            "    vec3 resultPosition = r{position_register};\n    if (any(isnan(resultPosition)) || any(isinf(resultPosition))) valid = false;\n    pointPositions[slot] = valid ? vec4(resultPosition, point.position_size.w) : vec4(0.0);\n"
+        ));
+    }
+    body.push_str("    pointColors[slot] = valid ? result : vec4(0.0);\n");
     let ramp_function = program
         .instructions
         .iter()
@@ -421,8 +480,15 @@ fn compute_source(
     let point_source = source_kind
         .shader()
         .replace("// PARTICLE_STRUCT", PARTICLE_STRUCT_GLSL);
+    let position_buffer = program.position_register.map_or(
+        "",
+        |_| "layout(std430, binding = 4) buffer PointPositions { vec4 pointPositions[]; };",
+    );
+    let hidden_position = program
+        .position_register
+        .map_or("", |_| "        pointPositions[slot] = vec4(0.0);");
     Ok(format!(
-        "#version 430 core\nlayout(local_size_x = 64) in;\n{RENDER_POINT_GLSL}\n{point_source}\nlayout(std430, binding = 1) buffer PointColumns {{ uint pointColumns[]; }};\nlayout(std430, binding = 2) buffer PointColors {{ vec4 pointColors[]; }};\nlayout(std430, binding = 3) readonly buffer PointProgramData {{ uvec4 pointData[]; }};\nuniform uint uCapacity;\nuniform uint uSeed;\nuniform uint uAttributeOffsets[{POINT_MAX_ATTRIBUTE_COUNT}];\n{PARTICLE_RANDOM_FUNCTIONS}\n{ramp_function}\nvoid main() {{\n    uint slot = gl_GlobalInvocationID.x;\n    if (slot >= uCapacity) return;\n    RenderPoint point = load_render_point(slot);\n    if (!point.alive) {{\n        pointColors[slot] = vec4(0.0);\n        return;\n    }}\n{body}}}\n"
+        "#version 430 core\nlayout(local_size_x = 64) in;\n{RENDER_POINT_GLSL}\n{point_source}\nlayout(std430, binding = 1) buffer PointColumns {{ uint pointColumns[]; }};\nlayout(std430, binding = 2) buffer PointColors {{ vec4 pointColors[]; }};\nlayout(std430, binding = 3) readonly buffer PointProgramData {{ uvec4 pointData[]; }};\n{position_buffer}\nuniform uint uCapacity;\nuniform uint uSeed;\nuniform uint uAttributeOffsets[{POINT_MAX_ATTRIBUTE_COUNT}];\n{PARTICLE_RANDOM_FUNCTIONS}\n{ramp_function}\nvoid main() {{\n    uint slot = gl_GlobalInvocationID.x;\n    if (slot >= uCapacity) return;\n    RenderPoint point = load_render_point(slot);\n    if (!point.alive) {{\n        pointColors[slot] = vec4(0.0);\n{hidden_position}\n        return;\n    }}\n{body}}}\n"
     ))
 }
 

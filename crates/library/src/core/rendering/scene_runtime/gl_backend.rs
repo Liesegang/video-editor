@@ -38,7 +38,7 @@ pub(super) fn probe_capabilities(gl: &glow::Context) -> Result<CapabilityProfile
             "GPU Particle requires desktop OpenGL 4.3 compute/SSBO support; active context is {label}"
         ));
     }
-    if storage_bindings < 4 || workgroup_invocations < PARTICLE_WORKGROUP_SIZE as i32 {
+    if storage_bindings < 5 || workgroup_invocations < PARTICLE_WORKGROUP_SIZE as i32 {
         return Err(format!(
             "GPU Particle cannot run on {label}: available SSBO bindings={storage_bindings}, compute workgroup invocations={workgroup_invocations}"
         ));
@@ -123,7 +123,10 @@ impl PointPipeline {
             }
             None => None,
         };
-        let vertex_source = point_vertex_source(source_kind, point_fields.is_some());
+        let has_position_output =
+            point_program.is_some_and(|program| program.position_register.is_some());
+        let vertex_source =
+            point_vertex_source(source_kind, point_fields.is_some(), has_position_output);
         let fragment_source = point_fragment_source(point_fields.is_some());
         let render_program = match link_program(
             gl,
@@ -180,7 +183,16 @@ impl PointPipeline {
                         .then(|| required_uniform(gl, render_program, "uOutputSrgba"))
                         .transpose()?,
                 },
-                PointSourceUniforms::new(gl, render_program, source_kind, true)?,
+                PointSourceUniforms::new(
+                    gl,
+                    render_program,
+                    source_kind,
+                    if has_position_output {
+                        super::source::PointSourceRequirements::SizeAndAlive
+                    } else {
+                        super::source::PointSourceRequirements::FullGeometry
+                    },
+                )?,
             ))
         })();
         let (render, source) = match uniforms {

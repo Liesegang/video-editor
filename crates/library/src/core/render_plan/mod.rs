@@ -33,6 +33,8 @@ mod point_conditional_tests;
 #[cfg(test)]
 mod point_numeric_tests;
 #[cfg(test)]
+mod point_position_tests;
+#[cfg(test)]
 mod point_runtime_tests;
 #[cfg(test)]
 mod point_tests;

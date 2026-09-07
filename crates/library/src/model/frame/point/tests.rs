@@ -114,6 +114,7 @@ fn point_frame_rejects_particle_builtins_on_grid_before_gpu_dispatch() {
             ],
             ramps: Vec::new(),
             color_register: 1,
+            position_register: None,
         });
         assert!(frame.validate().unwrap_err().contains("require a Particle"));
     }

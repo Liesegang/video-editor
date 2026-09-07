@@ -89,6 +89,16 @@ vector (or the absolute value of a scalar), both for ordinary values and
 per-point fields. For example, Position → Multiply → Store Vec3 Attribute →
 Length → Divide → Color Ramp produces distance-based Point colors. Capturing
 or calculating a position attribute does not move the source points.
+To move points, insert **Set Point Position** into the Points stream. Its
+Position input accepts a Vec3 field, including a stored attribute; left
+unconnected and unpublished, it uses the incoming position. Offset adds a
+Vec3 displacement, and the Boolean Selection input limits which points move.
+Offset starts at zero, so the default operation leaves the points in place.
+Point Info connected before the operation reads the original position;
+connected after it, it reads the changed position. Other branches and the
+Particle simulation remain unchanged. Use the existing header bypass control
+to pass the incoming Points through, and publish Offset or Selection to animate
+them with Timeline keyframes.
 Frame-uniform inputs retain their shared editors, published parameters, and
 Timeline keyframes. Integer field arithmetic and implicit per-point type
 conversions are not supported.

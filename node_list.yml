@@ -2894,6 +2894,24 @@ Point Info:
       type: Scalar
     - name: random
       type: Scalar
+Set Point Position:
+  category: Points
+  catalog_status: native
+  catalog_id: native.point.set-position
+  runtime_status: implemented
+  description: Derive a downstream Point position from an optional position field, offset, and Boolean selection
+  inputs:
+    - name: points
+      type: PointSource
+    - name: position
+      type: Vector3
+    - name: offset
+      type: Vector3
+    - name: selection
+      type: Boolean
+  outputs:
+    - name: points
+      type: PointSource
 Store Number Attribute:
   category: Points
   catalog_status: native

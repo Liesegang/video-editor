@@ -123,6 +123,7 @@ fn gpu_grid_uses_shared_sprite_fields_and_retains_stable_point_attributes() {
         ],
         ramps: vec![ramp.clone()],
         color_register: 5,
+        position_register: None,
     });
     let colored = render_point_test_scene(&mut renderer, &scene).unwrap();
     let field_pipelines = renderer
@@ -141,6 +142,10 @@ fn gpu_grid_uses_shared_sprite_fields_and_retains_stable_point_attributes() {
     let seed = crate::rendering::scene_runtime::invocation_seed(&scene);
     for (index, point) in fields.iter().enumerate() {
         assert_eq!((point.age, point.lifetime), (None, None));
+        assert_eq!(
+            point.position, None,
+            "color-only fields must not allocate geometry"
+        );
         let PointSceneSource::Grid(grid) = &scene.source else {
             panic!("expected Grid fixture")
         };

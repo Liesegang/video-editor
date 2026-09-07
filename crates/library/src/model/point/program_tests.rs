@@ -36,6 +36,7 @@ fn heat_program() -> PointRenderProgram {
         ],
         ramps: vec![GradientValue::default()],
         color_register: 5,
+        position_register: None,
     }
 }
 
@@ -139,6 +140,7 @@ fn typed_program(kind: PointAttributeElementType, value: PropertyValue) -> Point
         } else {
             5
         },
+        position_register: None,
     }
 }
 
@@ -441,7 +443,26 @@ fn value_program(instructions: Vec<PointInstruction>, color_register: u16) -> Po
         instructions,
         ramps: Vec::new(),
         color_register,
+        position_register: None,
     }
+}
+
+#[test]
+fn point_program_position_register_is_optional_and_requires_vec3() {
+    let mut program = value_program(
+        vec![
+            PointInstruction::Position,
+            PointInstruction::Constant {
+                value: PointAttributeElementType::Color.default_value(),
+            },
+        ],
+        1,
+    );
+    program.position_register = Some(0);
+    program.validate().unwrap();
+
+    program.position_register = Some(1);
+    assert!(program.validate().unwrap_err().contains("requires Vec3"));
 }
 
 #[test]

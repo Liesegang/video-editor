@@ -77,6 +77,7 @@ fn comparison_program(
             instructions,
             ramps: Vec::new(),
             color_register,
+            position_register: None,
         },
         expected,
     )
@@ -196,6 +197,7 @@ fn selection_program(
             instructions,
             ramps: Vec::new(),
             color_register,
+            position_register: None,
         },
         expected,
     )
@@ -341,6 +343,7 @@ fn gpu_point_select_is_eager_and_does_not_hide_an_invalid_unselected_branch() {
         ],
         ramps: Vec::new(),
         color_register: 7,
+        position_register: None,
     });
     let mut renderer = SkiaRenderer::new(256, 144, transparent(), true, None, None).unwrap();
     let pixels = render_point_test_scene(&mut renderer, &scene).unwrap();

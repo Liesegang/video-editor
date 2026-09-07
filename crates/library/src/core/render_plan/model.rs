@@ -168,6 +168,7 @@ pub(crate) struct CompiledPointProgram {
     pub schema: PointAttributeSchema,
     pub instructions: Vec<CompiledPointInstruction>,
     pub color_register: u16,
+    pub position_register: Option<u16>,
 }
 
 /// Compile-time constraint for a Point value. Numeric uniforms retain their

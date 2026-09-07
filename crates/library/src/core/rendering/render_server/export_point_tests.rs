@@ -416,3 +416,109 @@ fn conditional_fields_export_uses_boolean_capture_and_color_selection() {
 fn authoring_conditional_fields_point_png_export_matches_preview_and_is_nontransparent() {
     assert_point_png_export_matches_preview(conditional_fields_export_project());
 }
+
+fn positioned_points_export_project() -> Arc<AuthoringProject> {
+    use crate::model::property::{Property, PropertyValue, Vec3};
+
+    let mut project = vector_fields_export_project().as_ref().clone();
+    let definition = project.module_definitions.values_mut().next().unwrap();
+    let position_attribute = definition
+        .graph
+        .nodes
+        .values()
+        .find(|node| {
+            matches!(node.content(), NodeContent::NativeOperation(operation)
+                if operation.catalog_id == PointNodeRole::StoreAttribute(PointAttributeElementType::Vec3).catalog_id())
+        })
+        .unwrap()
+        .id;
+    let renderer_input = definition
+        .graph
+        .connections
+        .iter()
+        .find(|edge| edge.to.port == "particles")
+        .unwrap()
+        .clone();
+    let mut position = Node::new_catalog_node(PointNodeRole::SetPosition.catalog_id()).unwrap();
+    position
+        .set_property(
+            "offset".into(),
+            Property::constant(PropertyValue::Vec3(Vec3 {
+                x: 36.0.into(),
+                y: (-20.0).into(),
+                z: 8.0.into(),
+            })),
+        )
+        .unwrap();
+    let position_id = position.id;
+    definition.graph.nodes.insert(position_id, position);
+    definition
+        .graph
+        .connections
+        .retain(|edge| edge.id != renderer_input.id);
+    for (from, output, to, input) in [
+        (renderer_input.from.node_id, "points", position_id, "points"),
+        (position_attribute, "attribute", position_id, "position"),
+        (
+            position_id,
+            "points",
+            renderer_input.to.node_id,
+            "particles",
+        ),
+    ] {
+        definition.graph.connections.push(ModuleConnection {
+            id: ModuleConnectionId::new(),
+            from: ModulePortAddress {
+                node_id: from,
+                port: output.into(),
+            },
+            to: ModulePortAddress {
+                node_id: to,
+                port: input.into(),
+            },
+            order: 0,
+            blend_mode: crate::model::BlendMode::Normal,
+        });
+    }
+    definition.topology_revision += 1;
+    project.validate().unwrap();
+    Arc::new(project)
+}
+
+#[test]
+fn positioned_points_export_uses_attribute_driven_geometry_in_the_shared_program() {
+    let project = positioned_points_export_project();
+    let plan = RenderPlanCompiler::compile(&project).unwrap();
+    let definition = plan.module_definitions.values().next().unwrap();
+    let program = definition
+        .point_renderers
+        .values()
+        .next()
+        .unwrap()
+        .point_program
+        .as_ref()
+        .unwrap();
+    assert!(program.position_register.is_some());
+    assert!(program.instructions.iter().any(|instruction| matches!(
+        instruction,
+        crate::core::render_plan::CompiledPointInstruction::LoadAttribute { attribute: 0 }
+    )));
+    assert!(
+        preflight_authoring_video_requires_gpu(
+            &project,
+            &plan,
+            &PluginManager::default(),
+            project.root_timeline_id,
+            None,
+            1,
+        )
+        .unwrap()
+    );
+}
+
+#[cfg(all(feature = "gl", target_os = "windows"))]
+#[test]
+#[ignore = "requires an idle desktop OpenGL 4.3 GPU"]
+fn authoring_positioned_points_png_export_matches_preview_and_is_nontransparent() {
+    assert_point_png_export_matches_preview(positioned_points_export_project());
+}

@@ -66,6 +66,9 @@ pub struct PointRenderProgram {
     pub instructions: Vec<PointInstruction>,
     pub ramps: Vec<GradientValue>,
     pub color_register: u16,
+    /// Final derived position for the rendered stream. `None` preserves the
+    /// producer's position without allocating a parallel authored value.
+    pub position_register: Option<u16>,
 }
 
 impl PointRenderProgram {
@@ -187,6 +190,9 @@ impl PointRenderProgram {
             self.color_register,
             PointAttributeElementType::Color,
         )?;
+        if let Some(position) = self.position_register {
+            require_register(&registers, position, PointAttributeElementType::Vec3)?;
+        }
         Ok(registers)
     }
 }

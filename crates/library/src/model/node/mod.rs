@@ -29,7 +29,8 @@ pub(crate) use catalog::{
     APPEARANCE_STACK_CATALOG_ID, CONDITION_INPUT_PORT, ConditionalNodeRole,
     ELLIPSE_SHAPE_CATALOG_ID, NUMERIC_LENGTH_CATALOG_ID, NUMERIC_LENGTH_INPUT_PORT,
     PARTICLE_SPRITE_RENDERER_CATALOG_ID, PARTICLE_SYSTEM_PORT, POINT_ATTRIBUTE_OUTPUT_PORT,
-    POINT_ATTRIBUTE_VALUE_PORT, POINT_SOURCE_PORT, ParticleNodeRole, PointNodeRole,
+    POINT_ATTRIBUTE_VALUE_PORT, POINT_OFFSET_INPUT_PORT, POINT_POSITION_INPUT_PORT,
+    POINT_SELECTION_INPUT_PORT, POINT_SOURCE_PORT, ParticleNodeRole, PointNodeRole,
     RECTANGLE_SHAPE_CATALOG_ID, SELECT_FALSE_INPUT_PORT, SELECT_TRUE_INPUT_PORT,
 };
 pub use catalog::{
@@ -538,6 +539,7 @@ impl Node {
                         | PortDataType::Vec3
                         | PortDataType::Vec4
                         | PortDataType::ParticleSystem
+                        | PortDataType::PointSource
                 ) && self.bypass_input_for_output(&port.key).is_some()
             })
     }

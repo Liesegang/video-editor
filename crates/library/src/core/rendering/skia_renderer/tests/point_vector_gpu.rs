@@ -60,6 +60,7 @@ fn result_program(
         instructions,
         ramps: Vec::new(),
         color_register,
+        position_register: None,
     }
 }
 

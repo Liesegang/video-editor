@@ -127,6 +127,7 @@ fn typed_program() -> (PointRenderProgram, Vec<PointAttributeGpuDefault>) {
                 &[(0.0, Color::black()), (1.0, Color::white())],
             )],
             color_register,
+            position_register: None,
         },
         expected,
     )
@@ -188,6 +189,7 @@ fn copy_program(kind: PointAttributeElementType, value: PropertyValue) -> PointR
         instructions,
         ramps: Vec::new(),
         color_register,
+        position_register: None,
     }
 }
 
@@ -370,6 +372,7 @@ fn gpu_point_attribute_loads_roundtrip_every_type_and_invalid_integer_stores_zer
         ],
         ramps: Vec::new(),
         color_register: 7,
+        position_register: None,
     });
     let pixels = render_point_test_scene(&mut renderer, &scene).unwrap();
     let fields = renderer

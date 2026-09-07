@@ -177,7 +177,11 @@ void main() {
 }
 "#;
 
-pub(super) fn point_vertex_source(kind: PointSourceKind, point_fields: bool) -> String {
+pub(super) fn point_vertex_source(
+    kind: PointSourceKind,
+    point_fields: bool,
+    position_output: bool,
+) -> String {
     let source = kind
         .shader()
         .replace("// PARTICLE_STRUCT", PARTICLE_STRUCT_GLSL);
@@ -187,6 +191,14 @@ pub(super) fn point_vertex_source(kind: PointSourceKind, point_fields: bool) -> 
         .replace(
             "// POINT_COLOR_BUFFER",
             if point_fields { POINT_COLOR_BUFFER } else { "" },
+        )
+        .replace(
+            "// POINT_POSITION_BUFFER",
+            if position_output {
+                POINT_POSITION_BUFFER
+            } else {
+                ""
+            },
         )
         .replace(
             "// POINT_COLOR_OUTPUT",
@@ -212,12 +224,21 @@ pub(super) fn point_vertex_source(kind: PointSourceKind, point_fields: bool) -> 
                 ""
             },
         )
+        .replace(
+            "// POINT_POSITION_ASSIGN",
+            if position_output {
+                "point.position_size.xyz = pointPositions[particle_index].xyz;"
+            } else {
+                ""
+            },
+        )
 }
 
 const POINT_VERTEX: &str = r#"#version 430 core
 // RENDER_POINT_STRUCT
 // POINT_SOURCE
 // POINT_COLOR_BUFFER
+// POINT_POSITION_BUFFER
 
 uniform vec2 uLogicalSize;
 uniform vec2 uTargetSize;
@@ -243,6 +264,7 @@ void main() {
         // POINT_COLOR_HIDDEN
         return;
     }
+    // POINT_POSITION_ASSIGN
 
     vec3 position = point.position_size.xyz;
     float perspective = uFocalLength / max(1.0, uFocalLength + position.z);
@@ -305,6 +327,10 @@ void main() {
 "#;
 const POINT_COLOR_BUFFER: &str = r#"layout(std430, binding = 2) readonly buffer PointColorBuffer {
     vec4 pointColors[];
+};"#;
+
+const POINT_POSITION_BUFFER: &str = r#"layout(std430, binding = 4) readonly buffer PointPositionBuffer {
+    vec4 pointPositions[];
 };"#;
 
 const LINEAR_TO_SRGB: &str = r#"

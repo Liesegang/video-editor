@@ -265,6 +265,7 @@ class QaRunnerTests(unittest.TestCase):
             "point-grid",
             "point-vector-fields",
             "point-conditional-fields",
+            "point-position",
             "inspector-asset-preview",
             "timeline-edit",
             "timeline-transition",

@@ -11,6 +11,7 @@ use crate::model::node::{
     COLOR_RAMP_FACTOR_PORT, COLOR_RAMP_GRADIENT_PORT, COLOR_VALUE_PORT, CONDITION_INPUT_PORT,
     ColorContent, ConditionalNodeRole, NUMERIC_LENGTH_CATALOG_ID, NUMERIC_LENGTH_INPUT_PORT, Node,
     NodeContent, PARTICLE_SYSTEM_PORT, POINT_ATTRIBUTE_OUTPUT_PORT, POINT_ATTRIBUTE_VALUE_PORT,
+    POINT_OFFSET_INPUT_PORT, POINT_POSITION_INPUT_PORT, POINT_SELECTION_INPUT_PORT,
     POINT_SOURCE_PORT, PointNodeRole, SELECT_FALSE_INPUT_PORT, SELECT_TRUE_INPUT_PORT,
 };
 use crate::model::point::{
@@ -19,17 +20,38 @@ use crate::model::point::{
 };
 use crate::model::project::NUMBER_RESULT_OUTPUT_PORT;
 
+mod dependencies;
+
+use dependencies::PointDependencyResolver;
+pub(super) use dependencies::validate_point_field_consumers;
+
 const POINT_AGE_OUTPUT_PORT: &str = "age";
 const POINT_NORMALIZED_AGE_OUTPUT_PORT: &str = "normalized_age";
 const POINT_POSITION_OUTPUT_PORT: &str = "position";
 const POINT_RANDOM_OUTPUT_PORT: &str = "random";
 const SPRITE_COLOR_INPUT_PORT: &str = "color";
 
-/// Point stream selected by one Sprite endpoint before Particle stage
-/// recognition. Stores are ordered upstream-to-downstream.
+#[derive(Clone, Copy)]
+enum PointStage {
+    StoreAttribute(uuid::Uuid),
+    SetPosition(uuid::Uuid),
+    Passthrough(uuid::Uuid),
+}
+
+/// Point stream selected by one Sprite endpoint before source recognition.
+/// Render-stage operations are ordered upstream-to-downstream.
 struct PointStreamTrace {
     pub terminal_source: ModulePortAddress,
-    stores: Vec<uuid::Uuid>,
+    stages: Vec<PointStage>,
+}
+
+impl PointStreamTrace {
+    fn stores(&self) -> impl Iterator<Item = uuid::Uuid> + '_ {
+        self.stages.iter().filter_map(|stage| match stage {
+            PointStage::StoreAttribute(node_id) => Some(*node_id),
+            PointStage::SetPosition(_) | PointStage::Passthrough(_) => None,
+        })
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -116,12 +138,9 @@ pub fn validate_module_node_name(
         let Some(trace) = trace_point_stream(definition, renderer.id)? else {
             continue;
         };
-        if trace.stores.contains(&node_id) {
-            point_attribute_schema_with_name(
-                definition,
-                &trace.stores,
-                Some((node_id, proposed_name)),
-            )?;
+        let stores = trace.stores().collect::<Vec<_>>();
+        if stores.contains(&node_id) {
+            point_attribute_schema_with_name(definition, &stores, Some((node_id, proposed_name)))?;
         }
     }
     Ok(())
@@ -162,35 +181,41 @@ fn trace_point_stream(
     let Some(mut source) = single_input_source(definition, &renderer_input) else {
         return Ok(None);
     };
-    let mut stores = Vec::new();
+    let mut stages = Vec::new();
     let mut visited = HashSet::new();
     loop {
         let Some(node) = definition.graph.nodes.get(&source.node_id) else {
             return Ok(None);
         };
-        if point_role(node)
-            .and_then(PointNodeRole::attribute_type)
-            .is_none()
-        {
+        let Some(role) = point_role(node) else {
             break;
-        }
+        };
+        let stage = match role {
+            PointNodeRole::StoreAttribute(_) => PointStage::StoreAttribute(node.id),
+            PointNodeRole::SetPosition => PointStage::SetPosition(node.id),
+            PointNodeRole::Grid | PointNodeRole::Info => break,
+        };
         if source.port != POINT_SOURCE_PORT || !visited.insert(node.id) {
             return Ok(None);
         }
-        if !node.enabled || node.bypassed {
+        if !node.enabled {
             return Ok(None);
         }
-        stores.push(node.id);
-        let store_input = address(node.id, POINT_SOURCE_PORT);
-        let Some(upstream) = single_input_source(definition, &store_input) else {
+        stages.push(if node.bypassed {
+            PointStage::Passthrough(node.id)
+        } else {
+            stage
+        });
+        let point_input = address(node.id, POINT_SOURCE_PORT);
+        let Some(upstream) = single_input_source(definition, &point_input) else {
             return Ok(None);
         };
         source = upstream;
     }
-    stores.reverse();
+    stages.reverse();
     Ok(Some(PointStreamTrace {
         terminal_source: source,
-        stores,
+        stages,
     }))
 }
 
@@ -201,36 +226,111 @@ fn compile_point_program(
     source_lineage: &HashSet<ModulePortAddress>,
     capabilities: PointSourceCapabilities,
 ) -> Result<Option<CompiledPointProgram>, String> {
-    let schema = point_attribute_schema(definition, &trace.stores)?;
+    let stores = trace.stores().collect::<Vec<_>>();
+    let schema = point_attribute_schema(definition, &stores)?;
     let mut builder = PointProgramBuilder::new(definition, schema);
     let mut allowed_streams = source_lineage.clone();
+    // `None` is the producer-local source position. A Set Position stage
+    // replaces it with an immutable SSA value only for its downstream branch.
+    let mut stream_positions = source_lineage
+        .iter()
+        .cloned()
+        .map(|stream| (stream, None))
+        .collect::<HashMap<_, _>>();
+    let mut available_attributes = 0;
+    let mut position_register = None;
 
-    for (attribute, store_id) in trace.stores.iter().enumerate() {
-        let point_input = address(*store_id, POINT_SOURCE_PORT);
+    for stage in &trace.stages {
+        let stage_id = match stage {
+            PointStage::StoreAttribute(node_id)
+            | PointStage::SetPosition(node_id)
+            | PointStage::Passthrough(node_id) => *node_id,
+        };
+        let point_input = address(stage_id, POINT_SOURCE_PORT);
         let expected_stream = single_input_source(definition, &point_input).ok_or_else(|| {
-            format!("Point Store Node {store_id} requires one Point Source input")
+            format!("Point operation Node {stage_id} requires one Point Source input")
         })?;
         if !allowed_streams.contains(&expected_stream) {
             return Err(format!(
-                "Point Store Node {store_id} is connected to a different Point domain"
+                "Point operation Node {stage_id} is connected to a different Point domain"
             ));
         }
         let context = FieldContext {
             allowed_streams: &allowed_streams,
-            available_attributes: attribute,
+            stream_positions: &stream_positions,
+            available_attributes,
             capabilities,
         };
-        let element_type = builder.schema.attributes()[attribute].element_type();
-        let value = builder.compile_input(
-            &address(*store_id, POINT_ATTRIBUTE_VALUE_PORT),
-            element_type,
-            &context,
-        )?;
-        builder.emit(CompiledPointInstruction::StoreAttribute {
-            attribute: checked_u16(attribute, "Point attribute")?,
-            value: value.register,
-        })?;
-        allowed_streams.insert(address(*store_id, POINT_SOURCE_PORT));
+        let output_position = match stage {
+            PointStage::StoreAttribute(store_id) => {
+                let element_type = builder.schema.attributes()[available_attributes].element_type();
+                let value = builder.compile_input(
+                    &address(*store_id, POINT_ATTRIBUTE_VALUE_PORT),
+                    element_type,
+                    &context,
+                )?;
+                builder.emit(CompiledPointInstruction::StoreAttribute {
+                    attribute: checked_u16(available_attributes, "Point attribute")?,
+                    value: value.register,
+                })?;
+                available_attributes += 1;
+                context
+                    .stream_positions
+                    .get(&expected_stream)
+                    .cloned()
+                    .flatten()
+            }
+            PointStage::SetPosition(node_id) => {
+                let upstream = builder.compile_stream_position(&expected_stream, &context)?;
+                let position_target = address(*node_id, POINT_POSITION_INPUT_PORT);
+                let position = if single_input_source(definition, &position_target).is_some()
+                    || definition
+                        .interface
+                        .parameters
+                        .iter()
+                        .any(|parameter| parameter.target == position_target)
+                {
+                    builder.compile_input(
+                        &position_target,
+                        PointAttributeElementType::Vec3,
+                        &context,
+                    )?
+                } else {
+                    upstream.clone()
+                };
+                let offset = builder.compile_input(
+                    &address(*node_id, POINT_OFFSET_INPUT_PORT),
+                    PointAttributeElementType::Vec3,
+                    &context,
+                )?;
+                let selected = builder.compile_input(
+                    &address(*node_id, POINT_SELECTION_INPUT_PORT),
+                    PointAttributeElementType::Boolean,
+                    &context,
+                )?;
+                let translated = builder.emit_binary(
+                    crate::model::point::NumericBinaryOperation::Add,
+                    position,
+                    offset,
+                )?;
+                let result = builder.emit_select(
+                    PointAttributeElementType::Vec3,
+                    selected,
+                    translated,
+                    upstream,
+                )?;
+                position_register = Some(result.register);
+                Some(result)
+            }
+            PointStage::Passthrough(_) => context
+                .stream_positions
+                .get(&expected_stream)
+                .cloned()
+                .flatten(),
+        };
+        let output_stream = address(stage_id, POINT_SOURCE_PORT);
+        allowed_streams.insert(output_stream.clone());
+        stream_positions.insert(output_stream, output_position);
     }
 
     let color_target = address(renderer_node_id, SPRITE_COLOR_INPUT_PORT);
@@ -238,12 +338,17 @@ fn compile_point_program(
     let varying_color = color_source
         .as_ref()
         .is_some_and(|source| builder.depends_on_point(source));
-    if trace.stores.is_empty() && !varying_color {
+    let has_executable_stage = trace
+        .stages
+        .iter()
+        .any(|stage| !matches!(stage, PointStage::Passthrough(_)));
+    if !has_executable_stage && !varying_color {
         return Ok(None);
     }
     let context = FieldContext {
         allowed_streams: &allowed_streams,
-        available_attributes: trace.stores.len(),
+        stream_positions: &stream_positions,
+        available_attributes,
         capabilities,
     };
     let color = builder.compile_input(&color_target, PointAttributeElementType::Color, &context)?;
@@ -251,6 +356,7 @@ fn compile_point_program(
         schema: builder.schema,
         instructions: builder.instructions,
         color_register: color.register,
+        position_register,
     };
     Ok(Some(program))
 }
@@ -288,75 +394,9 @@ fn point_attribute_schema_with_name(
     PointAttributeSchema::new(definitions)
 }
 
-/// Reject a varying Point value before the stateless value runtime can mistake
-/// it for one frame-wide PropertyValue. Dead editor branches remain harmless.
-pub(super) fn validate_point_field_consumers(
-    definition: &ModuleDefinition,
-    active_nodes: &HashSet<uuid::Uuid>,
-) -> Result<(), String> {
-    let mut dependencies = PointDependencyResolver::new(definition);
-    for connection in &definition.graph.connections {
-        if !active_nodes.contains(&connection.to.node_id)
-            || !dependencies.depends_on_point(&connection.from)
-        {
-            continue;
-        }
-        let target = definition
-            .graph
-            .nodes
-            .get(&connection.to.node_id)
-            .ok_or_else(|| "Point field reaches a missing consumer".to_string())?;
-        let supported = match target.content() {
-            NodeContent::Value(operation) => {
-                connection.to.port == operation.primary_input()
-                    || connection.to.port == operation.secondary_input()
-            }
-            NodeContent::Color(ColorContent::ColorRamp) => {
-                connection.to.port == COLOR_RAMP_FACTOR_PORT
-            }
-            NodeContent::NativeOperation(operation) => {
-                if let Some(role) = ConditionalNodeRole::from_catalog_id(&operation.catalog_id) {
-                    match role {
-                        ConditionalNodeRole::Compare(_) => {
-                            matches!(connection.to.port.as_str(), "a" | "b")
-                        }
-                        ConditionalNodeRole::Select(_) => matches!(
-                            connection.to.port.as_str(),
-                            CONDITION_INPUT_PORT | SELECT_TRUE_INPUT_PORT | SELECT_FALSE_INPUT_PORT
-                        ),
-                    }
-                } else if operation.catalog_id == NUMERIC_LENGTH_CATALOG_ID {
-                    connection.to.port == NUMERIC_LENGTH_INPUT_PORT
-                } else {
-                    match point_role(target) {
-                        Some(PointNodeRole::StoreAttribute(_)) => {
-                            connection.to.port == POINT_ATTRIBUTE_VALUE_PORT
-                        }
-                        Some(PointNodeRole::Info) => false,
-                        Some(PointNodeRole::Grid) => false,
-                        None => {
-                            particle_sprite(target) && connection.to.port == SPRITE_COLOR_INPUT_PORT
-                        }
-                    }
-                }
-            }
-            _ => false,
-        };
-        if !supported {
-            return Err(format!(
-                "Per-Point value {}:{} cannot drive unsupported input {}:{}",
-                connection.from.node_id,
-                connection.from.port,
-                connection.to.node_id,
-                connection.to.port
-            ));
-        }
-    }
-    Ok(())
-}
-
 struct FieldContext<'a> {
     allowed_streams: &'a HashSet<ModulePortAddress>,
+    stream_positions: &'a HashMap<ModulePortAddress, Option<CompiledValue>>,
     available_attributes: usize,
     capabilities: PointSourceCapabilities,
 }
@@ -430,6 +470,71 @@ impl<'a> PointProgramBuilder<'a> {
 
     fn depends_on_point(&mut self, source: &ModulePortAddress) -> bool {
         self.dependency_resolver.depends_on_point(source)
+    }
+
+    fn compile_stream_position(
+        &mut self,
+        stream: &ModulePortAddress,
+        context: &FieldContext<'_>,
+    ) -> Result<CompiledValue, String> {
+        match context.stream_positions.get(stream) {
+            Some(Some(value)) => Ok(value.clone()),
+            Some(None) => {
+                let mut dependencies = FieldDependencies::default();
+                dependencies.point_streams.insert(stream.clone());
+                Ok(CompiledValue {
+                    register: self.emit(CompiledPointInstruction::Position)?,
+                    value_type: PointAttributeElementType::Vec3.into(),
+                    dependencies,
+                })
+            }
+            None => Err(format!(
+                "Point position reads a different Point domain at {}:{}",
+                stream.node_id, stream.port
+            )),
+        }
+    }
+
+    fn emit_binary(
+        &mut self,
+        operation: crate::model::point::NumericBinaryOperation,
+        left: CompiledValue,
+        right: CompiledValue,
+    ) -> Result<CompiledValue, String> {
+        let value_type = left.value_type.binary_result(right.value_type)?;
+        let mut dependencies = left.dependencies;
+        dependencies.merge(&right.dependencies);
+        Ok(CompiledValue {
+            register: self.emit(CompiledPointInstruction::Binary {
+                operation,
+                left: left.register,
+                right: right.register,
+            })?,
+            value_type,
+            dependencies,
+        })
+    }
+
+    fn emit_select(
+        &mut self,
+        element_type: PointAttributeElementType,
+        condition: CompiledValue,
+        when_true: CompiledValue,
+        when_false: CompiledValue,
+    ) -> Result<CompiledValue, String> {
+        let mut dependencies = condition.dependencies;
+        dependencies.merge(&when_true.dependencies);
+        dependencies.merge(&when_false.dependencies);
+        Ok(CompiledValue {
+            register: self.emit(CompiledPointInstruction::Select {
+                element_type,
+                condition: condition.register,
+                when_true: when_true.register,
+                when_false: when_false.register,
+            })?,
+            value_type: element_type.into(),
+            dependencies,
+        })
     }
 
     fn compile_input(
@@ -528,7 +633,7 @@ impl<'a> PointProgramBuilder<'a> {
                     Some(PointNodeRole::StoreAttribute(_)) => {
                         self.compile_attribute_load(&node, source, context)?
                     }
-                    Some(PointNodeRole::Grid) | None => {
+                    Some(PointNodeRole::Grid | PointNodeRole::SetPosition) | None => {
                         return Err(unsupported_field_node(&node, source));
                     }
                 },
@@ -675,7 +780,7 @@ impl<'a> PointProgramBuilder<'a> {
             )
         })?;
         let mut dependencies = FieldDependencies::default();
-        dependencies.point_streams.insert(point_stream);
+        dependencies.point_streams.insert(point_stream.clone());
         dependencies.validate(context)?;
         let instruction = match source.port.as_str() {
             POINT_AGE_OUTPUT_PORT if context.capabilities.age => CompiledPointInstruction::Age,
@@ -688,7 +793,9 @@ impl<'a> PointProgramBuilder<'a> {
                     source.port
                 ));
             }
-            POINT_POSITION_OUTPUT_PORT => CompiledPointInstruction::Position,
+            POINT_POSITION_OUTPUT_PORT => {
+                return self.compile_stream_position(&point_stream, context);
+            }
             POINT_RANDOM_OUTPUT_PORT => CompiledPointInstruction::Random { channel: 0 },
             _ => {
                 return Err(format!(
@@ -757,89 +864,6 @@ impl<'a> PointProgramBuilder<'a> {
         let register = checked_u16(self.instructions.len(), "Point register")?;
         self.instructions.push(instruction);
         Ok(register)
-    }
-}
-
-struct PointDependencyResolver<'a> {
-    definition: &'a ModuleDefinition,
-    memo: HashMap<ModulePortAddress, bool>,
-    visiting: HashSet<ModulePortAddress>,
-}
-
-impl<'a> PointDependencyResolver<'a> {
-    fn new(definition: &'a ModuleDefinition) -> Self {
-        Self {
-            definition,
-            memo: HashMap::new(),
-            visiting: HashSet::new(),
-        }
-    }
-
-    fn depends_on_point(&mut self, source: &ModulePortAddress) -> bool {
-        if let Some(result) = self.memo.get(source) {
-            return *result;
-        }
-        if !self.visiting.insert(source.clone()) {
-            return true;
-        }
-        let result = self.depends_on_point_inner(source);
-        self.visiting.remove(source);
-        self.memo.insert(source.clone(), result);
-        result
-    }
-
-    fn depends_on_point_inner(&mut self, source: &ModulePortAddress) -> bool {
-        let Ok(port) = self
-            .definition
-            .graph
-            .port_definition(source, crate::model::project::PortDirection::Output)
-        else {
-            return false;
-        };
-        if !matches!(
-            port.data_type,
-            crate::model::project::PortDataType::Number
-                | crate::model::project::PortDataType::Boolean
-                | crate::model::project::PortDataType::Integer
-                | crate::model::project::PortDataType::Numeric
-                | crate::model::project::PortDataType::Vec2
-                | crate::model::project::PortDataType::Vec3
-                | crate::model::project::PortDataType::Vec4
-                | crate::model::project::PortDataType::Color
-        ) {
-            return false;
-        }
-        let Some(node) = self.definition.graph.nodes.get(&source.node_id).cloned() else {
-            return false;
-        };
-        if point_role(&node).is_some_and(|role| match role {
-            PointNodeRole::Info => matches!(
-                source.port.as_str(),
-                POINT_AGE_OUTPUT_PORT
-                    | POINT_NORMALIZED_AGE_OUTPUT_PORT
-                    | POINT_RANDOM_OUTPUT_PORT
-                    | POINT_POSITION_OUTPUT_PORT
-            ),
-            PointNodeRole::StoreAttribute(_) => source.port == POINT_ATTRIBUTE_OUTPUT_PORT,
-            PointNodeRole::Grid => false,
-        }) {
-            return true;
-        }
-        if node.bypassed
-            && let Some(input) = node.bypass_input_for_output(&source.port)
-        {
-            return single_input_source(self.definition, &address(node.id, input))
-                .is_some_and(|source| self.depends_on_point(&source));
-        }
-        let inputs = self
-            .definition
-            .graph
-            .connections
-            .iter()
-            .filter(|connection| connection.to.node_id == node.id)
-            .map(|connection| connection.from.clone())
-            .collect::<Vec<_>>();
-        inputs.iter().any(|source| self.depends_on_point(source))
     }
 }
 

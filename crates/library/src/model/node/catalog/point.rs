@@ -13,11 +13,15 @@ use crate::model::property::{PropertyDefinition, PropertyUiType, PropertyValue, 
 pub(crate) const POINT_SOURCE_PORT: &str = "points";
 pub(crate) const POINT_ATTRIBUTE_VALUE_PORT: &str = "value";
 pub(crate) const POINT_ATTRIBUTE_OUTPUT_PORT: &str = "attribute";
+pub(crate) const POINT_POSITION_INPUT_PORT: &str = "position";
+pub(crate) const POINT_OFFSET_INPUT_PORT: &str = "offset";
+pub(crate) const POINT_SELECTION_INPUT_PORT: &str = "selection";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PointNodeRole {
     Grid,
     Info,
+    SetPosition,
     StoreAttribute(PointAttributeElementType),
 }
 
@@ -26,6 +30,7 @@ impl PointNodeRole {
         match self {
             Self::Grid => "native.point.grid",
             Self::Info => "native.point.info",
+            Self::SetPosition => "native.point.set-position",
             Self::StoreAttribute(PointAttributeElementType::Number) => {
                 "native.point.store-number-attribute"
             }
@@ -51,7 +56,7 @@ impl PointNodeRole {
     }
 
     pub(crate) fn from_catalog_id(catalog_id: &str) -> Option<Self> {
-        [Self::Grid, Self::Info]
+        [Self::Grid, Self::Info, Self::SetPosition]
             .into_iter()
             .chain(STORE_ATTRIBUTE_TYPES.into_iter().map(Self::StoreAttribute))
             .find(|role| role.catalog_id() == catalog_id)
@@ -60,7 +65,7 @@ impl PointNodeRole {
     pub(crate) const fn attribute_type(self) -> Option<PointAttributeElementType> {
         match self {
             Self::StoreAttribute(element_type) => Some(element_type),
-            Self::Grid | Self::Info => None,
+            Self::Grid | Self::Info | Self::SetPosition => None,
         }
     }
 }
@@ -92,6 +97,16 @@ const POINT_INFO_OUTPUTS: &[PortSpec] = &[
     PortSpec::single("age", "Age", PortDataType::Number),
     PortSpec::single("normalized_age", "Normalized Age", PortDataType::Number),
     PortSpec::single("random", "Random", PortDataType::Number),
+];
+const POINT_SET_POSITION_INPUTS: &[PortSpec] = &[
+    POINT_SOURCE,
+    PortSpec::single(POINT_POSITION_INPUT_PORT, "Position", PortDataType::Vec3),
+    PortSpec::single(POINT_OFFSET_INPUT_PORT, "Offset", PortDataType::Vec3),
+    PortSpec::single(
+        POINT_SELECTION_INPUT_PORT,
+        "Selection",
+        PortDataType::Boolean,
+    ),
 ];
 const fn store_attribute_inputs(data_type: PortDataType) -> [PortSpec; 2] {
     [
@@ -174,6 +189,25 @@ const SPECS: &[DescriptorSpec] = &[
         POINT_SOURCE_INPUT,
         POINT_INFO_OUTPUTS,
         no_properties,
+    ),
+    DescriptorSpec::implemented_native(
+        DescriptorIdentity::new(
+            PointNodeRole::SetPosition.catalog_id(),
+            "Set Point Position",
+            "Points",
+            "node_editor.menu.create.point_set_position",
+            &[
+                "point",
+                "set",
+                "position",
+                "offset",
+                "transform",
+                "geometry",
+            ],
+        ),
+        POINT_SET_POSITION_INPUTS,
+        &[POINT_SOURCE],
+        set_position_properties,
     ),
     store_attribute_spec!(
         0,
@@ -344,6 +378,27 @@ fn store_attribute_properties(element_type: PointAttributeElementType) -> Vec<Pr
         "Value",
         element_type.default_value(),
     )]
+}
+
+fn set_position_properties() -> Vec<PropertyDefinition> {
+    vec![
+        PropertyDefinition::new(
+            POINT_OFFSET_INPUT_PORT,
+            PropertyUiType::vec3_with_range(-1_000_000.0, 1_000_000.0, 0.1, " px", true, true),
+            "Offset",
+            PropertyValue::Vec3(Vec3 {
+                x: OrderedFloat(0.0),
+                y: OrderedFloat(0.0),
+                z: OrderedFloat(0.0),
+            }),
+        ),
+        PropertyDefinition::new(
+            POINT_SELECTION_INPUT_PORT,
+            PropertyUiType::Bool,
+            "Selection",
+            PropertyValue::Boolean(true),
+        ),
+    ]
 }
 
 macro_rules! store_property_factory {

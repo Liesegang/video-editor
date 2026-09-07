@@ -99,12 +99,19 @@ pub(super) struct GridUniforms {
     size: Option<glow::UniformLocation>,
 }
 
+#[derive(Clone, Copy)]
+pub(super) enum PointSourceRequirements {
+    Optional,
+    SizeAndAlive,
+    FullGeometry,
+}
+
 impl PointSourceUniforms {
     pub fn new(
         gl: &glow::Context,
         program: glow::Program,
         kind: PointSourceKind,
-        require_geometry: bool,
+        requirements: PointSourceRequirements,
     ) -> Result<Self, LibraryError> {
         let uniforms = match kind {
             PointSourceKind::Particle => Self::Particle,
@@ -117,20 +124,26 @@ impl PointSourceUniforms {
                 size: uniform(gl, program, "uGridSize"),
             }),
         };
-        if require_geometry
-            && let Self::Grid(grid) = &uniforms
-            && [
-                grid.counts.as_ref(),
-                grid.spacing.as_ref(),
-                grid.center.as_ref(),
-                grid.size.as_ref(),
-            ]
-            .iter()
-            .any(|location| location.is_none())
-        {
-            return Err(LibraryError::Render(
-                "GPU Point Grid sprite omitted required source uniforms".to_string(),
-            ));
+        if let Self::Grid(grid) = &uniforms {
+            let missing = match requirements {
+                PointSourceRequirements::Optional => false,
+                PointSourceRequirements::SizeAndAlive => {
+                    grid.counts.is_none() || grid.size.is_none()
+                }
+                PointSourceRequirements::FullGeometry => [
+                    grid.counts.as_ref(),
+                    grid.spacing.as_ref(),
+                    grid.center.as_ref(),
+                    grid.size.as_ref(),
+                ]
+                .iter()
+                .any(|location| location.is_none()),
+            };
+            if missing {
+                return Err(LibraryError::Render(
+                    "GPU Point Grid sprite omitted required source uniforms".to_string(),
+                ));
+            }
         }
         Ok(uniforms)
     }

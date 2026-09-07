@@ -181,6 +181,7 @@ fn constant_color_program(use_last_stop: bool) -> PointRenderProgram {
         }],
         ramps: Vec::new(),
         color_register: 0,
+        position_register: None,
     }
 }
 
@@ -205,6 +206,25 @@ fn point_pipeline_keys_are_source_and_shader_shape_specific() {
                 .unwrap(),
         },
         "one Module executable may contain both Particle and Grid producers"
+    );
+}
+
+#[test]
+fn derived_position_output_has_distinct_shader_shape_and_exact_buffer_budget() {
+    let color_only = constant_color_program(false);
+    let mut positioned = color_only.clone();
+    positioned.instructions.push(PointInstruction::Position);
+    positioned.position_register = Some(1);
+    let capacity = 37;
+    let color_bytes =
+        point_fields::required_invocation_bytes(false, Some(&color_only), capacity).unwrap();
+    let positioned_bytes =
+        point_fields::required_invocation_bytes(false, Some(&positioned), capacity).unwrap();
+    assert_eq!(positioned_bytes - color_bytes, u64::from(capacity) * 16);
+    assert_ne!(
+        point_fields::source_hash(PointSourceKind::Grid, Some(&color_only)).unwrap(),
+        point_fields::source_hash(PointSourceKind::Grid, Some(&positioned)).unwrap(),
+        "None/Some position outputs require distinct compute and Sprite pipelines"
     );
 }
 

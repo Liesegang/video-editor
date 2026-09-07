@@ -32,13 +32,17 @@ def component(snapshot, component_id):
     )
 
 
-def enter_exact_numeric(client, component_id, value):
+def enter_exact_numeric(client, component_id, value, after_action=None):
     """Replace one production numeric editor value without losing integer precision."""
 
     client.click_component(component_id)
+    if after_action is not None:
+        after_action("click")
     client.key("a", True, command=True)
     client.key("a", False, command=True)
     client.inject("text", {"text": str(value)})
+    if after_action is not None:
+        after_action("text")
     client.key("enter", True)
     client.key("enter", False)
 
