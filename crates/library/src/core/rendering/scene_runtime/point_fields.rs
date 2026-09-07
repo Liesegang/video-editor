@@ -13,6 +13,10 @@ use crate::model::point::{
 use crate::rendering::gl_resources::link_program;
 
 use super::gl_backend::{PARTICLE_WORKGROUP_SIZE, required_uniform};
+use super::gl_operation_result;
+use super::point_buffer_alloc::{
+    allocate_buffer, color_bytes, geometry_bytes, sprite_selection_bytes, validity_bytes,
+};
 use super::point_field_data::{
     PROGRAM_DATA_BYTES, PROGRAM_HEADER_VEC4S, RAMP_STOP_VEC4S, program_data,
 };
@@ -22,11 +26,16 @@ use super::source::{
     PointSourceBinding, PointSourceKind, PointSourceRequirements, PointSourceUniforms,
     RENDER_POINT_GLSL,
 };
-use super::{drain_gl_errors, gl_operation_result};
 
-const COLOR_STRIDE_BYTES: u64 = 16;
-const GEOMETRY_STRIDE_BYTES: u64 = 16;
-const SPRITE_SELECTION_STRIDE_BYTES: u64 = 4;
+pub(super) const COLOR_STRIDE_BYTES: u64 = 16;
+pub(super) const GEOMETRY_STRIDE_BYTES: u64 = 16;
+pub(super) const SPRITE_SELECTION_STRIDE_BYTES: u64 = 4;
+pub(super) const VALIDITY_STRIDE_BYTES: u64 = 4;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub(super) struct PointFieldRequirements {
+    pub validity: bool,
+}
 
 pub(super) struct PointFieldBuffers {
     pub columns: glow::Buffer,
@@ -38,6 +47,10 @@ pub(super) struct PointFieldBuffers {
     /// Color and geometry. The render shader consumes this only for image
     /// collections; keeping it separate preserves exact integer columns.
     pub sprite_selection: Option<glow::Buffer>,
+    /// Line topology must distinguish a valid transparent Point from an
+    /// invalid field evaluation. Sprite selection and Line validity are
+    /// render-style-exclusive users of binding five.
+    pub validity: Option<glow::Buffer>,
     pub layout: PointColumnLayout,
 }
 
@@ -46,12 +59,18 @@ impl PointFieldBuffers {
         gl: &glow::Context,
         program: &PointRenderProgram,
         capacity: u32,
+        requirements: PointFieldRequirements,
     ) -> Result<Self, LibraryError> {
         let layout = PointColumnLayout::derive(&program.schema, capacity)
             .map_err(LibraryError::Validation)?;
         let color_bytes = color_bytes(capacity)?;
         let geometry_bytes = geometry_bytes(program, capacity)?;
         let sprite_selection_bytes = sprite_selection_bytes(program, capacity)?;
+        if requirements.validity && program.sprite_selection_register.is_some() {
+            return Err(LibraryError::Validation(
+                "Point Line validity cannot share a Sprite selection output".into(),
+            ));
+        }
         let columns = allocate_buffer(gl, layout.byte_len, glow::DYNAMIC_COPY, "Point columns")?;
         let colors = match allocate_buffer(gl, color_bytes, glow::DYNAMIC_COPY, "Point colors") {
             Ok(buffer) => buffer,
@@ -94,11 +113,40 @@ impl PointFieldBuffers {
                 return Err(error);
             }
         };
+        let validity = match requirements
+            .validity
+            .then(|| {
+                allocate_buffer(
+                    gl,
+                    validity_bytes(capacity)?,
+                    glow::DYNAMIC_COPY,
+                    "Point validity",
+                )
+            })
+            .transpose()
+        {
+            Ok(buffer) => buffer,
+            Err(error) => {
+                // SAFETY: all allocations are still uniquely owned here.
+                unsafe {
+                    gl.delete_buffer(columns);
+                    gl.delete_buffer(colors);
+                    if let Some(geometry) = geometry {
+                        gl.delete_buffer(geometry);
+                    }
+                    if let Some(selection) = sprite_selection {
+                        gl.delete_buffer(selection);
+                    }
+                }
+                return Err(error);
+            }
+        };
         Ok(Self {
             columns,
             colors,
             geometry,
             sprite_selection,
+            validity,
             layout,
         })
     }
@@ -112,11 +160,19 @@ impl PointFieldBuffers {
             + self.sprite_selection.map_or(0, |_| {
                 u64::from(self.layout.capacity) * SPRITE_SELECTION_STRIDE_BYTES
             })
+            + self.validity.map_or(0, |_| {
+                u64::from(self.layout.capacity) * VALIDITY_STRIDE_BYTES
+            })
     }
 
-    pub fn matches(&self, program: &PointRenderProgram) -> bool {
+    pub fn matches(
+        &self,
+        program: &PointRenderProgram,
+        requirements: PointFieldRequirements,
+    ) -> bool {
         self.geometry.is_some() == program.has_geometry_output()
             && self.sprite_selection.is_some() == program.sprite_selection_register.is_some()
+            && self.validity.is_some() == requirements.validity
             && PointColumnLayout::derive(&program.schema, self.layout.capacity)
                 .is_ok_and(|layout| layout == self.layout)
     }
@@ -132,6 +188,9 @@ impl PointFieldBuffers {
             }
             if let Some(sprite_selection) = self.sprite_selection {
                 gl.delete_buffer(sprite_selection);
+            }
+            if let Some(validity) = self.validity {
+                gl.delete_buffer(validity);
             }
         }
     }
@@ -154,9 +213,10 @@ impl PointFieldPipeline {
         gl: &glow::Context,
         source_kind: PointSourceKind,
         program: &PointRenderProgram,
+        requirements: PointFieldRequirements,
     ) -> Result<Self, LibraryError> {
         program.validate().map_err(LibraryError::Validation)?;
-        let source = compute_source(source_kind, program)?;
+        let source = compute_source(source_kind, program, requirements)?;
         let source_hash = Sha256::digest(source.as_bytes()).into();
         let compute_program = link_program(
             gl,
@@ -240,6 +300,7 @@ impl PointFieldPipeline {
         buffers: &PointFieldBuffers,
         point_source: &PointSourceBinding<'_>,
         seed: u32,
+        requirements: PointFieldRequirements,
     ) -> Result<(), LibraryError> {
         program.validate().map_err(LibraryError::Validation)?;
         let expected = PointColumnLayout::derive(&program.schema, buffers.layout.capacity)
@@ -255,7 +316,8 @@ impl PointFieldPipeline {
             ));
         }
         let source_hash: [u8; 32] =
-            Sha256::digest(compute_source(self.source_kind, program)?.as_bytes()).into();
+            Sha256::digest(compute_source(self.source_kind, program, requirements)?.as_bytes())
+                .into();
         if source_hash != self.source_hash {
             return Err(LibraryError::Validation(
                 "Point field instruction shape changed without rebuilding its GPU pipeline"
@@ -283,6 +345,9 @@ impl PointFieldPipeline {
             }
             if let Some(sprite_selection) = buffers.sprite_selection {
                 gl.bind_buffer_base(glow::SHADER_STORAGE_BUFFER, 5, Some(sprite_selection));
+            }
+            if let Some(validity) = buffers.validity {
+                gl.bind_buffer_base(glow::SHADER_STORAGE_BUFFER, 5, Some(validity));
             }
             point_source.bind(gl, &self.source)?;
             gl.uniform_1_u32(Some(&self.capacity), buffers.layout.capacity);
@@ -316,120 +381,23 @@ impl PointFieldPipeline {
 pub(super) fn source_hash(
     source_kind: PointSourceKind,
     program: Option<&PointRenderProgram>,
+    requirements: PointFieldRequirements,
 ) -> Result<Option<[u8; 32]>, LibraryError> {
     program
         .map(|program| {
             program.validate().map_err(LibraryError::Validation)?;
-            Ok(Sha256::digest(compute_source(source_kind, program)?.as_bytes()).into())
+            Ok(
+                Sha256::digest(compute_source(source_kind, program, requirements)?.as_bytes())
+                    .into(),
+            )
         })
         .transpose()
-}
-
-pub(super) fn required_invocation_bytes(
-    has_particle_state: bool,
-    program: Option<&PointRenderProgram>,
-    capacity: u32,
-) -> Result<u64, LibraryError> {
-    let particle_bytes = if has_particle_state {
-        u64::from(capacity)
-            .checked_mul(super::gl_backend::PARTICLE_STRIDE_BYTES)
-            .ok_or_else(|| LibraryError::Render("GPU Particle state size overflow".to_string()))?
-    } else {
-        0
-    };
-    let Some(program) = program else {
-        return Ok(particle_bytes);
-    };
-    let layout =
-        PointColumnLayout::derive(&program.schema, capacity).map_err(LibraryError::Validation)?;
-    let color_bytes = color_bytes(capacity)?;
-    let geometry_bytes = geometry_bytes(program, capacity)?.unwrap_or(0);
-    let sprite_selection_bytes = sprite_selection_bytes(program, capacity)?.unwrap_or(0);
-    particle_bytes
-        .checked_add(layout.byte_len)
-        .and_then(|bytes| bytes.checked_add(color_bytes))
-        .and_then(|bytes| bytes.checked_add(geometry_bytes))
-        .and_then(|bytes| bytes.checked_add(sprite_selection_bytes))
-        .ok_or_else(|| LibraryError::Render("GPU Point field state size overflow".to_string()))
-}
-
-fn color_bytes(capacity: u32) -> Result<u64, LibraryError> {
-    u64::from(capacity)
-        .checked_mul(COLOR_STRIDE_BYTES)
-        .ok_or_else(|| LibraryError::Render("GPU Point color buffer size overflow".to_string()))
-}
-
-fn geometry_bytes(
-    program: &PointRenderProgram,
-    capacity: u32,
-) -> Result<Option<u64>, LibraryError> {
-    program
-        .has_geometry_output()
-        .then(|| {
-            u64::from(capacity)
-                .checked_mul(GEOMETRY_STRIDE_BYTES)
-                .ok_or_else(|| {
-                    LibraryError::Render("GPU Point geometry buffer size overflow".to_string())
-                })
-        })
-        .transpose()
-}
-
-fn sprite_selection_bytes(
-    program: &PointRenderProgram,
-    capacity: u32,
-) -> Result<Option<u64>, LibraryError> {
-    program
-        .sprite_selection_register
-        .is_some()
-        .then(|| {
-            u64::from(capacity)
-                .checked_mul(SPRITE_SELECTION_STRIDE_BYTES)
-                .ok_or_else(|| {
-                    LibraryError::Render("GPU Point Sprite selection buffer size overflow".into())
-                })
-        })
-        .transpose()
-}
-
-fn allocate_buffer(
-    gl: &glow::Context,
-    bytes: u64,
-    usage: u32,
-    label: &str,
-) -> Result<glow::Buffer, LibraryError> {
-    let bytes = i32::try_from(bytes)
-        .map_err(|_| LibraryError::Render(format!("{label} size exceeds the GPU range")))?;
-    // SAFETY: SceneRuntime owns the current context and the checked allocation
-    // size is non-negative and representable by this OpenGL binding.
-    let buffer = unsafe { gl.create_buffer() }
-        .map_err(|error| LibraryError::Render(format!("Cannot create {label}: {error}")))?;
-    // SAFETY: `buffer` is the live handle returned above and this context
-    // remains current through the checked allocation.
-    unsafe {
-        gl.bind_buffer(glow::SHADER_STORAGE_BUFFER, Some(buffer));
-        gl.buffer_data_size(glow::SHADER_STORAGE_BUFFER, bytes, usage);
-    }
-    let errors = drain_gl_errors(gl);
-    if errors.is_empty() {
-        Ok(buffer)
-    } else {
-        // SAFETY: failed allocation retains sole ownership of this name.
-        unsafe { gl.delete_buffer(buffer) };
-        Err(LibraryError::Render(format!(
-            "{label} allocation failed (OpenGL errors {})",
-            errors
-                .iter()
-                .map(|error| format!("0x{error:04x}"))
-                .collect::<Vec<_>>()
-                .join(", ")
-        )))
-    }
 }
 
 fn compute_source(
     source_kind: PointSourceKind,
     program: &PointRenderProgram,
+    requirements: PointFieldRequirements,
 ) -> Result<String, LibraryError> {
     let register_types = program.register_types().map_err(LibraryError::Validation)?;
     if source_kind == PointSourceKind::Grid
@@ -576,6 +544,9 @@ fn compute_source(
         body.push_str("    }\n");
     }
     body.push_str("    pointColors[slot] = valid && resultValid ? result : vec4(0.0);\n");
+    if requirements.validity {
+        body.push_str("    pointValidity[slot] = uint(valid && resultValid);\n");
+    }
     let ramp_function = program
         .instructions
         .iter()
@@ -605,8 +576,18 @@ fn compute_source(
     } else {
         ""
     };
+    let validity_buffer = if requirements.validity {
+        "layout(std430, binding = 5) buffer PointValidity { uint pointValidity[]; };"
+    } else {
+        ""
+    };
+    let hidden_validity = if requirements.validity {
+        "        pointValidity[slot] = 0u;"
+    } else {
+        ""
+    };
     Ok(format!(
-        "#version 430 core\nlayout(local_size_x = 64) in;\n{RENDER_POINT_GLSL}\n{point_source}\nlayout(std430, binding = 1) buffer PointColumns {{ uint pointColumns[]; }};\nlayout(std430, binding = 2) buffer PointColors {{ vec4 pointColors[]; }};\nlayout(std430, binding = 3) readonly buffer PointProgramData {{ uvec4 pointData[]; }};\n{geometry_buffer}\n{sprite_selection_buffer}\nuniform uint uCapacity;\nuniform uint uSeed;\nuniform uint uAttributeOffsets[{POINT_MAX_ATTRIBUTE_COUNT}];\n{PARTICLE_RANDOM_FUNCTIONS}\n{ramp_function}\nvoid main() {{\n    uint slot = gl_GlobalInvocationID.x;\n    if (slot >= uCapacity) return;\n    RenderPoint point = load_render_point(slot);\n    if (!point.alive) {{\n        pointColors[slot] = vec4(0.0);\n{hidden_geometry}\n{hidden_sprite_selection}\n        return;\n    }}\n{body}}}\n"
+        "#version 430 core\nlayout(local_size_x = 64) in;\n{RENDER_POINT_GLSL}\n{point_source}\nlayout(std430, binding = 1) buffer PointColumns {{ uint pointColumns[]; }};\nlayout(std430, binding = 2) buffer PointColors {{ vec4 pointColors[]; }};\nlayout(std430, binding = 3) readonly buffer PointProgramData {{ uvec4 pointData[]; }};\n{geometry_buffer}\n{sprite_selection_buffer}\n{validity_buffer}\nuniform uint uCapacity;\nuniform uint uSeed;\nuniform uint uAttributeOffsets[{POINT_MAX_ATTRIBUTE_COUNT}];\n{PARTICLE_RANDOM_FUNCTIONS}\n{ramp_function}\nvoid main() {{\n    uint slot = gl_GlobalInvocationID.x;\n    if (slot >= uCapacity) return;\n    RenderPoint point = load_render_point(slot);\n    if (!point.alive) {{\n        pointColors[slot] = vec4(0.0);\n{hidden_geometry}\n{hidden_sprite_selection}\n{hidden_validity}\n        return;\n    }}\n{body}}}\n"
     ))
 }
 

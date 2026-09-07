@@ -8,7 +8,9 @@ use crate::model::point::PointRenderProgram;
 
 use super::collisions::CollisionUniformLocations;
 use super::forces::ForceUniformLocations;
-use super::point_fields::PointFieldPipeline;
+use super::lines::PointLinePipeline;
+use super::point_fields::{PointFieldPipeline, PointFieldRequirements};
+use super::proximity::PointConnectionPipeline;
 use super::shaders::{particle_compute_source, point_fragment_source, point_vertex_source};
 use super::source::{PointSourceKind, PointSourceUniforms};
 
@@ -105,11 +107,13 @@ pub(super) struct ParticleSimulationPipeline {
 
 #[derive(Clone)]
 pub(super) struct PointPipeline {
-    pub render_program: glow::Program,
-    pub vertex_array: glow::VertexArray,
-    pub render: RenderUniforms,
-    pub source: PointSourceUniforms,
+    pub render_program: Option<glow::Program>,
+    pub vertex_array: Option<glow::VertexArray>,
+    pub render: Option<RenderUniforms>,
+    pub source: Option<PointSourceUniforms>,
     pub point_fields: Option<PointFieldPipeline>,
+    pub connections: Option<PointConnectionPipeline>,
+    pub lines: Option<PointLinePipeline>,
     pub particle: Option<ParticleSimulationPipeline>,
     pub last_used: u64,
 }
@@ -121,13 +125,20 @@ impl PointPipeline {
         source_kind: PointSourceKind,
         point_program: Option<&PointRenderProgram>,
         sprites: bool,
+        lines: bool,
     ) -> Result<Self, LibraryError> {
+        if sprites && lines {
+            return Err(LibraryError::Validation(
+                "Point pipeline cannot render Sprites and Lines together".into(),
+            ));
+        }
+        let field_requirements = PointFieldRequirements { validity: lines };
         let particle = match source_kind {
             PointSourceKind::Particle => Some(create_particle_pipeline(gl)?),
             PointSourceKind::Grid => None,
         };
         let point_fields = match point_program
-            .map(|program| PointFieldPipeline::create(gl, source_kind, program))
+            .map(|program| PointFieldPipeline::create(gl, source_kind, program, field_requirements))
         {
             Some(Ok(pipeline)) => Some(pipeline),
             Some(Err(error)) => {
@@ -142,6 +153,54 @@ impl PointPipeline {
             point_program.is_some_and(|program| program.has_geometry_output());
         let sprite_selection_field =
             point_program.is_some_and(|program| program.sprite_selection_register.is_some());
+        if lines {
+            let connections = match PointConnectionPipeline::create(
+                gl,
+                source_kind,
+                has_geometry_output,
+                point_program.is_some(),
+            ) {
+                Ok(pipeline) => pipeline,
+                Err(error) => {
+                    if let Some(fields) = point_fields {
+                        fields.destroy(gl);
+                    }
+                    if let Some(particle) = particle {
+                        particle.destroy(gl);
+                    }
+                    return Err(error);
+                }
+            };
+            let line = match PointLinePipeline::create(
+                gl,
+                source_kind,
+                has_geometry_output,
+                point_program.is_some(),
+            ) {
+                Ok(pipeline) => pipeline,
+                Err(error) => {
+                    connections.destroy(gl);
+                    if let Some(fields) = point_fields {
+                        fields.destroy(gl);
+                    }
+                    if let Some(particle) = particle {
+                        particle.destroy(gl);
+                    }
+                    return Err(error);
+                }
+            };
+            return Ok(Self {
+                render_program: None,
+                vertex_array: None,
+                render: None,
+                source: None,
+                point_fields,
+                connections: Some(connections),
+                lines: Some(line),
+                particle,
+                last_used,
+            });
+        }
         let vertex_source = point_vertex_source(
             source_kind,
             point_fields.is_some(),
@@ -255,26 +314,39 @@ impl PointPipeline {
                 return Err(error);
             }
         };
-        Ok(Self {
-            render_program,
-            vertex_array,
-            render,
-            source,
+        let result = Self {
+            render_program: Some(render_program),
+            vertex_array: Some(vertex_array),
+            render: Some(render),
+            source: Some(source),
             point_fields,
+            connections: None,
+            lines: None,
             particle,
             last_used,
-        })
+        };
+        Ok(result)
     }
 
     pub fn destroy(self, gl: &glow::Context) {
         // SAFETY: PointPipeline uniquely owns handles created by `gl`; its
         // caller destroys it while that same context is current.
         unsafe {
-            gl.delete_vertex_array(self.vertex_array);
-            gl.delete_program(self.render_program);
+            if let Some(vertex_array) = self.vertex_array {
+                gl.delete_vertex_array(vertex_array);
+            }
+            if let Some(render_program) = self.render_program {
+                gl.delete_program(render_program);
+            }
         }
         if let Some(point_fields) = self.point_fields {
             point_fields.destroy(gl);
+        }
+        if let Some(connections) = self.connections {
+            connections.destroy(gl);
+        }
+        if let Some(lines) = self.lines {
+            lines.destroy(gl);
         }
         if let Some(particle) = self.particle {
             particle.destroy(gl);

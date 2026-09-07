@@ -131,23 +131,25 @@ pub(super) fn draw_points(
     pipeline: &PointPipeline,
     request: PointDrawRequest<'_>,
 ) -> Result<(), LibraryError> {
+    let render_program = pipeline.render_program.ok_or_else(|| {
+        LibraryError::Validation("Sprite draw received a Point Line pipeline".into())
+    })?;
+    let vertex_array = pipeline
+        .vertex_array
+        .ok_or_else(|| LibraryError::Validation("Sprite draw lost its vertex array".into()))?;
+    let render = pipeline
+        .render
+        .as_ref()
+        .ok_or_else(|| LibraryError::Validation("Sprite draw lost its uniforms".into()))?;
+    let source = pipeline.source.as_ref().ok_or_else(|| {
+        LibraryError::Validation("Sprite draw lost its Point source access".into())
+    })?;
     let determinant = request.transform.scale_x * request.transform.scale_y
         - request.transform.skew_x * request.transform.skew_y;
     // SAFETY: the pipeline, source resources, and target all belong to this
     // current context. Validation bounds uniforms and the draw count.
     unsafe {
-        gl.bind_framebuffer(glow::FRAMEBUFFER, Some(request.target.framebuffer));
-        gl.viewport(
-            0,
-            0,
-            request.target.width as i32,
-            request.target.height as i32,
-        );
-        gl.disable(glow::SCISSOR_TEST);
-        gl.disable(glow::DEPTH_TEST);
-        gl.color_mask(true, true, true, true);
-        gl.clear_color(0.0, 0.0, 0.0, 0.0);
-        gl.clear(glow::COLOR_BUFFER_BIT);
+        begin_point_target(gl, request.target);
         if determinant.abs() <= f64::EPSILON {
             gl.memory_barrier(glow::FRAMEBUFFER_BARRIER_BIT | glow::TEXTURE_FETCH_BARRIER_BIT);
             return gl_operation_result(gl, "singular Point clear");
@@ -155,9 +157,9 @@ pub(super) fn draw_points(
         gl.enable(glow::BLEND);
         gl.blend_equation(glow::FUNC_ADD);
         gl.blend_func(glow::ONE, glow::ONE_MINUS_SRC_ALPHA);
-        gl.use_program(Some(pipeline.render_program));
-        gl.bind_vertex_array(Some(pipeline.vertex_array));
-        request.point_source.bind(gl, &pipeline.source)?;
+        gl.use_program(Some(render_program));
+        gl.bind_vertex_array(Some(vertex_array));
+        request.point_source.bind(gl, source)?;
         if let Some(point_fields) = request.point_fields {
             gl.bind_buffer_base(glow::SHADER_STORAGE_BUFFER, 2, Some(point_fields.colors));
             if let Some(geometry) = point_fields.geometry {
@@ -168,32 +170,32 @@ pub(super) fn draw_points(
             }
         }
         gl.uniform_2_f32(
-            Some(&pipeline.render.logical_size),
+            Some(&render.logical_size),
             request.logical_size.0 as f32,
             request.logical_size.1 as f32,
         );
         gl.uniform_2_f32(
-            Some(&pipeline.render.target_size),
+            Some(&render.target_size),
             request.target.width as f32,
             request.target.height as f32,
         );
         gl.uniform_3_f32(
-            Some(&pipeline.render.affine_x),
+            Some(&render.affine_x),
             request.transform.scale_x as f32,
             request.transform.skew_x as f32,
             request.transform.translate_x as f32,
         );
         gl.uniform_3_f32(
-            Some(&pipeline.render.affine_y),
+            Some(&render.affine_y),
             request.transform.skew_y as f32,
             request.transform.scale_y as f32,
             request.transform.translate_y as f32,
         );
         gl.uniform_1_f32(
-            Some(&pipeline.render.focal_length),
+            Some(&render.focal_length),
             request.logical_size.1.max(1) as f32,
         );
-        if let Some(location) = &pipeline.render.premultiplied_color {
+        if let Some(location) = &render.premultiplied_color {
             gl.uniform_4_f32(
                 Some(location),
                 request.premultiplied_color[0],
@@ -202,13 +204,13 @@ pub(super) fn draw_points(
                 request.premultiplied_color[3],
             );
         }
-        if let Some(location) = &pipeline.render.output_srgba {
+        if let Some(location) = &render.output_srgba {
             gl.uniform_1_i32(
                 Some(location),
                 i32::from(request.target.format == SceneTextureFormat::Srgba8),
             );
         }
-        match (&pipeline.render.sprite, request.sprite_atlas) {
+        match (&render.sprite, request.sprite_atlas) {
             (Some(uniforms), Some(atlas)) => {
                 let count = u32::try_from(atlas.entries.len()).map_err(|_| {
                     LibraryError::Render("Sprite atlas entry count exceeds GPU range".into())
@@ -267,6 +269,22 @@ pub(super) fn draw_points(
         gl.memory_barrier(glow::FRAMEBUFFER_BARRIER_BIT | glow::TEXTURE_FETCH_BARRIER_BIT);
     }
     gl_operation_result(gl, "sprite render")
+}
+
+pub(super) unsafe fn begin_point_target(gl: &glow::Context, target: &SceneTarget) {
+    // SAFETY: callers guarantee the current context and a live target.
+    unsafe {
+        gl.bind_framebuffer(glow::FRAMEBUFFER, Some(target.framebuffer));
+        gl.viewport(0, 0, target.width as i32, target.height as i32);
+        gl.disable(glow::SCISSOR_TEST);
+        gl.disable(glow::DEPTH_TEST);
+        gl.color_mask(true, true, true, true);
+        gl.clear_color(0.0, 0.0, 0.0, 0.0);
+        gl.clear(glow::COLOR_BUFFER_BIT);
+        gl.enable(glow::BLEND);
+        gl.blend_equation(glow::FUNC_ADD);
+        gl.blend_func(glow::ONE, glow::ONE_MINUS_SRC_ALPHA);
+    }
 }
 
 pub(super) fn gl_operation_result(gl: &glow::Context, operation: &str) -> Result<(), LibraryError> {

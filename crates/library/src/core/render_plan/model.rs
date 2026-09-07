@@ -136,6 +136,7 @@ pub struct CompiledModuleDefinition {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct CompiledPointRenderer {
     pub source: CompiledPointSource,
+    pub render_style: CompiledPointRenderStyle,
     /// Render-stage Point fields compiled from the same Module graph. `None`
     /// preserves the existing uniform Sprite fast path.
     pub(crate) point_program: Option<CompiledPointProgram>,
@@ -143,6 +144,12 @@ pub struct CompiledPointRenderer {
     /// Stable Module-owned mutable state slot. Runtime keys combine it with
     /// InstancePath and ModuleInstanceId before allocating any buffer.
     pub state_slot_id: uuid::Uuid,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CompiledPointRenderStyle {
+    Sprites,
+    Lines { connections_node_id: uuid::Uuid },
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]

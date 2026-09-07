@@ -6,15 +6,19 @@ mod diagnostics;
 mod forces;
 mod gl_backend;
 mod invocation;
+mod lines;
+mod point_buffer_alloc;
 mod point_field_data;
 mod point_field_dependencies;
 mod point_fields;
+mod prefix_scan;
+mod proximity;
 #[cfg(test)]
 pub(crate) use diagnostics::PointInvocationStats;
 #[cfg(test)]
 mod readback;
 #[cfg(test)]
-pub(crate) use readback::PointFieldReadback;
+pub(crate) use readback::{PointConnectionReadback, PointFieldReadback};
 mod render;
 mod shaders;
 mod simulation;
@@ -32,7 +36,9 @@ use crate::model::frame::particle::{
     PARTICLE_CHECKPOINT_INTERVAL_STEPS, PARTICLE_MAX_CHECKPOINTS, PARTICLE_MAX_REPLAY_STEPS,
     ParticleEmitterShape, ParticleSceneParameters, particle_lifetime_steps,
 };
-use crate::model::frame::point::{PointSceneFrame, PointSceneSource, SceneInvocationKey};
+use crate::model::frame::point::{
+    PointRenderStyle, PointSceneFrame, PointSceneSource, SceneInvocationKey, SpriteSelection,
+};
 use crate::rendering::renderer::{Affine2D, ManagedImageResource, PointRasterRequest};
 
 pub(crate) use gl_backend::SceneTextureFormat;
@@ -86,7 +92,13 @@ pub(crate) struct SceneTexture {
 struct PointPipelineKey {
     source_kind: PointSourceKind,
     field_source_hash: Option<[u8; 32]>,
-    sprites: bool,
+    render_kind: PointRenderKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum PointRenderKind {
+    Sprites { images: bool },
+    Lines,
 }
 
 /// Owns every mutable Particle buffer and every raw-GL object created beside
@@ -177,6 +189,7 @@ impl SceneRuntime {
                 PointSourceKind::Particle,
                 None,
                 true,
+                false,
             )?;
             pipeline.destroy(&runtime.gl);
             Ok(())
@@ -192,6 +205,7 @@ impl SceneRuntime {
         target_width: u32,
         target_height: u32,
         format: SceneTextureFormat,
+        requires_connections: bool,
     ) -> Result<SceneTexture, LibraryError> {
         let capability = self.capability.as_ref().map_err(|diagnostic| {
             LibraryError::Render(format!("GPU Particle unavailable: {diagnostic}"))
@@ -204,7 +218,12 @@ impl SceneRuntime {
             self.limits.max_target_bytes,
         )?;
         self.with_isolated_gl(|runtime| {
-            runtime.preflight_point_isolated(target_width, target_height, format)
+            runtime.preflight_point_isolated(
+                target_width,
+                target_height,
+                format,
+                requires_connections,
+            )
         })
     }
 
@@ -236,15 +255,25 @@ impl SceneRuntime {
         target_width: u32,
         target_height: u32,
         format: SceneTextureFormat,
+        requires_connections: bool,
     ) -> Result<SceneTexture, LibraryError> {
         self.use_tick = self.use_tick.wrapping_add(1);
         let use_tick = self.use_tick;
         // Preflight has no authored executable identity. Keep its throwaway
         // program outside the executable cache so a legitimate all-zero hash
         // cannot collide with this synthetic probe.
-        let pipeline =
-            PointPipeline::create(&self.gl, use_tick, PointSourceKind::Particle, None, false)?;
-        self.ensure_target(target_width, target_height, format)?;
+        let pipeline = PointPipeline::create(
+            &self.gl,
+            use_tick,
+            PointSourceKind::Particle,
+            None,
+            false,
+            false,
+        )?;
+        if let Err(error) = self.ensure_target(target_width, target_height, format) {
+            pipeline.destroy(&self.gl);
+            return Err(error);
+        }
         let buffer = match allocate_particle_buffer(&self.gl, 1) {
             Ok(buffer) => buffer,
             Err(error) => {
@@ -277,6 +306,9 @@ impl SceneRuntime {
                     sprite_seed: 0,
                 },
             )?;
+            if requires_connections {
+                self.preflight_connections(target, use_tick)?;
+            }
             Ok(SceneTexture {
                 texture_id: target.texture_id(),
                 width: target.width,
@@ -286,6 +318,93 @@ impl SceneRuntime {
         })();
         delete_particle_buffer(&self.gl, buffer);
         pipeline.destroy(&self.gl);
+        result
+    }
+
+    fn preflight_connections(
+        &self,
+        target: &SceneTarget,
+        use_tick: u64,
+    ) -> Result<(), LibraryError> {
+        use crate::model::frame::point::{PointConnectionParameters, PointGridParameters};
+        use crate::model::property::Vec3;
+        use ordered_float::OrderedFloat;
+
+        // Compile the Particle variant too: export preflight must not discover
+        // a source-specific shader failure after publishing earlier frames.
+        let particle = PointPipeline::create(
+            &self.gl,
+            use_tick,
+            PointSourceKind::Particle,
+            None,
+            false,
+            true,
+        )?;
+        particle.destroy(&self.gl);
+        let grid_pipeline =
+            PointPipeline::create(&self.gl, use_tick, PointSourceKind::Grid, None, false, true)?;
+        let grid = PointGridParameters {
+            counts: [2, 1, 1],
+            spacing: Vec3 {
+                x: OrderedFloat(1.0),
+                y: OrderedFloat(0.0),
+                z: OrderedFloat(0.0),
+            },
+            center: Vec3 {
+                x: OrderedFloat(0.0),
+                y: OrderedFloat(0.0),
+                z: OrderedFloat(0.0),
+            },
+            size: OrderedFloat(1.0),
+            seed: 0,
+        };
+        let source = PointSourceBinding::Grid(&grid);
+        let parameters = PointConnectionParameters {
+            min_distance: OrderedFloat(0.0),
+            max_distance: OrderedFloat(2.0),
+            max_neighbors: 1,
+        };
+        let buffers = match proximity::PointConnectionBuffers::create(&self.gl, 2, 1) {
+            Ok(buffers) => buffers,
+            Err(error) => {
+                grid_pipeline.destroy(&self.gl);
+                return Err(error);
+            }
+        };
+        let result = (|| {
+            grid_pipeline
+                .connections
+                .as_ref()
+                .ok_or_else(|| {
+                    LibraryError::Render("Point Line preflight lost proximity pipeline".into())
+                })?
+                .evaluate(&self.gl, &parameters, &buffers, None, &source)?;
+            grid_pipeline
+                .lines
+                .as_ref()
+                .ok_or_else(|| LibraryError::Render("Point Line preflight lost renderer".into()))?
+                .draw(
+                    &self.gl,
+                    PointDrawRequest {
+                        capacity: 2,
+                        point_fields: None,
+                        point_source: &source,
+                        target,
+                        transform: &Affine2D::IDENTITY,
+                        logical_size: (target.width, target.height),
+                        premultiplied_color: [0.0; 4],
+                        sprite_atlas: None,
+                        sprite_selection: &SpriteSelection::Random,
+                        sprite_seed: 0,
+                    },
+                    &parameters,
+                    1.0,
+                    0.0,
+                    &buffers.scan,
+                )
+        })();
+        buffers.destroy(&self.gl);
+        grid_pipeline.destroy(&self.gl);
         result
     }
 
@@ -303,18 +422,36 @@ impl SceneRuntime {
         self.use_tick = self.use_tick.wrapping_add(1);
         let use_tick = self.use_tick;
         let source_kind = PointSourceKind::of(&scene.source);
-        if scene.sprites.assets.len() != sprites.len() {
-            return Err(LibraryError::Validation(format!(
-                "Point Sprite collection declares {} assets but resolved {} images",
-                scene.sprites.assets.len(),
-                sprites.len()
-            )));
-        }
-        let sprite_atlas = self.prepare_sprite_atlas(sprites, use_tick)?;
+        let (render_kind, sprite_atlas) = match &scene.render_style {
+            PointRenderStyle::Sprites { images, .. } => {
+                if images.assets.len() != sprites.len() {
+                    return Err(LibraryError::Validation(format!(
+                        "Point Sprite collection declares {} assets but resolved {} images",
+                        images.assets.len(),
+                        sprites.len()
+                    )));
+                }
+                let atlas = self.prepare_sprite_atlas(sprites, use_tick)?;
+                (
+                    PointRenderKind::Sprites {
+                        images: atlas.is_some(),
+                    },
+                    atlas,
+                )
+            }
+            PointRenderStyle::Lines { .. } => {
+                if !sprites.is_empty() {
+                    return Err(LibraryError::Validation(
+                        "Point Line rendering cannot consume Sprite images".into(),
+                    ));
+                }
+                (PointRenderKind::Lines, None)
+            }
+        };
         let pipeline = self.pipeline(
             source_kind,
             scene.point_program.as_ref(),
-            sprite_atlas.is_some(),
+            render_kind,
             use_tick,
         )?;
         self.ensure_target(target_width, target_height, format)?;
@@ -328,19 +465,41 @@ impl SceneRuntime {
             }
             Some(invocation) => {
                 invocation.destroy(&self.gl);
-                self.reserve_invocation(&scene.source, scene.point_program.as_ref())?;
+                self.reserve_invocation(
+                    &scene.source,
+                    scene.point_program.as_ref(),
+                    &scene.render_style,
+                )?;
                 self.create_invocation(scene, &pipeline, use_tick)?
             }
             None => {
-                self.reserve_invocation(&scene.source, scene.point_program.as_ref())?;
+                self.reserve_invocation(
+                    &scene.source,
+                    scene.point_program.as_ref(),
+                    &scene.render_style,
+                )?;
                 self.create_invocation(scene, &pipeline, use_tick)?
             }
         };
 
-        if let Err(error) = self.reconcile_fields(&mut invocation, scene.point_program.as_ref()) {
+        let field_requirements = invocation::field_requirements(&scene.render_style);
+        if let Err(error) = self.reconcile_fields(
+            &mut invocation,
+            scene.point_program.as_ref(),
+            field_requirements,
+        ) {
             self.invocations
                 .insert(scene.invocation.clone(), invocation);
             return Err(error);
+        }
+        if let Err(error) = self.reconcile_connections(&mut invocation, &scene.render_style) {
+            self.invocations
+                .insert(scene.invocation.clone(), invocation);
+            return Err(error);
+        }
+        #[cfg(test)]
+        if matches!(scene.render_style, PointRenderStyle::Lines { .. }) {
+            invocation.connection_source = None;
         }
         if let Err(error) = self.seek_invocation(&mut invocation, scene, &pipeline) {
             // Compute/reset/copy errors can leave the SSBO partially updated
@@ -363,6 +522,7 @@ impl SceneRuntime {
                     buffers,
                     &point_source,
                     invocation_seed(scene),
+                    field_requirements,
                 )?;
                 #[cfg(test)]
                 if std::mem::take(&mut self.fail_next_field_evaluation) {
@@ -381,27 +541,85 @@ impl SceneRuntime {
                 .insert(scene.invocation.clone(), invocation);
             return Err(error);
         }
+        if let PointRenderStyle::Lines { connections, .. } = &scene.render_style {
+            let connection_evaluation = (|| {
+                let point_source = point_source_binding(&invocation, &scene.source)?;
+                let buffers = invocation.connections.as_ref().ok_or_else(|| {
+                    LibraryError::Validation("Point Line invocation lost connection buffers".into())
+                })?;
+                pipeline
+                    .connections
+                    .as_ref()
+                    .ok_or_else(|| {
+                        LibraryError::Validation(
+                            "Point Line pipeline lost proximity programs".into(),
+                        )
+                    })?
+                    .evaluate(
+                        &self.gl,
+                        connections,
+                        buffers,
+                        invocation.point_fields.as_ref(),
+                        &point_source,
+                    )
+            })();
+            if let Err(error) = connection_evaluation {
+                self.invocations
+                    .insert(scene.invocation.clone(), invocation);
+                return Err(error);
+            }
+            #[cfg(test)]
+            {
+                invocation.connection_source = Some(scene.source.clone());
+            }
+        }
         let evaluation = (|| {
             let point_source = point_source_binding(&invocation, &scene.source)?;
             let target = self.target.as_ref().ok_or_else(|| {
                 LibraryError::Render("GPU Particle target disappeared before draw".to_string())
             })?;
-            draw_points(
-                &self.gl,
-                &pipeline,
-                PointDrawRequest {
-                    capacity: invocation.capacity,
-                    point_fields: invocation.point_fields.as_ref(),
-                    point_source: &point_source,
-                    target,
-                    transform,
-                    logical_size: (scene.logical_width, scene.logical_height),
-                    premultiplied_color,
-                    sprite_atlas: sprite_atlas.as_ref(),
-                    sprite_selection: &scene.sprite_selection,
-                    sprite_seed: invocation_seed(scene),
+            let default_selection = SpriteSelection::Random;
+            let draw_request = PointDrawRequest {
+                capacity: invocation.capacity,
+                point_fields: invocation.point_fields.as_ref(),
+                point_source: &point_source,
+                target,
+                transform,
+                logical_size: (scene.logical_width, scene.logical_height),
+                premultiplied_color,
+                sprite_atlas: sprite_atlas.as_ref(),
+                sprite_selection: match &scene.render_style {
+                    PointRenderStyle::Sprites { selection, .. } => selection,
+                    PointRenderStyle::Lines { .. } => &default_selection,
                 },
-            )?;
+                sprite_seed: invocation_seed(scene),
+            };
+            match &scene.render_style {
+                PointRenderStyle::Sprites { .. } => draw_points(&self.gl, &pipeline, draw_request)?,
+                PointRenderStyle::Lines {
+                    connections,
+                    width,
+                    fade,
+                } => {
+                    let connection_buffers = invocation.connections.as_ref().ok_or_else(|| {
+                        LibraryError::Validation("Point Line invocation lost compact edges".into())
+                    })?;
+                    pipeline
+                        .lines
+                        .as_ref()
+                        .ok_or_else(|| {
+                            LibraryError::Validation("Point Line pipeline lost renderer".into())
+                        })?
+                        .draw(
+                            &self.gl,
+                            draw_request,
+                            connections,
+                            width.0,
+                            fade.0,
+                            &connection_buffers.scan,
+                        )?;
+                }
+            }
             Ok(SceneTexture {
                 texture_id: target.texture_id(),
                 width: target.width,
@@ -419,13 +637,16 @@ impl SceneRuntime {
         &mut self,
         source_kind: PointSourceKind,
         point_program: Option<&crate::model::point::PointRenderProgram>,
-        sprites: bool,
+        render_kind: PointRenderKind,
         use_tick: u64,
     ) -> Result<PointPipeline, LibraryError> {
+        let requirements = point_fields::PointFieldRequirements {
+            validity: matches!(render_kind, PointRenderKind::Lines),
+        };
         let key = PointPipelineKey {
             source_kind,
-            field_source_hash: point_fields::source_hash(source_kind, point_program)?,
-            sprites,
+            field_source_hash: point_fields::source_hash(source_kind, point_program, requirements)?,
+            render_kind,
         };
         if let Some(pipeline) = self.pipelines.get_mut(&key) {
             pipeline.last_used = use_tick;
@@ -441,8 +662,14 @@ impl SceneRuntime {
         {
             pipeline.destroy(&self.gl);
         }
-        let pipeline =
-            PointPipeline::create(&self.gl, use_tick, source_kind, point_program, sprites)?;
+        let pipeline = PointPipeline::create(
+            &self.gl,
+            use_tick,
+            source_kind,
+            point_program,
+            matches!(render_kind, PointRenderKind::Sprites { images: true }),
+            matches!(render_kind, PointRenderKind::Lines),
+        )?;
         self.pipelines.insert(key, pipeline.clone());
         Ok(pipeline)
     }

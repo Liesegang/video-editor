@@ -3,6 +3,7 @@ use crate::model::property::{KeyframeId, Property, Vec3};
 use crate::plugin::PluginManager;
 
 mod point;
+mod point_connections;
 
 fn operation_with_ports(ports: Vec<PortDefinition>) -> Node {
     let node = PluginManager::default()

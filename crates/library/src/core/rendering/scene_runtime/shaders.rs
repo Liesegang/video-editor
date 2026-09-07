@@ -3,7 +3,7 @@
 //! Authored strings never enter these sources. Module graph compilation only
 //! selects this fixed ABI and supplies validated uniforms.
 
-use super::source::{PointSourceKind, RENDER_POINT_GLSL};
+use super::source::PointSourceKind;
 
 pub(super) fn particle_compute_source() -> String {
     PARTICLE_COMPUTE
@@ -198,9 +198,7 @@ pub(super) fn point_vertex_source(
     sprites: bool,
     sprite_selection_field: bool,
 ) -> String {
-    let source = kind
-        .shader()
-        .replace("// PARTICLE_STRUCT", PARTICLE_STRUCT_GLSL);
+    let source = kind.render_shader(geometry_output);
     let sprite_declarations = sprites.then(|| {
         POINT_SPRITE_DECLARATIONS.replace(
             "POINT_MAX_SPRITES",
@@ -208,19 +206,11 @@ pub(super) fn point_vertex_source(
         )
     });
     POINT_VERTEX
-        .replace("// RENDER_POINT_STRUCT", RENDER_POINT_GLSL)
         .replace("// POINT_SOURCE", &source)
+        .replace("// POINT_PROJECTION", POINT_PROJECTION_GLSL)
         .replace(
             "// POINT_COLOR_BUFFER",
             if point_fields { POINT_COLOR_BUFFER } else { "" },
-        )
-        .replace(
-            "// POINT_GEOMETRY_BUFFER",
-            if geometry_output {
-                POINT_GEOMETRY_BUFFER
-            } else {
-                ""
-            },
         )
         .replace(
             "// POINT_SPRITE_BUFFER",
@@ -254,14 +244,6 @@ pub(super) fn point_vertex_source(
             "// POINT_COLOR_ASSIGN",
             if point_fields {
                 "vLinearColor = pointColors[particle_index];"
-            } else {
-                ""
-            },
-        )
-        .replace(
-            "// POINT_GEOMETRY_ASSIGN",
-            if geometry_output {
-                "point.position_size = pointGeometry[particle_index];"
             } else {
                 ""
             },
@@ -313,10 +295,8 @@ pub(super) fn point_vertex_source(
 }
 
 const POINT_VERTEX: &str = r#"#version 430 core
-// RENDER_POINT_STRUCT
 // POINT_SOURCE
 // POINT_COLOR_BUFFER
-// POINT_GEOMETRY_BUFFER
 // POINT_SPRITE_BUFFER
 // POINT_SPRITE_DECLARATIONS
 
@@ -325,6 +305,8 @@ uniform vec2 uTargetSize;
 uniform vec3 uAffineX;
 uniform vec3 uAffineY;
 uniform float uFocalLength;
+
+// POINT_PROJECTION
 
 out vec2 vSpriteCoord;
 // POINT_COLOR_OUTPUT
@@ -338,7 +320,7 @@ const vec2 QUAD_CORNERS[6] = vec2[6](
 void main() {
     uint particle_index = uint(gl_VertexID) / 6u;
     uint corner_index = uint(gl_VertexID) % 6u;
-    RenderPoint point = load_render_point(particle_index);
+    RenderPoint point = load_final_render_point(particle_index);
     if (!point.alive) {
         gl_Position = vec4(2.0, 2.0, 1.0, 1.0);
         vSpriteCoord = vec2(-1.0);
@@ -346,8 +328,6 @@ void main() {
         // POINT_SPRITE_HIDDEN
         return;
     }
-    // POINT_GEOMETRY_ASSIGN
-
     vec3 position = point.position_size.xyz;
     float perspective = uFocalLength / max(1.0, uFocalLength + position.z);
     // POINT_SPRITE_SETUP
@@ -355,19 +335,28 @@ void main() {
     vec2 corner = unitCorner * spriteAspect;
     vec2 local_center = uLogicalSize * 0.5 + position.xy * perspective;
     vec2 local = local_center + corner * point.position_size.w * perspective;
-    vec2 screen = vec2(
+    gl_Position = point_clip_position(local, position.z);
+    vSpriteCoord = corner + vec2(0.5);
+    // POINT_SPRITE_UV
+    // POINT_COLOR_ASSIGN
+}
+"#;
+
+pub(super) const POINT_PROJECTION_GLSL: &str = r#"
+vec2 point_screen_position(vec2 local) {
+    return vec2(
         dot(uAffineX, vec3(local, 1.0)),
         dot(uAffineY, vec3(local, 1.0))
     );
+}
+vec4 point_clip_position(vec2 local, float z) {
+    vec2 screen = point_screen_position(local);
     vec2 ndc = vec2(
         screen.x * 2.0 / uTargetSize.x - 1.0,
         1.0 - screen.y * 2.0 / uTargetSize.y
     );
-    float depth = clamp(position.z / (uFocalLength * 4.0), -0.99, 0.99);
-    gl_Position = vec4(ndc, depth, 1.0);
-    vSpriteCoord = corner + vec2(0.5);
-    // POINT_SPRITE_UV
-    // POINT_COLOR_ASSIGN
+    float depth = clamp(z / (uFocalLength * 4.0), -0.99, 0.99);
+    return vec4(ndc, depth, 1.0);
 }
 "#;
 
@@ -440,10 +429,6 @@ const POINT_COLOR_BUFFER: &str = r#"layout(std430, binding = 2) readonly buffer 
     vec4 pointColors[];
 };"#;
 
-const POINT_GEOMETRY_BUFFER: &str = r#"layout(std430, binding = 4) readonly buffer PointGeometryBuffer {
-    vec4 pointGeometry[];
-};"#;
-
 const POINT_SPRITE_SELECTION_BUFFER: &str = r#"layout(std430, binding = 5) readonly buffer PointSpriteSelectionBuffer {
     float pointSpriteSelection[];
 };"#;
@@ -490,7 +475,7 @@ const POINT_SPRITE_UNIFORM_SETUP: &str = r#"
     vec2 spriteAspect = uSpriteAspects[spriteIndex];
 "#;
 
-const LINEAR_TO_SRGB: &str = r#"
+pub(super) const LINEAR_TO_SRGB: &str = r#"
 float linear_to_srgb(float value) {
     return value <= 0.0031308
         ? value * 12.92

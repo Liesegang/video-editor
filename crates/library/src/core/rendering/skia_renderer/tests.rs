@@ -92,6 +92,12 @@ mod point_attribute_gpu;
 #[path = "tests/point_conditional_gpu.rs"]
 mod point_conditional_gpu;
 #[cfg(all(feature = "gl", target_os = "windows"))]
+#[path = "tests/point_connection_gl_state.rs"]
+mod point_connection_gl_state;
+#[cfg(all(feature = "gl", target_os = "windows"))]
+#[path = "tests/point_connection_gpu.rs"]
+mod point_connection_gpu;
+#[cfg(all(feature = "gl", target_os = "windows"))]
 #[path = "tests/point_grid_gpu.rs"]
 mod point_grid_gpu;
 #[cfg(all(feature = "gl", target_os = "windows"))]

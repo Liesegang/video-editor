@@ -24,8 +24,7 @@ fn grid_scene() -> PointSceneFrame {
             seed: 17,
         }),
         color: Color::white(),
-        sprites: Default::default(),
-        sprite_selection: crate::model::frame::point::SpriteSelection::Random,
+        render_style: Default::default(),
         point_program: None,
     }
 }

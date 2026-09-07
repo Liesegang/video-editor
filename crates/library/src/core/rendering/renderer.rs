@@ -637,6 +637,7 @@ pub trait Renderer {
     fn preflight_point_backend(
         &mut self,
         _target_sizes: &[(u32, u32)],
+        _requires_connections: bool,
     ) -> Result<(), LibraryError> {
         Err(LibraryError::Render(
             "GPU Point requires an OpenGL 4.3 SceneRuntime; this renderer cannot preflight that backend"

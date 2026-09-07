@@ -10,7 +10,13 @@ use uuid::Uuid;
 use super::{color::Color, particle::ParticleSceneParameters};
 use crate::model::authoring::{InstancePath, ModuleInstanceId, ModuleOutputId};
 use crate::model::point::{POINT_MAX_CAPACITY, PointInstruction, PointRenderProgram};
-use crate::model::property::{ImageCollectionValue, Vec3};
+use crate::model::property::Vec3;
+
+mod connections;
+pub use connections::{
+    POINT_CONNECTION_MAX_DISTANCE, POINT_CONNECTION_MAX_NEIGHBORS, POINT_LINE_MAX_WIDTH,
+    PointConnectionParameters, PointRenderStyle,
+};
 
 pub const POINT_GRID_AXIS_BITS: u32 = 10;
 pub const POINT_GRID_MAX_AXIS: u32 = 1 << POINT_GRID_AXIS_BITS;
@@ -159,8 +165,7 @@ pub struct PointSceneFrame {
     pub logical_height: u32,
     pub source: PointSceneSource,
     pub color: Color,
-    pub sprites: ImageCollectionValue,
-    pub sprite_selection: SpriteSelection,
+    pub render_style: PointRenderStyle,
     pub point_program: Option<PointRenderProgram>,
 }
 
@@ -170,14 +175,14 @@ impl PointSceneFrame {
             return Err("Point render dimensions must be positive".into());
         }
         self.source.validate()?;
-        self.sprites.validate().map_err(|error| error.to_string())?;
-        if let SpriteSelection::Value(value) = self.sprite_selection
-            && (!value.0.is_finite() || value.0.abs() > f64::from(f32::MAX))
-        {
-            return Err("Sprite selection must be finite and representable on the GPU".into());
-        }
+        self.render_style.validate()?;
         if let Some(program) = &self.point_program {
             program.validate()?;
+            if matches!(self.render_style, PointRenderStyle::Lines { .. })
+                && program.sprite_selection_register.is_some()
+            {
+                return Err("Point line rendering cannot consume a Sprite selection field".into());
+            }
             if !self.source.supports_age()
                 && program.instructions.iter().any(|instruction| {
                     matches!(

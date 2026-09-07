@@ -169,10 +169,11 @@ impl ModuleImageRuntime<'_> {
             if matches!(
                 &node.content,
                 NodeContent::NativeOperation(operation)
-                    if operation.catalog_id
-                        == crate::model::node::PARTICLE_SPRITE_RENDERER_CATALOG_ID
+                    if matches!(operation.catalog_id.as_str(),
+                        crate::model::node::PARTICLE_SPRITE_RENDERER_CATALOG_ID
+                            | crate::model::node::POINT_LINE_RENDERER_CATALOG_ID)
             ) {
-                // ParticleSystem cannot be passed through an Image output.
+                // Point streams and connections cannot pass through an Image output.
                 // Its endpoint bypass state therefore has the same stable
                 // no-output result as a disabled endpoint.
                 return Ok(None);
@@ -440,7 +441,8 @@ impl ModuleImageRuntime<'_> {
         catalog_id: &str,
     ) -> Result<Option<FrameItem>, LibraryError> {
         match catalog_id {
-            crate::model::node::PARTICLE_SPRITE_RENDERER_CATALOG_ID => {
+            crate::model::node::PARTICLE_SPRITE_RENDERER_CATALOG_ID
+            | crate::model::node::POINT_LINE_RENDERER_CATALOG_ID => {
                 let Some(point_renderer) = self.definition.point_renderers.get(&node.id).cloned()
                 else {
                     // The compiler validates Point-source topology even when a

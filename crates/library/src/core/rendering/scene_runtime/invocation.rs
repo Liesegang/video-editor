@@ -3,6 +3,7 @@
 use std::collections::VecDeque;
 
 use super::*;
+use crate::model::frame::point::PointRenderStyle;
 use crate::model::point::PointRenderProgram;
 
 pub(super) struct ParticleCheckpoint {
@@ -49,10 +50,15 @@ impl ParticleState {
 pub(super) struct PointInvocation {
     pub particle: Option<ParticleState>,
     pub point_fields: Option<point_fields::PointFieldBuffers>,
+    pub connections: Option<proximity::PointConnectionBuffers>,
     pub capacity: u32,
     pub last_used: u64,
     #[cfg(test)]
     pub field_generation: u64,
+    #[cfg(test)]
+    pub connection_generation: u64,
+    #[cfg(test)]
+    pub connection_source: Option<PointSceneSource>,
 }
 
 impl PointInvocation {
@@ -67,12 +73,21 @@ impl PointInvocation {
             .as_ref()
             .map_or(0, ParticleState::allocated_bytes)
             .saturating_add(self.field_bytes())
+            .saturating_add(
+                self.connections
+                    .as_ref()
+                    .map_or(0, proximity::PointConnectionBuffers::byte_len),
+            )
     }
 
-    fn point_layout_matches(&self, program: Option<&PointRenderProgram>) -> bool {
+    fn point_layout_matches(
+        &self,
+        program: Option<&PointRenderProgram>,
+        requirements: point_fields::PointFieldRequirements,
+    ) -> bool {
         match (&self.point_fields, program) {
             (None, None) => true,
-            (Some(buffers), Some(program)) => buffers.matches(program),
+            (Some(buffers), Some(program)) => buffers.matches(program, requirements),
             _ => false,
         }
     }
@@ -98,7 +113,19 @@ impl PointInvocation {
         }
     }
 
+    pub fn discard_connections(&mut self, gl: &glow::Context) {
+        if let Some(connections) = self.connections.take() {
+            connections.destroy(gl);
+        }
+        #[cfg(test)]
+        {
+            self.connection_generation = 0;
+            self.connection_source = None;
+        }
+    }
+
     pub fn destroy(mut self, gl: &glow::Context) {
+        self.discard_connections(gl);
         self.discard_fields(gl);
         if let Some(particle) = self.particle {
             particle.destroy(gl);
@@ -147,7 +174,14 @@ impl SceneRuntime {
         let point_fields = match scene
             .point_program
             .as_ref()
-            .map(|program| point_fields::PointFieldBuffers::create(&self.gl, program, capacity))
+            .map(|program| {
+                point_fields::PointFieldBuffers::create(
+                    &self.gl,
+                    program,
+                    capacity,
+                    field_requirements(&scene.render_style),
+                )
+            })
             .transpose()
         {
             Ok(buffers) => buffers,
@@ -158,9 +192,31 @@ impl SceneRuntime {
                 return Err(error);
             }
         };
+        let connections = match &scene.render_style {
+            PointRenderStyle::Lines { connections, .. } => {
+                match proximity::PointConnectionBuffers::create(
+                    &self.gl,
+                    capacity,
+                    connections.max_neighbors,
+                ) {
+                    Ok(buffers) => Some(buffers),
+                    Err(error) => {
+                        if let Some(fields) = point_fields {
+                            fields.destroy(&self.gl);
+                        }
+                        if let Some(particle) = particle {
+                            particle.destroy(&self.gl);
+                        }
+                        return Err(error);
+                    }
+                }
+            }
+            PointRenderStyle::Sprites { .. } => None,
+        };
         Ok(PointInvocation {
             particle,
             point_fields,
+            connections,
             capacity,
             last_used,
             #[cfg(test)]
@@ -169,6 +225,14 @@ impl SceneRuntime {
             } else {
                 0
             },
+            #[cfg(test)]
+            connection_generation: if matches!(scene.render_style, PointRenderStyle::Lines { .. }) {
+                last_used
+            } else {
+                0
+            },
+            #[cfg(test)]
+            connection_source: None,
         })
     }
 
@@ -176,13 +240,18 @@ impl SceneRuntime {
         &mut self,
         invocation: &mut PointInvocation,
         program: Option<&PointRenderProgram>,
+        requirements: point_fields::PointFieldRequirements,
     ) -> Result<(), LibraryError> {
-        if invocation.point_layout_matches(program) {
+        if invocation.point_layout_matches(program, requirements) {
             return Ok(());
         }
         let replacement = if let Some(program) = program {
-            let field_bytes =
-                point_fields::required_invocation_bytes(false, Some(program), invocation.capacity)?;
+            let field_bytes = point_buffer_alloc::required_invocation_bytes(
+                false,
+                Some(program),
+                invocation.capacity,
+                requirements,
+            )?;
             // The active invocation has been removed from the LRU map. Count
             // all its buffers plus the replacement until allocation commits.
             self.reserve_state(invocation.allocated_bytes().saturating_add(field_bytes))?;
@@ -190,6 +259,7 @@ impl SceneRuntime {
                 &self.gl,
                 program,
                 invocation.capacity,
+                requirements,
             )?)
         } else {
             None
@@ -199,6 +269,49 @@ impl SceneRuntime {
         #[cfg(test)]
         {
             invocation.field_generation = if program.is_some() { self.use_tick } else { 0 };
+        }
+        Ok(())
+    }
+
+    pub(super) fn reconcile_connections(
+        &mut self,
+        invocation: &mut PointInvocation,
+        style: &PointRenderStyle,
+    ) -> Result<(), LibraryError> {
+        let expected = match style {
+            PointRenderStyle::Sprites { .. } => None,
+            PointRenderStyle::Lines { connections, .. } => Some(connections.max_neighbors),
+        };
+        let matches = match (&invocation.connections, expected) {
+            (None, None) => true,
+            (Some(buffers), Some(max_neighbors)) => {
+                buffers.matches(invocation.capacity, max_neighbors)
+            }
+            _ => false,
+        };
+        if matches {
+            return Ok(());
+        }
+        let replacement = if let Some(max_neighbors) = expected {
+            let bytes = proximity::PointConnectionBuffers::required_bytes(
+                invocation.capacity,
+                max_neighbors,
+            )?;
+            self.reserve_state(invocation.allocated_bytes().saturating_add(bytes))?;
+            Some(proximity::PointConnectionBuffers::create(
+                &self.gl,
+                invocation.capacity,
+                max_neighbors,
+            )?)
+        } else {
+            None
+        };
+        invocation.discard_connections(&self.gl);
+        invocation.connections = replacement;
+        #[cfg(test)]
+        {
+            invocation.connection_generation = if expected.is_some() { self.use_tick } else { 0 };
+            invocation.connection_source = None;
         }
         Ok(())
     }
@@ -216,7 +329,12 @@ impl SceneRuntime {
         else {
             return Ok(());
         };
-        let field_bytes = invocation.field_bytes();
+        let derived_bytes = invocation.field_bytes().saturating_add(
+            invocation
+                .connections
+                .as_ref()
+                .map_or(0, proximity::PointConnectionBuffers::byte_len),
+        );
         let particle = invocation.particle.as_mut().ok_or_else(|| {
             LibraryError::Validation(
                 "Particle source changed without rebuilding its invocation state".to_string(),
@@ -280,7 +398,7 @@ impl SceneRuntime {
                 .current_step
                 .is_multiple_of(PARTICLE_CHECKPOINT_INTERVAL_STEPS)
             {
-                self.store_checkpoint(particle, field_bytes)?;
+                self.store_checkpoint(particle, derived_bytes)?;
             }
         }
         Ok(())
@@ -289,7 +407,7 @@ impl SceneRuntime {
     fn store_checkpoint(
         &self,
         particle: &mut ParticleState,
-        field_bytes: u64,
+        derived_bytes: u64,
     ) -> Result<(), LibraryError> {
         // Replaying a known step does not need a second identical checkpoint.
         if particle
@@ -309,7 +427,7 @@ impl SceneRuntime {
         let resident_bytes = self
             .resident_state_bytes()
             .saturating_add(particle.allocated_bytes())
-            .saturating_add(field_bytes);
+            .saturating_add(derived_bytes);
         if resident_bytes.saturating_add(checkpoint_bytes) > self.limits.max_state_bytes {
             return Ok(()); // A checkpoint is optional derived cache data.
         }
@@ -335,12 +453,24 @@ impl SceneRuntime {
         &mut self,
         source: &PointSceneSource,
         program: Option<&PointRenderProgram>,
+        style: &PointRenderStyle,
     ) -> Result<(), LibraryError> {
-        self.reserve_state(point_fields::required_invocation_bytes(
+        let fields = point_buffer_alloc::required_invocation_bytes(
             matches!(source, PointSceneSource::Particle { .. }),
             program,
             source.capacity(),
-        )?)
+            field_requirements(style),
+        )?;
+        let connections = match style {
+            PointRenderStyle::Lines { connections, .. } => {
+                proximity::PointConnectionBuffers::required_bytes(
+                    source.capacity(),
+                    connections.max_neighbors,
+                )?
+            }
+            PointRenderStyle::Sprites { .. } => 0,
+        };
+        self.reserve_state(fields.saturating_add(connections))
     }
 
     /// Reserve all bytes outside the map, including an active invocation when
@@ -378,5 +508,11 @@ impl SceneRuntime {
             .values()
             .map(PointInvocation::allocated_bytes)
             .sum()
+    }
+}
+
+pub(super) fn field_requirements(style: &PointRenderStyle) -> point_fields::PointFieldRequirements {
+    point_fields::PointFieldRequirements {
+        validity: matches!(style, PointRenderStyle::Lines { .. }),
     }
 }

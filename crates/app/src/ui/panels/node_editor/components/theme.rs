@@ -256,6 +256,7 @@ pub(in crate::ui::panels::node_editor) fn pin_color(data_type: PortDataType) -> 
         | PortDataType::Object3DList
         | PortDataType::Camera3D
         | PortDataType::PointSource
+        | PortDataType::PointConnections
         | PortDataType::Instance3D => Color32::from_rgb(105, 165, 225),
         PortDataType::Effector3D
         | PortDataType::EffectorStack

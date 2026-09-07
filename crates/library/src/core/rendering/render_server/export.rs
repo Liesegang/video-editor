@@ -81,6 +81,7 @@ struct AuthoringExportRenderer {
 struct AuthoringPointPreflight {
     target_sizes: BTreeSet<(u32, u32)>,
     sprite_collections: HashSet<ImageCollectionValue>,
+    requires_connections: bool,
 }
 
 impl AuthoringPointPreflight {
@@ -94,12 +95,7 @@ impl AuthoringPointPreflight {
 
     fn include_frame(&mut self, frame_info: &FrameInfo) -> Result<(), LibraryError> {
         let root = authoring_export_dimensions(frame_info)?;
-        collect_point_target_sizes(
-            &frame_info.items,
-            root,
-            &mut self.target_sizes,
-            &mut self.sprite_collections,
-        )
+        collect_point_requirements(&frame_info.items, root, self)
     }
 }
 
@@ -201,6 +197,7 @@ fn ensure_authoring_export_renderer(
             project,
             RenderDestination::Export,
             &point_preflight.target_sizes(),
+            point_preflight.requires_connections,
         )?;
         let mut collections = point_preflight
             .sprite_collections
@@ -228,19 +225,27 @@ fn frame_uses_gpu_point(items: &[FrameItem]) -> bool {
     })
 }
 
-fn collect_point_target_sizes(
+fn collect_point_requirements(
     items: &[FrameItem],
     current_target: (u32, u32),
-    targets: &mut BTreeSet<(u32, u32)>,
-    collections: &mut HashSet<ImageCollectionValue>,
+    requirements: &mut AuthoringPointPreflight,
 ) -> Result<(), LibraryError> {
     for item in items {
         match item {
             FrameItem::Object(object) => {
                 if let FrameContent::PointScene { scene, .. } = &object.content {
-                    targets.insert(current_target);
-                    if !scene.sprites.assets.is_empty() {
-                        collections.insert(scene.sprites.clone());
+                    requirements.target_sizes.insert(current_target);
+                    match &scene.render_style {
+                        crate::model::frame::point::PointRenderStyle::Sprites {
+                            images, ..
+                        } => {
+                            if !images.assets.is_empty() {
+                                requirements.sprite_collections.insert(images.clone());
+                            }
+                        }
+                        crate::model::frame::point::PointRenderStyle::Lines { .. } => {
+                            requirements.requires_connections = true;
+                        }
                     }
                 }
             }
@@ -256,20 +261,18 @@ fn collect_point_target_sizes(
                 } else {
                     current_target
                 };
-                collect_point_target_sizes(&group.items, child_target, targets, collections)?;
+                collect_point_requirements(&group.items, child_target, requirements)?;
             }
             FrameItem::Transition(transition) => {
-                collect_point_target_sizes(
+                collect_point_requirements(
                     std::slice::from_ref(&transition.from.item),
                     current_target,
-                    targets,
-                    collections,
+                    requirements,
                 )?;
-                collect_point_target_sizes(
+                collect_point_requirements(
                     std::slice::from_ref(&transition.to.item),
                     current_target,
-                    targets,
-                    collections,
+                    requirements,
                 )?;
             }
         }

@@ -27,6 +27,28 @@ impl PointSourceKind {
                 .replace("POINT_GRID_AXIS_BITS", &format!("{POINT_GRID_AXIS_BITS}u")),
         }
     }
+
+    /// One authoritative random-access Point loader for every render-stage
+    /// consumer. Derived geometry replaces producer geometry only after the
+    /// field program has completed.
+    pub fn render_shader(self, geometry_output: bool) -> String {
+        let producer = self
+            .shader()
+            .replace("// PARTICLE_STRUCT", super::shaders::PARTICLE_STRUCT_GLSL);
+        let geometry = if geometry_output {
+            "layout(std430, binding = 4) readonly buffer PointGeometry { vec4 pointGeometry[]; };"
+        } else {
+            ""
+        };
+        let override_geometry = if geometry_output {
+            "    point.position_size = pointGeometry[slot];"
+        } else {
+            ""
+        };
+        format!(
+            "{RENDER_POINT_GLSL}\n{producer}\n{geometry}\nRenderPoint load_final_render_point(uint slot) {{\n    RenderPoint point = load_render_point(slot);\n{override_geometry}\n    return point;\n}}\n"
+        )
+    }
 }
 
 pub(super) enum PointSourceBinding<'a> {
@@ -104,6 +126,7 @@ pub(super) struct GridUniforms {
 pub(super) enum PointSourceRequirements {
     Optional,
     Alive,
+    Position,
     FullGeometry,
 }
 
@@ -130,6 +153,13 @@ impl PointSourceUniforms {
             let missing = match requirements {
                 PointSourceRequirements::Optional => false,
                 PointSourceRequirements::Alive => grid.counts.is_none(),
+                PointSourceRequirements::Position => [
+                    grid.counts.as_ref(),
+                    grid.spacing.as_ref(),
+                    grid.center.as_ref(),
+                ]
+                .iter()
+                .any(|location| location.is_none()),
                 PointSourceRequirements::FullGeometry => [
                     grid.counts.as_ref(),
                     grid.spacing.as_ref(),

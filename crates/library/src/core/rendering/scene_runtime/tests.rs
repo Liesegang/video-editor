@@ -1,5 +1,6 @@
 use ordered_float::OrderedFloat;
 
+use super::point_fields::PointFieldRequirements;
 use super::*;
 use crate::model::frame::particle::{ParticleEmitterShape, ParticleForce};
 use crate::model::point::{PointAttributeSchema, PointInstruction, PointRenderProgram};
@@ -64,8 +65,7 @@ fn scene(target_step: u64) -> PointSceneFrame {
             b: 60,
             a: 200,
         },
-        sprites: Default::default(),
-        sprite_selection: crate::model::frame::point::SpriteSelection::Random,
+        render_style: Default::default(),
         point_program: None,
     }
 }
@@ -199,23 +199,30 @@ fn constant_color_program(use_last_stop: bool) -> PointRenderProgram {
 fn point_pipeline_keys_are_source_and_shader_shape_specific() {
     let first = constant_color_program(false);
     let recolored = constant_color_program(true);
-    let particle_hash = point_fields::source_hash(PointSourceKind::Particle, Some(&first)).unwrap();
+    let requirements = PointFieldRequirements::default();
+    let particle_hash =
+        point_fields::source_hash(PointSourceKind::Particle, Some(&first), requirements).unwrap();
     assert_eq!(
         particle_hash,
-        point_fields::source_hash(PointSourceKind::Particle, Some(&recolored)).unwrap(),
+        point_fields::source_hash(PointSourceKind::Particle, Some(&recolored), requirements)
+            .unwrap(),
         "uniform program values must reuse one compiled shader"
     );
     assert_ne!(
         PointPipelineKey {
             source_kind: PointSourceKind::Particle,
             field_source_hash: particle_hash,
-            sprites: false,
+            render_kind: PointRenderKind::Sprites { images: false },
         },
         PointPipelineKey {
             source_kind: PointSourceKind::Grid,
-            field_source_hash: point_fields::source_hash(PointSourceKind::Grid, Some(&first))
-                .unwrap(),
-            sprites: false,
+            field_source_hash: point_fields::source_hash(
+                PointSourceKind::Grid,
+                Some(&first),
+                requirements
+            )
+            .unwrap(),
+            render_kind: PointRenderKind::Sprites { images: false },
         },
         "one Module executable may contain both Particle and Grid producers"
     );
@@ -228,14 +235,25 @@ fn derived_position_output_has_distinct_shader_shape_and_exact_buffer_budget() {
     positioned.instructions.push(PointInstruction::Position);
     positioned.position_register = Some(1);
     let capacity = 37;
-    let color_bytes =
-        point_fields::required_invocation_bytes(false, Some(&color_only), capacity).unwrap();
-    let positioned_bytes =
-        point_fields::required_invocation_bytes(false, Some(&positioned), capacity).unwrap();
+    let requirements = PointFieldRequirements::default();
+    let color_bytes = point_buffer_alloc::required_invocation_bytes(
+        false,
+        Some(&color_only),
+        capacity,
+        requirements,
+    )
+    .unwrap();
+    let positioned_bytes = point_buffer_alloc::required_invocation_bytes(
+        false,
+        Some(&positioned),
+        capacity,
+        requirements,
+    )
+    .unwrap();
     assert_eq!(positioned_bytes - color_bytes, u64::from(capacity) * 16);
     assert_ne!(
-        point_fields::source_hash(PointSourceKind::Grid, Some(&color_only)).unwrap(),
-        point_fields::source_hash(PointSourceKind::Grid, Some(&positioned)).unwrap(),
+        point_fields::source_hash(PointSourceKind::Grid, Some(&color_only), requirements).unwrap(),
+        point_fields::source_hash(PointSourceKind::Grid, Some(&positioned), requirements).unwrap(),
         "None/Some position outputs require distinct compute and Sprite pipelines"
     );
 }
@@ -245,6 +263,34 @@ fn grid_field_shader_rejects_age_without_a_fake_lifetime() {
     let mut program = constant_color_program(false);
     program.instructions.insert(0, PointInstruction::Age);
     program.color_register = 1;
-    let error = point_fields::source_hash(PointSourceKind::Grid, Some(&program)).unwrap_err();
+    let error = point_fields::source_hash(
+        PointSourceKind::Grid,
+        Some(&program),
+        PointFieldRequirements::default(),
+    )
+    .unwrap_err();
     assert!(error.to_string().contains("require a Particle source"));
+}
+
+#[test]
+fn line_validity_has_its_own_shader_shape_and_checked_resource_budget() {
+    let program = constant_color_program(false);
+    let sprites = PointFieldRequirements::default();
+    let lines = PointFieldRequirements { validity: true };
+    let capacity = 257;
+    let sprite_bytes =
+        point_buffer_alloc::required_invocation_bytes(false, Some(&program), capacity, sprites)
+            .unwrap();
+    let line_bytes =
+        point_buffer_alloc::required_invocation_bytes(false, Some(&program), capacity, lines)
+            .unwrap();
+    assert_eq!(line_bytes - sprite_bytes, u64::from(capacity) * 4);
+    assert_ne!(
+        point_fields::source_hash(PointSourceKind::Grid, Some(&program), sprites).unwrap(),
+        point_fields::source_hash(PointSourceKind::Grid, Some(&program), lines).unwrap(),
+    );
+    let large = proximity::PointConnectionBuffers::required_bytes(100_000, 32).unwrap();
+    assert!(large < SceneRuntimeLimits::default().max_state_bytes);
+    assert!(proximity::PointConnectionBuffers::required_bytes(u32::MAX, 32).is_err());
+    assert!(prefix_scan::PrefixScanBuffers::required_bytes(0, 1).is_err());
 }

@@ -7,19 +7,22 @@ use super::frame_values::{
 };
 use super::*;
 use crate::core::render_plan::{
-    CompiledPointInstruction, CompiledPointProgram, CompiledPointRenderer, CompiledPointSource,
-    CompiledPointValueType,
+    CompiledPointInstruction, CompiledPointProgram, CompiledPointRenderStyle,
+    CompiledPointRenderer, CompiledPointSource, CompiledPointValueType,
 };
 use crate::model::authoring::ModuleOutputId;
 use crate::model::frame::point::{
-    PointGridParameters, PointSceneFrame, PointSceneSource, SceneInvocationKey, SpriteSelection,
+    PointConnectionParameters, PointGridParameters, PointRenderStyle, PointSceneFrame,
+    PointSceneSource, SceneInvocationKey, SpriteSelection,
 };
 use crate::model::node::{
-    SPRITE_COLLECTION_INPUT_PORT, SPRITE_COLOR_INPUT_PORT, SPRITE_SELECTION_INPUT_PORT,
-    SPRITE_SELECTION_MODE_INPUT_PORT, SPRITE_SELECTION_MODE_RANDOM, SPRITE_SELECTION_MODE_VALUE,
+    POINT_COLOR_INPUT_PORT, POINT_LINE_FADE_INPUT_PORT, POINT_LINE_WIDTH_INPUT_PORT,
+    POINT_MAX_DISTANCE_INPUT_PORT, POINT_MAX_NEIGHBORS_INPUT_PORT, POINT_MIN_DISTANCE_INPUT_PORT,
+    SPRITE_COLLECTION_INPUT_PORT, SPRITE_SELECTION_INPUT_PORT, SPRITE_SELECTION_MODE_INPUT_PORT,
+    SPRITE_SELECTION_MODE_RANDOM, SPRITE_SELECTION_MODE_VALUE,
 };
 use crate::model::point::{PointAttributeElementType, PointInstruction, PointRenderProgram};
-use crate::model::property::{ColorValue, ImageCollectionValue};
+use crate::model::property::ColorValue;
 
 impl ModuleImageRuntime<'_> {
     pub(super) fn evaluate_point_renderer(
@@ -49,18 +52,18 @@ impl ModuleImageRuntime<'_> {
             crate::model::frame::color::Color::white()
         } else {
             let color = self
-                .value_input(renderer.renderer_node_id, SPRITE_COLOR_INPUT_PORT)?
+                .value_input(renderer.renderer_node_id, POINT_COLOR_INPUT_PORT)?
                 .ok_or_else(|| {
-                    LibraryError::Validation("Sprite Renderer requires a Color".into())
+                    LibraryError::Validation("Point Renderer requires a Color".into())
                 })?;
             required_color(
-                &std::collections::HashMap::from([(SPRITE_COLOR_INPUT_PORT.to_string(), color)]),
-                SPRITE_COLOR_INPUT_PORT,
-                "Sprite Renderer",
+                &std::collections::HashMap::from([(POINT_COLOR_INPUT_PORT.to_string(), color)]),
+                POINT_COLOR_INPUT_PORT,
+                "Point Renderer",
             )?
         };
-        let (sprites, sprite_selection) = self.sample_sprite_appearance(
-            renderer.renderer_node_id,
+        let render_style = self.sample_point_render_style(
+            renderer,
             point_program
                 .as_ref()
                 .is_some_and(|program| program.sprite_selection_register.is_some()),
@@ -90,8 +93,7 @@ impl ModuleImageRuntime<'_> {
             logical_height,
             source,
             color,
-            sprites,
-            sprite_selection,
+            render_style,
             point_program,
         };
         scene.validate().map_err(LibraryError::Validation)?;
@@ -125,11 +127,80 @@ impl ModuleImageRuntime<'_> {
         }))
     }
 
+    fn sample_point_render_style(
+        &mut self,
+        renderer: &CompiledPointRenderer,
+        has_selection_field: bool,
+    ) -> Result<PointRenderStyle, LibraryError> {
+        match renderer.render_style {
+            CompiledPointRenderStyle::Sprites => {
+                self.sample_sprite_appearance(renderer.renderer_node_id, has_selection_field)
+            }
+            CompiledPointRenderStyle::Lines {
+                connections_node_id,
+            } => {
+                let node = self
+                    .definition
+                    .nodes
+                    .get(&connections_node_id)
+                    .cloned()
+                    .ok_or_else(|| {
+                        LibraryError::Validation(
+                            "Point line renderer lost its compiled connections".into(),
+                        )
+                    })?;
+                let topology = self.node_values(&node)?;
+                let connections = PointConnectionParameters {
+                    min_distance: finite_f32(
+                        required_number(
+                            &topology,
+                            POINT_MIN_DISTANCE_INPUT_PORT,
+                            "Connect Points",
+                        )?,
+                        "Minimum Distance",
+                    )?,
+                    max_distance: finite_f32(
+                        required_number(
+                            &topology,
+                            POINT_MAX_DISTANCE_INPUT_PORT,
+                            "Connect Points",
+                        )?,
+                        "Maximum Distance",
+                    )?,
+                    max_neighbors: required_u32(
+                        &topology,
+                        POINT_MAX_NEIGHBORS_INPUT_PORT,
+                        "Connect Points",
+                    )?,
+                };
+                // Color may be a varying Point field. Sample only the two
+                // scalar line controls through the frame-uniform evaluator.
+                let mut appearance = HashMap::new();
+                for key in [POINT_LINE_WIDTH_INPUT_PORT, POINT_LINE_FADE_INPUT_PORT] {
+                    if let Some(value) = self.value_input(renderer.renderer_node_id, key)? {
+                        appearance.insert(key.to_string(), value);
+                    }
+                }
+                Ok(PointRenderStyle::Lines {
+                    connections,
+                    width: finite_f32(
+                        required_number(&appearance, POINT_LINE_WIDTH_INPUT_PORT, "Line Renderer")?,
+                        "Line width",
+                    )?,
+                    fade: finite_f32(
+                        required_number(&appearance, POINT_LINE_FADE_INPUT_PORT, "Line Renderer")?,
+                        "Line fade",
+                    )?,
+                })
+            }
+        }
+    }
+
     fn sample_sprite_appearance(
         &mut self,
         node_id: uuid::Uuid,
         has_selection_field: bool,
-    ) -> Result<(ImageCollectionValue, SpriteSelection), LibraryError> {
+    ) -> Result<PointRenderStyle, LibraryError> {
         let Some(PropertyValue::ImageCollection(sprites)) =
             self.value_input(node_id, SPRITE_COLLECTION_INPUT_PORT)?
         else {
@@ -164,7 +235,10 @@ impl ModuleImageRuntime<'_> {
                 ));
             }
         };
-        Ok((sprites, selection))
+        Ok(PointRenderStyle::Sprites {
+            images: sprites,
+            selection,
+        })
     }
 
     fn sample_point_grid(&mut self, node_id: uuid::Uuid) -> Result<PointSceneSource, LibraryError> {

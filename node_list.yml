@@ -2892,6 +2892,45 @@ Point Grid:
   outputs:
     - name: points
       type: PointSource
+Connect Points:
+  category: Points
+  catalog_status: native
+  catalog_id: native.point.connect-points
+  runtime_status: implemented
+  description: Derive bounded mutual nearest-neighbor proximity topology from a Point stream
+  inputs:
+    - name: points
+      type: PointSource
+    - name: min_distance
+      label: Min Distance
+      type: Scalar
+    - name: max_distance
+      label: Max Distance
+      type: Scalar
+    - name: max_neighbors
+      label: Max Neighbors
+      type: Integer
+  outputs:
+    - name: connections
+      type: PointConnections
+Line Renderer:
+  category: Points
+  catalog_status: native
+  catalog_id: native.point.line-renderer
+  runtime_status: implemented
+  description: Render a Point proximity topology as endpoint-colored lines
+  inputs:
+    - name: connections
+      type: PointConnections
+    - name: color
+      type: Color
+    - name: width
+      type: Scalar
+    - name: fade
+      type: Scalar
+  outputs:
+    - name: image
+      type: Image
 Point Info:
   category: Points
   catalog_status: native

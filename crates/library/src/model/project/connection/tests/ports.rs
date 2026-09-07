@@ -24,6 +24,15 @@ fn point_source_accepts_particle_system_in_only_the_safe_direction() {
 }
 
 #[test]
+fn point_connections_are_an_exact_transient_graph_type() {
+    assert!(PortDataType::PointConnections.accepts(PortDataType::PointConnections));
+    assert!(!PortDataType::PointConnections.accepts(PortDataType::PointSource));
+    assert!(!PortDataType::PointSource.accepts(PortDataType::PointConnections));
+    assert!(!PortDataType::PointConnections.is_property_value_family());
+    assert!(!PortDataType::Any.accepts(PortDataType::PointConnections));
+}
+
+#[test]
 fn paint_accepts_lossless_variant_injection_only() {
     for source in [
         PortDataType::Paint,

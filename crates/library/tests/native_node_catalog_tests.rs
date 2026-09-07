@@ -507,6 +507,7 @@ fn parse_data_type(value: &str, node_label: &str, port_name: &str) -> (PortDataT
         "List<Object3D>" => PortDataType::Object3DList,
         "Camera3D" => PortDataType::Camera3D,
         "PointSource" => PortDataType::PointSource,
+        "PointConnections" => PortDataType::PointConnections,
         "Instance3D" => PortDataType::Instance3D,
         "Effector3D" => PortDataType::Effector3D,
         "EffectorStack" => PortDataType::EffectorStack,

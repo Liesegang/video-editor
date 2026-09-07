@@ -4,7 +4,9 @@ use crate::model::authoring::ModuleDefinition;
 use crate::model::node::PointNodeRole;
 use crate::model::point::{PointAttributeDefinition, PointAttributeId, PointAttributeSchema};
 
-use super::{particle_sprite, point_role, trace_point_stream};
+use super::point_role;
+use super::renderer::point_endpoint;
+use super::stream::trace_point_stream;
 
 /// Validates the semantic display name of one Store Attribute Node against
 /// every current Point stream that contains it. Independent Point domains may
@@ -31,10 +33,10 @@ pub fn validate_module_node_name(
     )?;
 
     for renderer in definition.graph.nodes.values() {
-        if !particle_sprite(renderer) {
+        let Some((input, _)) = point_endpoint(definition, renderer)? else {
             continue;
-        }
-        let Some(trace) = trace_point_stream(definition, renderer.id)? else {
+        };
+        let Some(trace) = trace_point_stream(definition, &input)? else {
             continue;
         };
         let stores = trace.stores().collect::<Vec<_>>();

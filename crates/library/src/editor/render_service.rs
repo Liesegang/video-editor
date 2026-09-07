@@ -269,9 +269,11 @@ impl<T: Renderer> RenderService<T> {
         project: &AuthoringProject,
         destination: RenderDestination,
         target_sizes: &[(u32, u32)],
+        requires_connections: bool,
     ) -> Result<(), LibraryError> {
         self.prepare_authoring_color_pipeline(project, destination)?;
-        self.renderer.preflight_point_backend(target_sizes)
+        self.renderer
+            .preflight_point_backend(target_sizes, requires_connections)
     }
 
     fn prepare_authoring_color_pipeline(
@@ -542,7 +544,12 @@ impl<T: Renderer> RenderService<T> {
                 effects,
                 transform,
             } => {
-                let sprites = self.resolve_point_sprites(&scene.sprites, color_authority)?;
+                let sprites = scene
+                    .render_style
+                    .sprite_images()
+                    .map(|images| self.resolve_point_sprites(images, color_authority))
+                    .transpose()?
+                    .unwrap_or_default();
                 let render_transform = context.transform(transform);
                 if effects.is_empty() {
                     return measure_debug("Draw GPU Point scene", || {

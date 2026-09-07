@@ -12,7 +12,7 @@ fn color_value(color: Color) -> PropertyValue {
     PropertyValue::ColorValue(ColorValue::from_straight_srgba8(&color))
 }
 
-fn color_program(color: Color) -> PointRenderProgram {
+pub(super) fn color_program(color: Color) -> PointRenderProgram {
     PointRenderProgram {
         schema: PointAttributeSchema::new(Vec::new()).unwrap(),
         instructions: vec![PointInstruction::Constant {

@@ -64,6 +64,33 @@ Collections support up to 64 unique still Image Assets. Image aspect ratio and
 transparency are preserved; collection edits do not restart the simulation.
 Video, Timeline output, and Composition collections are not supported yet.
 
+### Plexus-style point connections
+
+Right-click in **Assets** and choose **New Plexus Network Template**, then drag
+the resulting Node Clip Asset onto the Timeline. Its Inspector exposes Grid
+counts, spacing, center, connection distances, neighbor count, color, width,
+and distance fade. These controls support the existing Timeline keyframes;
+editing one placement's values does not change its linked siblings.
+
+The template is an ordinary four-Node Module:
+**Point Grid → Connect Points → Line Renderer → Output**. Open its Node Editor
+to substitute a Particle stream, add Set Point Position or custom attributes,
+or feed a Color Ramp into Line Renderer. Unpublish its Color input before
+connecting a per-point field. Its Image output can feed effects and Merge.
+
+Connect Points measures 3D distance after Point position fields. Two points
+connect only when they choose each other among their nearest eligible neighbors;
+ties use stable point identity. **Max Neighbors** accepts 1 to 32 and caps each
+point's degree; some points may have no connections. Minimum/Maximum Distance
+restrict eligible neighbors. Line colors
+interpolate between endpoints; Fade 0 preserves opacity and Fade 1 reduces it
+with distance. These render-stage controls do not restart particle simulation.
+
+The GPU search rejects inputs exceeding its memory or candidate-work limits
+with a diagnostic; it does not silently return an incomplete network. This
+first connection renderer supports lines, not triangle surfaces, retained
+connections across frames, or combined streams from multiple producers.
+
 ### Per-point custom attributes
 
 Inside a Particle Node Clip, add **Point Info** and **Store Number Attribute**

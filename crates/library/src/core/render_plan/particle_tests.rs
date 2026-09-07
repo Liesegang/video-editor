@@ -130,7 +130,7 @@ pub(super) fn connection(
     }
 }
 
-fn has_group(items: &[FrameItem], source_id: uuid::Uuid, kind: FrameGroupKind) -> bool {
+pub(super) fn has_group(items: &[FrameItem], source_id: uuid::Uuid, kind: FrameGroupKind) -> bool {
     items.iter().any(|item| match item {
         FrameItem::Group(group) => {
             (group.source_id == source_id && group.kind == kind)

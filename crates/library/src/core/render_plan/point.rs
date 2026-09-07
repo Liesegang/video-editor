@@ -3,17 +3,17 @@
 use std::collections::{HashMap, HashSet};
 
 use super::{
-    CompiledPointInstruction, CompiledPointProgram, CompiledPointRenderer, CompiledPointSource,
+    CompiledPointInstruction, CompiledPointProgram, CompiledPointRenderStyle, CompiledPointSource,
     CompiledPointValueType,
 };
 use crate::model::authoring::{ModuleDefinition, ModulePortAddress};
 use crate::model::node::{
     COLOR_RAMP_FACTOR_PORT, COLOR_RAMP_GRADIENT_PORT, COLOR_VALUE_PORT, CONDITION_INPUT_PORT,
     ColorContent, ConditionalNodeRole, NUMERIC_LENGTH_CATALOG_ID, NUMERIC_LENGTH_INPUT_PORT, Node,
-    NodeContent, POINT_ATTRIBUTE_OUTPUT_PORT, POINT_ATTRIBUTE_VALUE_PORT, POINT_OFFSET_INPUT_PORT,
-    POINT_POSITION_INPUT_PORT, POINT_SCALE_INPUT_PORT, POINT_SELECTION_INPUT_PORT, POINT_SIZE_PORT,
-    POINT_SOURCE_PORT, PointNodeRole, SELECT_FALSE_INPUT_PORT, SELECT_TRUE_INPUT_PORT,
-    SPRITE_COLOR_INPUT_PORT, SPRITE_SELECTION_INPUT_PORT,
+    NodeContent, POINT_ATTRIBUTE_OUTPUT_PORT, POINT_ATTRIBUTE_VALUE_PORT, POINT_COLOR_INPUT_PORT,
+    POINT_OFFSET_INPUT_PORT, POINT_POSITION_INPUT_PORT, POINT_SCALE_INPUT_PORT,
+    POINT_SELECTION_INPUT_PORT, POINT_SIZE_PORT, POINT_SOURCE_PORT, PointNodeRole,
+    SELECT_FALSE_INPUT_PORT, SELECT_TRUE_INPUT_PORT, SPRITE_SELECTION_INPUT_PORT,
 };
 use crate::model::point::{
     NumericBinaryOperation, POINT_MAX_INSTRUCTIONS, POINT_MAX_RAMPS, PointAttributeElementType,
@@ -22,14 +22,16 @@ use crate::model::point::{
 use crate::model::project::NUMBER_RESULT_OUTPUT_PORT;
 
 mod dependencies;
+mod renderer;
 mod schema;
 mod stream;
 
 use dependencies::PointDependencyResolver;
 pub(super) use dependencies::validate_point_field_consumers;
+pub(super) use renderer::compile_point_renderers;
 use schema::point_attribute_schema;
 pub use schema::validate_module_node_name;
-use stream::{PointStage, PointStreamTrace, trace_point_stream};
+use stream::{PointStage, PointStreamTrace};
 
 const POINT_AGE_OUTPUT_PORT: &str = "age";
 const POINT_NORMALIZED_AGE_OUTPUT_PORT: &str = "normalized_age";
@@ -118,48 +120,6 @@ impl GeometryField {
     }
 }
 
-pub(super) fn compile_point_renderers(
-    definition: &ModuleDefinition,
-    active_nodes: &HashSet<uuid::Uuid>,
-) -> Result<HashMap<uuid::Uuid, CompiledPointRenderer>, String> {
-    validate_point_field_consumers(definition, active_nodes)?;
-    let mut compiled = HashMap::new();
-    let mut candidate_ids = active_nodes.iter().copied().collect::<Vec<_>>();
-    candidate_ids.sort_unstable();
-    for renderer_node_id in candidate_ids {
-        let Some(renderer) = definition.graph.nodes.get(&renderer_node_id) else {
-            continue;
-        };
-        if !particle_sprite(renderer) || !renderer.enabled || renderer.bypassed {
-            continue;
-        }
-        let Some(trace) = trace_point_stream(definition, renderer_node_id)? else {
-            continue;
-        };
-        let Some(source) = compile_point_source(definition, &trace.terminal_source)? else {
-            continue;
-        };
-        let point_program = compile_point_program(
-            definition,
-            renderer_node_id,
-            &trace,
-            &source.lineage,
-            source.capabilities,
-        )?;
-        compiled.insert(
-            renderer_node_id,
-            CompiledPointRenderer {
-                source: source.source,
-                point_program,
-                renderer_node_id,
-                // Each renderer branch owns independent derived GPU resources.
-                state_slot_id: renderer_node_id,
-            },
-        );
-    }
-    Ok(compiled)
-}
-
 fn compile_point_source(
     definition: &ModuleDefinition,
     terminal: &ModulePortAddress,
@@ -190,6 +150,7 @@ fn compile_point_source(
 fn compile_point_program(
     definition: &ModuleDefinition,
     renderer_node_id: uuid::Uuid,
+    render_style: CompiledPointRenderStyle,
     trace: &PointStreamTrace,
     source_lineage: &HashSet<ModulePortAddress>,
     capabilities: PointSourceCapabilities,
@@ -279,15 +240,16 @@ fn compile_point_program(
         stream_geometry.insert(output_stream, output_geometry);
     }
 
-    let color_target = address(renderer_node_id, SPRITE_COLOR_INPUT_PORT);
+    let color_target = address(renderer_node_id, POINT_COLOR_INPUT_PORT);
     let color_source = single_input_source(definition, &color_target);
     let varying_color = color_source
         .as_ref()
         .is_some_and(|source| builder.depends_on_point(source));
     let selection_target = address(renderer_node_id, SPRITE_SELECTION_INPUT_PORT);
-    let varying_selection = single_input_source(definition, &selection_target)
-        .as_ref()
-        .is_some_and(|source| builder.depends_on_point(source));
+    let varying_selection = matches!(render_style, CompiledPointRenderStyle::Sprites)
+        && single_input_source(definition, &selection_target)
+            .as_ref()
+            .is_some_and(|source| builder.depends_on_point(source));
     let has_executable_stage = trace
         .stages
         .iter()
@@ -864,14 +826,6 @@ fn point_role(node: &Node) -> Option<PointNodeRole> {
         }
         _ => None,
     }
-}
-
-fn particle_sprite(node: &Node) -> bool {
-    matches!(
-        node.content(),
-        NodeContent::NativeOperation(operation)
-            if operation.catalog_id == crate::model::node::PARTICLE_SPRITE_RENDERER_CATALOG_ID
-    )
 }
 
 fn single_input_source(

@@ -106,6 +106,7 @@ pub(crate) struct SavedGlState {
     shader_storage_bindings: [Option<glow::Buffer>; 6],
     copy_read_buffer: Option<glow::Buffer>,
     copy_write_buffer: Option<glow::Buffer>,
+    draw_indirect_buffer: Option<glow::Buffer>,
     pixel_unpack_buffer: Option<glow::Buffer>,
     unpack_alignment: i32,
     unpack_row_length: i32,
@@ -167,6 +168,7 @@ impl SavedGlState {
                 shader_storage_bindings,
                 copy_read_buffer: gl.get_parameter_buffer(glow::COPY_READ_BUFFER_BINDING),
                 copy_write_buffer: gl.get_parameter_buffer(glow::COPY_WRITE_BUFFER_BINDING),
+                draw_indirect_buffer: gl.get_parameter_buffer(glow::DRAW_INDIRECT_BUFFER_BINDING),
                 pixel_unpack_buffer: gl.get_parameter_buffer(glow::PIXEL_UNPACK_BUFFER_BINDING),
                 unpack_alignment: gl.get_parameter_i32(glow::UNPACK_ALIGNMENT),
                 unpack_row_length: gl.get_parameter_i32(glow::UNPACK_ROW_LENGTH),
@@ -246,6 +248,7 @@ impl SavedGlState {
             gl.bind_buffer(glow::SHADER_STORAGE_BUFFER, self.shader_storage_buffer);
             gl.bind_buffer(glow::COPY_READ_BUFFER, self.copy_read_buffer);
             gl.bind_buffer(glow::COPY_WRITE_BUFFER, self.copy_write_buffer);
+            gl.bind_buffer(glow::DRAW_INDIRECT_BUFFER, self.draw_indirect_buffer);
             gl.bind_buffer(glow::PIXEL_UNPACK_BUFFER, self.pixel_unpack_buffer);
             gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, self.unpack_alignment);
             gl.pixel_store_i32(glow::UNPACK_ROW_LENGTH, self.unpack_row_length);

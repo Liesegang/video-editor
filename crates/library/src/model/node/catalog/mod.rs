@@ -12,18 +12,24 @@ mod builtins;
 mod descriptor;
 mod particle;
 mod point;
+mod point_connections;
 mod three_d;
 
 pub use descriptor::{NativeNodeCatalogDescriptor, NativeNodeFactory, NativeNodeRuntimeStatus};
 pub(crate) use particle::{
-    PARTICLE_SPRITE_RENDERER_CATALOG_ID, PARTICLE_SYSTEM_PORT, ParticleNodeRole,
-    SPRITE_COLLECTION_INPUT_PORT, SPRITE_COLOR_INPUT_PORT, SPRITE_SELECTION_INPUT_PORT,
+    PARTICLE_SPRITE_RENDERER_CATALOG_ID, PARTICLE_SYSTEM_PORT, POINT_COLOR_INPUT_PORT,
+    ParticleNodeRole, SPRITE_COLLECTION_INPUT_PORT, SPRITE_SELECTION_INPUT_PORT,
     SPRITE_SELECTION_MODE_INPUT_PORT, SPRITE_SELECTION_MODE_RANDOM, SPRITE_SELECTION_MODE_VALUE,
 };
 pub(crate) use point::{
     POINT_ATTRIBUTE_OUTPUT_PORT, POINT_ATTRIBUTE_VALUE_PORT, POINT_OFFSET_INPUT_PORT,
     POINT_POSITION_INPUT_PORT, POINT_SCALE_INPUT_PORT, POINT_SELECTION_INPUT_PORT, POINT_SIZE_PORT,
     POINT_SOURCE_PORT, PointNodeRole,
+};
+pub(crate) use point_connections::{
+    CONNECT_POINTS_CATALOG_ID, POINT_CONNECTIONS_PORT, POINT_LINE_FADE_INPUT_PORT,
+    POINT_LINE_RENDERER_CATALOG_ID, POINT_LINE_WIDTH_INPUT_PORT, POINT_MAX_DISTANCE_INPUT_PORT,
+    POINT_MAX_NEIGHBORS_INPUT_PORT, POINT_MIN_DISTANCE_INPUT_PORT, PointConnectionNodeRole,
 };
 
 pub(crate) const RECTANGLE_SHAPE_CATALOG_ID: &str = "native.shape.rectangle";
@@ -39,6 +45,7 @@ static NATIVE_NODE_CATALOG: LazyLock<Vec<NativeNodeCatalogDescriptor>> = LazyLoc
     builtins::specs()
         .chain(particle::specs().iter())
         .chain(point::specs().iter())
+        .chain(point_connections::specs().iter())
         .chain(three_d::specs().iter())
         .copied()
         .map(DescriptorSpec::build)

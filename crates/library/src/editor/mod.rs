@@ -12,8 +12,10 @@ mod authoring_waveform_service;
 pub mod color_service;
 pub mod editor_service;
 pub mod handlers;
+mod module_graph_factory;
 pub mod ocio_shim;
 mod particle_node_clip;
+mod plexus_node_clip;
 pub mod project_model;
 pub mod project_service;
 pub mod render_service;
@@ -46,6 +48,9 @@ pub use handlers::property_ops::PropertyOwner;
 pub use particle_node_clip::{
     ParticleNodeClipCreation, ParticleNodeClipDefinition, ParticleNodeClipFactory,
     ParticleNodeClipPlacement, ParticlePublishedParameters,
+};
+pub use plexus_node_clip::{
+    PlexusNodeClipDefinition, PlexusNodeClipFactory, PlexusPublishedParameters,
 };
 pub use project_model::ProjectModel;
 pub use project_service::ProjectManager as ProjectService;

@@ -97,8 +97,7 @@ fn point_frame_rejects_particle_builtins_on_grid_before_gpu_dispatch() {
         logical_height: 480,
         source: PointSceneSource::Grid(grid()),
         color: Color::white(),
-        sprites: Default::default(),
-        sprite_selection: SpriteSelection::Random,
+        render_style: Default::default(),
         point_program: None,
     };
     frame.validate().unwrap();

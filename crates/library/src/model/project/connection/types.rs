@@ -189,6 +189,9 @@ pub enum PortDataType {
     Object3DList,
     Camera3D,
     PointSource,
+    /// Transient proximity topology derived from a concrete Point stream.
+    /// Persisted Projects store the producing graph, never materialized edges.
+    PointConnections,
     Instance3D,
     Effector3D,
     EffectorStack,

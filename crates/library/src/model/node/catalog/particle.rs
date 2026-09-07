@@ -20,7 +20,7 @@ use crate::model::property::{
 pub(crate) const PARTICLE_SYSTEM_PORT: &str = "particles";
 pub(crate) const PARTICLE_SPRITE_RENDERER_CATALOG_ID: &str =
     ParticleNodeRole::SpriteRenderer.catalog_id();
-pub(crate) const SPRITE_COLOR_INPUT_PORT: &str = "color";
+pub(crate) const POINT_COLOR_INPUT_PORT: &str = "color";
 pub(crate) const SPRITE_COLLECTION_INPUT_PORT: &str = "sprites";
 pub(crate) const SPRITE_SELECTION_MODE_INPUT_PORT: &str = "selection_mode";
 pub(crate) const SPRITE_SELECTION_INPUT_PORT: &str = "selection";
@@ -207,7 +207,7 @@ const COLLISION_DEPTH_INPUTS: &[PortSpec] = &[
 ];
 const SPRITE_RENDERER_INPUTS: &[PortSpec] = &[
     PortSpec::single(PARTICLE_SYSTEM_PORT, "Points", PortDataType::PointSource),
-    PortSpec::single("color", "Tint", PortDataType::Color),
+    PortSpec::single(POINT_COLOR_INPUT_PORT, "Tint", PortDataType::Color),
     PortSpec::single(
         SPRITE_COLLECTION_INPUT_PORT,
         "Sprites",
@@ -806,7 +806,7 @@ fn required_vec3(properties: &PropertyMap, node: &str, key: &str) -> Result<Vec3
 fn sprite_properties() -> Vec<PropertyDefinition> {
     vec![
         PropertyDefinition::new(
-            "color",
+            POINT_COLOR_INPUT_PORT,
             PropertyUiType::Color,
             "Tint",
             PropertyValue::Color(Color::white()),

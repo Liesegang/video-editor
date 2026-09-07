@@ -35,6 +35,8 @@ mod image_style_tests;
 mod particle_collision_tests;
 #[path = "export_particle_sphere_collision_tests.rs"]
 mod particle_sphere_collision_tests;
+#[path = "export_point_connection_tests.rs"]
+mod point_connection_tests;
 #[path = "export_point_tests.rs"]
 mod point_tests;
 #[path = "export_sprite_collection_tests.rs"]

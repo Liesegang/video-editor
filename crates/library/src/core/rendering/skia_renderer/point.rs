@@ -55,10 +55,11 @@ impl SkiaRenderer {
     pub(super) fn preflight_point_output(
         &mut self,
         target_sizes: &[(u32, u32)],
+        requires_connections: bool,
     ) -> Result<(), LibraryError> {
         #[cfg(not(feature = "gl"))]
         {
-            let _ = target_sizes;
+            let _ = (target_sizes, requires_connections);
             Err(LibraryError::Render(
                 "GPU Point unavailable: library was built without the OpenGL backend".to_string(),
             ))
@@ -128,7 +129,8 @@ impl SkiaRenderer {
                 // Ganesh may still sample SceneRuntime's previous target.
                 // Submit those commands before raw GL allocates/replaces it.
                 gpu_context.direct_context.flush_and_submit();
-                let texture = scene_runtime.preflight_point(width, height, format);
+                let texture =
+                    scene_runtime.preflight_point(width, height, format, requires_connections);
                 gpu_context.direct_context.reset(None);
                 let texture = texture?;
                 let image = skia_working_surface::scene_texture_to_skia_image(

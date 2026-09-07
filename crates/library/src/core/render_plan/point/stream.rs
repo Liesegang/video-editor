@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 
 use crate::model::authoring::{ModuleDefinition, ModulePortAddress};
-use crate::model::node::{PARTICLE_SYSTEM_PORT, POINT_SOURCE_PORT, PointNodeRole};
+use crate::model::node::{POINT_SOURCE_PORT, PointNodeRole};
 
 use super::{address, point_role, single_input_source};
 
@@ -15,7 +15,7 @@ pub(super) enum PointStage {
     Passthrough(uuid::Uuid),
 }
 
-/// Point stream selected by one Sprite endpoint before source recognition.
+/// Point stream selected by a render consumer before source recognition.
 /// Render-stage operations are ordered upstream-to-downstream.
 pub(super) struct PointStreamTrace {
     pub(super) terminal_source: ModulePortAddress,
@@ -35,10 +35,9 @@ impl PointStreamTrace {
 
 pub(super) fn trace_point_stream(
     definition: &ModuleDefinition,
-    renderer_node_id: uuid::Uuid,
+    consumer_input: &ModulePortAddress,
 ) -> Result<Option<PointStreamTrace>, String> {
-    let renderer_input = address(renderer_node_id, PARTICLE_SYSTEM_PORT);
-    let Some(mut source) = single_input_source(definition, &renderer_input) else {
+    let Some(mut source) = single_input_source(definition, consumer_input) else {
         return Ok(None);
     };
     let mut stages = Vec::new();

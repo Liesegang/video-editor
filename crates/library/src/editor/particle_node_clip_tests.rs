@@ -4,6 +4,7 @@ use crate::editor::{
     AuthoringKeyframeTarget, AuthoringKeyframeUpdate, ModuleAutomationOwner,
     ModuleInterfaceCommand, ModuleParameterOwner,
 };
+use crate::model::authoring::ModulePortAddress;
 use crate::model::authoring::{
     AutomationKeyframe, AutomationTrack, MediaTime, ProjectDocument,
     PublishedParameterAutomationCapability, SourceRef,

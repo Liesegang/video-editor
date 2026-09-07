@@ -11,6 +11,11 @@ pub(crate) struct PointInvocationStats {
     pub checkpoint_steps: Vec<u64>,
     pub field_generation: u64,
     pub field_bytes: u64,
+    pub connection_generation: u64,
+    pub connection_bytes: u64,
+    pub candidate_tests: u32,
+    pub max_point_candidates: u32,
+    pub compact_edge_count: u32,
     pub allocated_bytes: u64,
 }
 
@@ -41,6 +46,23 @@ impl SceneRuntime {
             }),
             field_generation: invocation.field_generation,
             field_bytes: invocation.field_bytes(),
+            connection_generation: invocation.connection_generation,
+            connection_bytes: invocation
+                .connections
+                .as_ref()
+                .map_or(0, proximity::PointConnectionBuffers::byte_len),
+            candidate_tests: invocation
+                .connections
+                .as_ref()
+                .map_or(0, |buffers| buffers.candidate_tests.get()),
+            max_point_candidates: invocation
+                .connections
+                .as_ref()
+                .map_or(0, |buffers| buffers.max_point_candidates.get()),
+            compact_edge_count: invocation
+                .connections
+                .as_ref()
+                .map_or(0, |buffers| buffers.compact_edge_count.get()),
             allocated_bytes: invocation.allocated_bytes(),
         })
     }

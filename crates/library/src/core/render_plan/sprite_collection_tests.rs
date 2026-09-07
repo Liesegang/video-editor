@@ -8,7 +8,7 @@ use crate::model::asset::{Asset, AssetKind};
 use crate::model::authoring::{
     AutomationKeyframe, AutomationTrack, MediaTime, PublishedParameterId, SourceRef,
 };
-use crate::model::frame::point::{PointSceneFrame, SpriteSelection};
+use crate::model::frame::point::{PointRenderStyle, PointSceneFrame, SpriteSelection};
 use crate::model::node::{DataContent, Node, ParticleNodeRole};
 use crate::model::project::connection::DATA_VALUE_OUTPUT_PORT;
 use crate::model::property::{ImageCollectionValue, Property, PropertyValue};
@@ -66,8 +66,11 @@ fn default_sprite_is_a_disc_and_collection_overrides_are_instance_local_render_o
     let mut fixture = particle_fixture(2);
     let collection = images(&mut fixture);
     let before = sample(&fixture, 15);
-    assert!(before.iter().all(|scene| scene.sprites.assets.is_empty()
-        && scene.sprite_selection == SpriteSelection::Random));
+    assert!(
+        before
+            .iter()
+            .all(|scene| scene.render_style == PointRenderStyle::default())
+    );
     let collection_parameter = parameter(&fixture, "sprites");
     let mode_parameter = parameter(&fixture, "selection_mode");
     let selection_parameter = parameter(&fixture, "selection");
@@ -102,14 +105,15 @@ fn default_sprite_is_a_disc_and_collection_overrides_are_instance_local_render_o
             "image edits must not alter simulation commands"
         );
         if scene.invocation.module_instance_id == fixture.instance_ids[0] {
-            assert_eq!(scene.sprites, collection);
             assert_eq!(
-                scene.sprite_selection,
-                SpriteSelection::Value(OrderedFloat(0.75))
+                scene.render_style,
+                PointRenderStyle::Sprites {
+                    images: collection.clone(),
+                    selection: SpriteSelection::Value(OrderedFloat(0.75))
+                }
             );
         } else {
-            assert!(scene.sprites.assets.is_empty());
-            assert_eq!(scene.sprite_selection, SpriteSelection::Random);
+            assert_eq!(scene.render_style, PointRenderStyle::default());
         }
     }
     let decoded = serde_json::from_str(&serde_json::to_string(&fixture.project).unwrap()).unwrap();
@@ -152,8 +156,11 @@ fn image_choice_uses_existing_published_timeline_keyframes() {
     );
     for (frame, expected) in [(0, 0.0), (15, 0.5), (30, 1.0)] {
         assert_eq!(
-            sample(&fixture, frame)[0].sprite_selection,
-            SpriteSelection::Value(OrderedFloat(expected))
+            sample(&fixture, frame)[0].render_style,
+            PointRenderStyle::Sprites {
+                images: ImageCollectionValue::default(),
+                selection: SpriteSelection::Value(OrderedFloat(expected))
+            }
         );
     }
 }
@@ -182,7 +189,7 @@ fn random_selection_does_not_evaluate_the_unused_selection_property() {
 
     let scenes = sample(&fixture, 15);
     assert_eq!(scenes.len(), 1);
-    assert_eq!(scenes[0].sprite_selection, SpriteSelection::Random);
+    assert_eq!(scenes[0].render_style, PointRenderStyle::default());
 }
 
 #[test]
@@ -228,7 +235,7 @@ fn collection_data_node_and_per_point_random_feed_the_shared_sprite_renderer() {
     ));
     definition.graph.nodes.insert(data.id, data);
     let scenes = sample(&fixture, 15);
-    assert_eq!(scenes[0].sprites, collection);
+    assert_eq!(scenes[0].render_style.sprite_images(), Some(&collection));
     let program = scenes[0].point_program.as_ref().unwrap();
     let register = program
         .sprite_selection_register

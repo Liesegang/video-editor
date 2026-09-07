@@ -1,6 +1,6 @@
 use super::point_support::test_random;
 use super::*;
-use crate::model::frame::point::{PointGridParameters, SpriteSelection};
+use crate::model::frame::point::{PointGridParameters, PointRenderStyle, SpriteSelection};
 use crate::model::point::{
     NumericBinaryOperation, PointAttributeSchema, PointInstruction, PointRenderProgram,
 };
@@ -64,10 +64,27 @@ fn grid_scene(count: u32) -> PointSceneFrame {
             seed: 29,
         }),
         color: Color::white(),
-        sprites: ImageCollectionValue::default(),
-        sprite_selection: SpriteSelection::Random,
+        render_style: PointRenderStyle::default(),
         point_program: None,
     }
+}
+
+fn set_sprites(
+    scene: &mut PointSceneFrame,
+    images: ImageCollectionValue,
+    selection: SpriteSelection,
+) {
+    scene.render_style = PointRenderStyle::Sprites { images, selection };
+}
+
+fn set_sprite_selection(scene: &mut PointSceneFrame, selection: SpriteSelection) {
+    let PointRenderStyle::Sprites {
+        selection: current, ..
+    } = &mut scene.render_style
+    else {
+        panic!("Sprite test fixture must retain Sprite render style")
+    };
+    *current = selection;
 }
 
 fn selector_program(invalid: bool) -> PointRenderProgram {
@@ -159,19 +176,25 @@ fn gpu_sprite_collection_uses_stable_random_or_value_field_per_point() {
         [0.0, 0.0, 1.0, 1.0],
     ];
     let mut scene = grid_scene(5);
-    scene.sprites = ImageCollectionValue::new((10..13).map(Uuid::from_u128).collect()).unwrap();
+    set_sprites(
+        &mut scene,
+        ImageCollectionValue::new((10..13).map(Uuid::from_u128).collect()).unwrap(),
+        SpriteSelection::Random,
+    );
     scene.point_program = Some(selector_program(false));
     let mut renderer = renderer(config);
 
     let random = render(&mut renderer, &scene, &sprites);
     let seed = crate::rendering::scene_runtime::invocation_seed(&scene);
-    let PointSceneSource::Grid(grid) = &scene.source else {
-        panic!("expected Grid Sprite fixture")
+    let serials = match &scene.source {
+        PointSceneSource::Grid(grid) => (0..5)
+            .map(|x| grid.point_serial([x, 0, 0]).unwrap())
+            .collect::<Vec<_>>(),
+        PointSceneSource::Particle { .. } => panic!("expected Grid Sprite fixture"),
     };
-    for x in 0..5 {
-        let serial = grid.point_serial([x, 0, 0]).unwrap();
+    for (x, serial) in serials.iter().copied().enumerate() {
         let expected = colors[expected_index(test_random(seed, serial, 2), sprites.len())];
-        assert_pixel_near(pixel(&random, 16 + x * 32, HEIGHT / 2), expected);
+        assert_pixel_near(pixel(&random, 16 + x as u32 * 32, HEIGHT / 2), expected);
     }
     let pipeline_count = renderer
         .scene_runtime
@@ -179,15 +202,14 @@ fn gpu_sprite_collection_uses_stable_random_or_value_field_per_point() {
         .unwrap()
         .compiled_point_pipeline_count();
 
-    scene.sprite_selection = SpriteSelection::Value(0.0.into());
+    set_sprite_selection(&mut scene, SpriteSelection::Value(0.0.into()));
     let selected = render(&mut renderer, &scene, &sprites);
     let mut differs_from_random = false;
-    for x in 0..5 {
-        let serial = grid.point_serial([x, 0, 0]).unwrap();
+    for (x, serial) in serials.into_iter().enumerate() {
         let expected = colors[expected_index(test_random(seed, serial, 0), sprites.len())];
-        let actual = pixel(&selected, 16 + x * 32, HEIGHT / 2);
+        let actual = pixel(&selected, 16 + x as u32 * 32, HEIGHT / 2);
         assert_pixel_near(actual, expected);
-        differs_from_random |= actual != pixel(&random, 16 + x * 32, HEIGHT / 2);
+        differs_from_random |= actual != pixel(&random, 16 + x as u32 * 32, HEIGHT / 2);
     }
     assert!(differs_from_random);
     assert_eq!(
@@ -206,13 +228,17 @@ fn gpu_random_ignores_invalid_selector_branch_but_value_fails_transparent() {
     let config = "point-sprite-invalid-selector";
     let sprites = [sprite(config, 2, 2, [0.25, 0.5, 1.0, 1.0])];
     let mut scene = grid_scene(1);
-    scene.sprites = ImageCollectionValue::new(vec![Uuid::from_u128(20)]).unwrap();
+    set_sprites(
+        &mut scene,
+        ImageCollectionValue::new(vec![Uuid::from_u128(20)]).unwrap(),
+        SpriteSelection::Random,
+    );
     scene.point_program = Some(selector_program(true));
     let mut renderer = renderer(config);
 
     let random = render(&mut renderer, &scene, &sprites);
     assert!(pixel(&random, WIDTH / 2, HEIGHT / 2)[3] > 0.99);
-    scene.sprite_selection = SpriteSelection::Value(0.5.into());
+    set_sprite_selection(&mut scene, SpriteSelection::Value(0.5.into()));
     let value = render(&mut renderer, &scene, &sprites);
     assert!(value.pixels().pixels().iter().all(|pixel| pixel[3] == 0.0));
 }
@@ -277,8 +303,11 @@ fn gpu_sprite_atlas_preserves_aspect_hdr_and_pixel_unpack_state() {
         .reset(None);
 
     let mut scene = grid_scene(1);
-    scene.sprites = ImageCollectionValue::new(vec![Uuid::from_u128(30)]).unwrap();
-    scene.sprite_selection = SpriteSelection::Value(0.0.into());
+    set_sprites(
+        &mut scene,
+        ImageCollectionValue::new(vec![Uuid::from_u128(30)]).unwrap(),
+        SpriteSelection::Value(0.0.into()),
+    );
     scene.point_program = Some(PointRenderProgram {
         schema: PointAttributeSchema::new(Vec::new()).unwrap(),
         instructions: vec![PointInstruction::Constant {
@@ -371,9 +400,11 @@ fn gpu_sprite_content_and_selector_changes_preserve_particle_history() {
     let green = sprite(config, 1, 1, [0.0, 1.0, 0.0, 1.0]);
     let blue = sprite(config, 1, 1, [0.0, 0.0, 1.0, 1.0]);
     let mut scene = particle_scene(240);
-    scene.sprites =
-        ImageCollectionValue::new(vec![Uuid::from_u128(40), Uuid::from_u128(41)]).unwrap();
-    scene.sprite_selection = SpriteSelection::Value(0.0.into());
+    set_sprites(
+        &mut scene,
+        ImageCollectionValue::new(vec![Uuid::from_u128(40), Uuid::from_u128(41)]).unwrap(),
+        SpriteSelection::Value(0.0.into()),
+    );
     let mut renderer = SkiaRenderer::new(
         scene.logical_width,
         scene.logical_height,
@@ -394,7 +425,7 @@ fn gpu_sprite_content_and_selector_changes_preserve_particle_history() {
         .unwrap()
         .invocation_stats(&scene.invocation)
         .unwrap();
-    scene.sprite_selection = SpriteSelection::Value(1.0.into());
+    set_sprite_selection(&mut scene, SpriteSelection::Value(1.0.into()));
     let selected = render(&mut renderer, &scene, &[red.clone(), green]);
     assert_ne!(selected.pixels().pixels(), first.pixels().pixels());
     assert_eq!(
@@ -448,9 +479,11 @@ fn gpu_sprite_atlas_keeps_top_down_orientation_and_extruded_edges() {
         panic!("expected Grid Sprite fixture")
     };
     grid.size = 40.0.into();
-    scene.sprites =
-        ImageCollectionValue::new(vec![Uuid::from_u128(50), Uuid::from_u128(51)]).unwrap();
-    scene.sprite_selection = SpriteSelection::Value(0.0.into());
+    set_sprites(
+        &mut scene,
+        ImageCollectionValue::new(vec![Uuid::from_u128(50), Uuid::from_u128(51)]).unwrap(),
+        SpriteSelection::Value(0.0.into()),
+    );
     let mut renderer = renderer(config);
     let image = render(&mut renderer, &scene, &sprites);
     let center = (WIDTH / 2, HEIGHT / 2);

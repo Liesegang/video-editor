@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use egui::{Sense, UiBuilder, Vec2};
 use egui_phosphor::regular as icons;
-use library::editor::{AuthoringWaveformService, TimelineEditorService};
+use library::editor::{AuthoringWaveformService, PlexusNodeClipFactory, TimelineEditorService};
 use library::model::authoring::{
     AuthoringProject, MediaTime, ModuleDefinition, RationalRate, TimelineId,
 };
@@ -273,6 +273,24 @@ fn creation_menu(
         create_node_clip_template(project, state, service);
         ui.close();
     }
+    let plexus = ui.button(format!(
+        "{} New Plexus Network Template",
+        icons::SHARE_NETWORK
+    ));
+    crate::qa::register_component_with_metadata(
+        "assets.create.plexus_network_template",
+        "asset_creation_action",
+        crate::qa::global_response_rect(ui.ctx(), &plexus),
+        plexus.enabled(),
+        Some(serde_json::json!({
+            "action": "create_plexus_network_template",
+            "definition_sharing": "reusable_template",
+        })),
+    );
+    if plexus.clicked() {
+        create_plexus_network_template(project, state, service);
+        ui.close();
+    }
 }
 
 fn create_composition(
@@ -342,6 +360,34 @@ fn create_node_clip_template(
     let definition_id = definition.id;
     match service.add_module_definition(definition) {
         Ok(_) => {
+            state
+                .selection
+                .replace(AuthoringSelection::ModuleDefinition(definition_id));
+            state.status = format!("Created {name} template");
+        }
+        Err(error) => state.error = Some(error.to_string()),
+    }
+}
+
+fn create_plexus_network_template(
+    project: &AuthoringProject,
+    state: &mut AuthoringUiState,
+    service: &TimelineEditorService,
+) {
+    let name = unique_name(
+        "Plexus Network",
+        project
+            .module_definitions
+            .values()
+            .map(|definition| definition.name.as_str()),
+    );
+    match PlexusNodeClipFactory::create(name.clone()).and_then(|plexus| {
+        let definition_id = plexus.definition.id;
+        service
+            .add_module_definition(plexus.definition)
+            .map(|_| definition_id)
+    }) {
+        Ok(definition_id) => {
             state
                 .selection
                 .replace(AuthoringSelection::ModuleDefinition(definition_id));

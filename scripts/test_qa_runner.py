@@ -274,6 +274,7 @@ class QaRunnerTests(unittest.TestCase):
             "point-conditional-fields",
             "point-position",
             "point-size",
+            "plexus-network",
             "inspector-asset-preview",
             "timeline-edit",
             "timeline-transition",
@@ -318,6 +319,8 @@ class QaRunnerTests(unittest.TestCase):
         self.assertTrue(appearance.expects_exit)
         point_size = next(suite for suite in full if suite.name == "point-size")
         self.assertTrue(point_size.project_file and point_size.expects_exit)
+        plexus = next(suite for suite in full if suite.name == "plexus-network")
+        self.assertTrue(plexus.project_file and plexus.expects_exit)
         sprite_collection = next(
             suite for suite in full if suite.name == "particle-sprite-collection"
         )

@@ -35,6 +35,10 @@ mod particle_tests;
 #[cfg(test)]
 mod point_conditional_tests;
 #[cfg(test)]
+mod point_connection_composition_tests;
+#[cfg(test)]
+mod point_connection_tests;
+#[cfg(test)]
 mod point_numeric_tests;
 #[cfg(test)]
 mod point_position_tests;

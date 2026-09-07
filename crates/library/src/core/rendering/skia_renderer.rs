@@ -553,8 +553,12 @@ impl Renderer for SkiaRenderer {
         self.rasterize_point_output(request)
     }
 
-    fn preflight_point_backend(&mut self, target_sizes: &[(u32, u32)]) -> Result<(), LibraryError> {
-        self.preflight_point_output(target_sizes)
+    fn preflight_point_backend(
+        &mut self,
+        target_sizes: &[(u32, u32)],
+        requires_connections: bool,
+    ) -> Result<(), LibraryError> {
+        self.preflight_point_output(target_sizes, requires_connections)
     }
 
     fn preflight_point_sprites(
