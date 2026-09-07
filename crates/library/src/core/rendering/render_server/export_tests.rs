@@ -30,6 +30,8 @@ use uuid::Uuid;
 
 #[path = "export_capability_tests.rs"]
 mod capability_tests;
+#[path = "export_particle_collision_tests.rs"]
+mod particle_collision_tests;
 #[path = "export_point_tests.rs"]
 mod point_tests;
 

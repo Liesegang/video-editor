@@ -13,6 +13,7 @@ pub(crate) struct PointFieldReadback {
     /// Authoritative simulated position before render-stage fields. Grid has
     /// no mutable producer buffer, so its source position is `None` here.
     pub source_position: Option<[f32; 3]>,
+    pub source_velocity: Option<[f32; 3]>,
     /// Simulated birth size, before render-stage size fields. Grid has no
     /// mutable source buffer to read back.
     pub source_size: Option<f32>,
@@ -79,25 +80,28 @@ impl SceneRuntime {
         gl_operation_result(&self.gl, "Point field test readback")?;
         let mut result = Vec::new();
         for slot in 0..invocation.capacity as usize {
-            let (age, lifetime, source_position, source_size) = if let Some(particles) = &particles
-            {
-                let particle = slot * PARTICLE_STRIDE_BYTES as usize;
-                let age = read_f32(particles, particle + 12);
-                let lifetime = read_f32(particles, particle + 28);
-                if age < 0.0 || age >= lifetime {
-                    continue;
-                }
-                (
-                    Some(age),
-                    Some(lifetime),
-                    Some(std::array::from_fn(|component| {
-                        read_f32(particles, particle + component * 4)
-                    })),
-                    Some(read_f32(particles, particle + 44)),
-                )
-            } else {
-                (None, None, None, None)
-            };
+            let (age, lifetime, source_position, source_velocity, source_size) =
+                if let Some(particles) = &particles {
+                    let particle = slot * PARTICLE_STRIDE_BYTES as usize;
+                    let age = read_f32(particles, particle + 12);
+                    let lifetime = read_f32(particles, particle + 28);
+                    if age < 0.0 || age >= lifetime {
+                        continue;
+                    }
+                    (
+                        Some(age),
+                        Some(lifetime),
+                        Some(std::array::from_fn(|component| {
+                            read_f32(particles, particle + component * 4)
+                        })),
+                        Some(std::array::from_fn(|component| {
+                            read_f32(particles, particle + 16 + component * 4)
+                        })),
+                        Some(read_f32(particles, particle + 44)),
+                    )
+                } else {
+                    (None, None, None, None, None)
+                };
             let serial_offset = fields.layout.serial_offset_bytes as usize
                 + slot * fields.layout.serial_stride_bytes as usize;
             let serial = read_u32(&columns, serial_offset);
@@ -144,6 +148,7 @@ impl SceneRuntime {
                 age,
                 lifetime,
                 source_position,
+                source_velocity,
                 source_size,
                 attributes,
                 attribute_words,

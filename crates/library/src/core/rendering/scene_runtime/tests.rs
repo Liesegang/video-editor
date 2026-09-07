@@ -35,6 +35,7 @@ fn parameters() -> ParticleSceneParameters {
                 coefficient: OrderedFloat(0.15),
             },
         ],
+        collisions: Vec::new(),
         size_min: OrderedFloat(6.0),
         size_max: OrderedFloat(18.0),
     }

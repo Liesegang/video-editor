@@ -260,6 +260,7 @@ class QaRunnerTests(unittest.TestCase):
             "settings-dialog",
             "assets-timeline",
             "particle-node-clip",
+            "particle-collision",
             "color-ramp",
             "point-attributes",
             "point-grid",

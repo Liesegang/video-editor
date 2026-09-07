@@ -160,7 +160,9 @@ pub struct CompiledParticleSource {
     pub initialize_node_id: Option<uuid::Uuid>,
     /// Authored force stages in their exact upstream-to-downstream execution
     /// order. Repeated force kinds remain distinct executable stages.
-    pub(crate) force_nodes: Vec<CompiledParticleForce>,
+    pub(crate) force_nodes: Vec<CompiledParticleModifier>,
+    /// Authored collision stages in exact upstream-to-downstream order.
+    pub(crate) collision_nodes: Vec<CompiledParticleModifier>,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -272,7 +274,7 @@ pub(crate) enum CompiledPointInstruction {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) struct CompiledParticleForce {
+pub(crate) struct CompiledParticleModifier {
     pub node_id: uuid::Uuid,
     pub role: crate::model::node::ParticleNodeRole,
 }

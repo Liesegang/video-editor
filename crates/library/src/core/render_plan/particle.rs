@@ -3,10 +3,10 @@
 use std::collections::HashSet;
 
 use crate::model::authoring::{ModuleDefinition, ModulePortAddress};
-use crate::model::frame::particle::PARTICLE_MAX_FORCES;
+use crate::model::frame::particle::{PARTICLE_MAX_COLLIDERS, PARTICLE_MAX_FORCES};
 use crate::model::node::{Node, NodeContent, PARTICLE_SYSTEM_PORT, ParticleNodeRole};
 
-use super::{CompiledParticleForce, CompiledParticleSource};
+use super::{CompiledParticleModifier, CompiledParticleSource};
 
 pub(super) struct ParticleSourceCompilation {
     pub source: CompiledParticleSource,
@@ -18,7 +18,8 @@ struct ParticleStages {
     emitter: Option<uuid::Uuid>,
     shape_location: Option<uuid::Uuid>,
     initialize: Option<uuid::Uuid>,
-    forces: Vec<CompiledParticleForce>,
+    forces: Vec<CompiledParticleModifier>,
+    collisions: Vec<CompiledParticleModifier>,
 }
 
 /// Compile the implemented typed stages while allowing omitted modifiers and
@@ -36,6 +37,7 @@ pub(super) fn compile_particle_source(
     let mut downstream_node_id = first_source.node_id;
     let mut visited = HashSet::new();
     let mut force_count = 0_usize;
+    let mut collision_count = 0_usize;
     let mut first_source = Some(first_source.clone());
     let mut particle_lineage = HashSet::new();
     loop {
@@ -60,10 +62,10 @@ pub(super) fn compile_particle_source(
             port: PARTICLE_SYSTEM_PORT.to_string(),
         });
         let rank = role.execution_rank();
-        let repeated_force = role.is_force() && rank == downstream_rank;
+        let repeated_modifier = (role.is_force() || role.is_collision()) && rank == downstream_rank;
         if role == ParticleNodeRole::SpriteRenderer
             || rank > downstream_rank
-            || (rank == downstream_rank && !repeated_force)
+            || (rank == downstream_rank && !repeated_modifier)
         {
             return Ok(None);
         }
@@ -74,7 +76,21 @@ pub(super) fn compile_particle_source(
                 return Ok(None);
             }
             if !node.bypassed {
-                stages.forces.push(CompiledParticleForce {
+                stages.forces.push(CompiledParticleModifier {
+                    node_id: node.id,
+                    role,
+                });
+            }
+            downstream_node_id = node.id;
+            continue;
+        }
+        if role.is_collision() {
+            collision_count += 1;
+            if collision_count > PARTICLE_MAX_COLLIDERS {
+                return Ok(None);
+            }
+            if !node.bypassed {
+                stages.collisions.push(CompiledParticleModifier {
                     node_id: node.id,
                     role,
                 });
@@ -90,7 +106,8 @@ pub(super) fn compile_particle_source(
             | ParticleNodeRole::Drag
             | ParticleNodeRole::Turbulence
             | ParticleNodeRole::Vortex
-            | ParticleNodeRole::Point => return Ok(None),
+            | ParticleNodeRole::Point
+            | ParticleNodeRole::CollisionPlane => return Ok(None),
             ParticleNodeRole::SpriteRenderer => return Ok(None),
         };
         if slot.is_some() {
@@ -109,6 +126,7 @@ pub(super) fn compile_particle_source(
         downstream_node_id = node.id;
     }
     stages.forces.reverse();
+    stages.collisions.reverse();
     let Some(emitter_node_id) = stages.emitter else {
         return Ok(None);
     };
@@ -118,6 +136,7 @@ pub(super) fn compile_particle_source(
             shape_location_node_id: stages.shape_location,
             initialize_node_id: stages.initialize,
             force_nodes: stages.forces,
+            collision_nodes: stages.collisions,
         },
         lineage: particle_lineage,
     }))
@@ -193,7 +212,7 @@ mod tests {
             crate::core::render_plan::CompiledPointSource::Particle(_)
         ));
         assert_eq!(compiled.point_renderers.len(), 1);
-        assert_eq!(compiled.nodes.len(), 7);
+        assert_eq!(compiled.nodes.len(), 8);
     }
 
     #[test]

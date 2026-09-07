@@ -10,6 +10,7 @@ from qa_node_module_support import (
     connect_nodes,
     create_node_from_menu,
     disconnect_node_connection,
+    ensure_node_editor_authoring_scale,
     enter_exact_numeric,
     node_content_type,
     open_timeline_item_definition,
@@ -18,7 +19,10 @@ from qa_node_module_support import (
     sample_rendered_preview,
     unpublish_node_input_parameter,
 )
-from qa_particle_force_support import create_particle_node_clip
+from qa_particle_force_support import (
+    create_particle_node_clip,
+    particle_factory_terminal_route,
+)
 from qa_support import (
     QaClient,
     QaFailure,
@@ -147,23 +151,6 @@ def _assert_grid_defaults(definition, grid_id):
         raise QaFailure("Point Grid defaults drifted: {!r}".format(actual))
 
 
-def _find_factory_route(definition):
-    drag_id = _unique_catalog_node(definition, "native.particle.drag-force")
-    sprite_id = _unique_catalog_node(definition, "native.particle.sprite-renderer")
-    route = next(
-        (
-            candidate
-            for candidate in definition["graph"]["connections"]
-            if candidate["from"] == {"node_id": drag_id, "port": "particles"}
-            and candidate["to"] == {"node_id": sprite_id, "port": "particles"}
-        ),
-        None,
-    )
-    if route is None:
-        raise QaFailure("Particle factory has no exact Drag-to-Sprite route")
-    return drag_id, sprite_id, route
-
-
 def _published_parameter(definition, node_id, port_key):
     matches = [
         parameter
@@ -209,7 +196,7 @@ def run_suite(client):
     )
     if opened_id != definition_id:
         raise QaFailure("Node Editor opened a different Particle Definition")
-    drag_id, sprite_id, direct_route = _find_factory_route(before)
+    source_id, sprite_id, direct_route = particle_factory_terminal_route(before)
     color_parameter = _published_parameter(before, sprite_id, "color")
     output_ids = [
         node_id
@@ -220,21 +207,12 @@ def run_suite(client):
         raise QaFailure("Particle factory has no unique Module Output")
     output_id = output_ids[0]
 
-    place_created_node(client, drag_id, 0.58)
     disconnect_node_connection(
-        client, "node_clip", direct_route["id"], "direct Drag-to-Sprite route"
+        client, "node_clip", direct_route["id"], "Collision-to-Sprite route"
     )
-    _, canvas_before = client.wait_component_settled("node_editor.canvas")
-    old_scale = float(canvas_before["metadata"]["scale"])
-    client.scroll_component(
-        "node_editor.canvas", 0.0, -100.0, modifiers={"command": True}
-    )
-    _, canvas = client.wait_component_settled("node_editor.canvas")
-    scale = float(canvas["metadata"]["scale"])
-    if scale >= old_scale or not 0.4 <= scale <= 0.75:
-        raise QaFailure("Node Editor did not reach the measured Point authoring overview")
+    ensure_node_editor_authoring_scale(client)
     place_created_node(client, output_id, 0.95, vertical_offset=140.0)
-    place_created_node(client, drag_id, 0.06, vertical_offset=140.0)
+    place_created_node(client, source_id, 0.06, vertical_offset=140.0)
     place_created_node(client, sprite_id, 0.95)
 
     _, grid_id = create_node_from_menu(

@@ -1,4 +1,4 @@
-use library::editor::TimelineEditorService;
+use library::editor::{ParticleNodeClipFactory, TimelineEditorService};
 use library::model::authoring::{MediaTime, ModuleDefinitionSharing, SourceRef, TimelineInterval};
 
 use crate::state::authoring::AuthoringLibraryDrag;
@@ -70,9 +70,30 @@ fn particle_library_drag_uses_the_authoritative_private_module_factory() {
     let instance = &after.module_instances[&invocation.instance_id];
     let definition = &after.module_definitions[&instance.definition_id];
     assert_eq!(definition.sharing, ModuleDefinitionSharing::Private);
-    assert_eq!(definition.graph.nodes.len(), 8);
-    assert_eq!(definition.graph.connections.len(), 7);
-    assert_eq!(definition.interface.parameters.len(), 21);
+    let expected = ParticleNodeClipFactory::create("Particle System").expect("factory");
+    assert_eq!(
+        definition.graph.nodes.len(),
+        expected.definition.graph.nodes.len()
+    );
+    assert_eq!(
+        definition.graph.connections.len(),
+        expected.definition.graph.connections.len()
+    );
+    assert_eq!(
+        definition
+            .interface
+            .parameters
+            .iter()
+            .map(|parameter| &parameter.name)
+            .collect::<Vec<_>>(),
+        expected
+            .definition
+            .interface
+            .parameters
+            .iter()
+            .map(|parameter| &parameter.name)
+            .collect::<Vec<_>>()
+    );
 
     service.undo().expect("undo").expect("one creation edit");
     assert_eq!(

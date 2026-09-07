@@ -50,6 +50,7 @@ pub(super) fn particle_scene(target_step: u64) -> PointSceneFrame {
                         coefficient: OrderedFloat(0.1),
                     },
                 ],
+                collisions: Vec::new(),
                 size_min: OrderedFloat(4.0),
                 size_max: OrderedFloat(10.0),
             },

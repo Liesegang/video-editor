@@ -6,6 +6,7 @@ use glow::HasContext;
 use crate::error::LibraryError;
 use crate::model::point::PointRenderProgram;
 
+use super::collisions::CollisionUniformLocations;
 use super::forces::ForceUniformLocations;
 use super::point_fields::PointFieldPipeline;
 use super::shaders::{particle_compute_source, point_fragment_source, point_vertex_source};
@@ -68,6 +69,7 @@ pub(super) struct ComputeUniforms {
     pub velocity_min: glow::UniformLocation,
     pub velocity_max: glow::UniformLocation,
     pub forces: ForceUniformLocations,
+    pub collisions: CollisionUniformLocations,
     pub size_min: glow::UniformLocation,
     pub size_max: glow::UniformLocation,
 }
@@ -270,6 +272,7 @@ fn create_particle_pipeline(
             velocity_min: required_uniform(gl, compute_program, "uVelocityMin")?,
             velocity_max: required_uniform(gl, compute_program, "uVelocityMax")?,
             forces: ForceUniformLocations::new(gl, compute_program)?,
+            collisions: CollisionUniformLocations::new(gl, compute_program)?,
             size_min: required_uniform(gl, compute_program, "uSizeMin")?,
             size_max: required_uniform(gl, compute_program, "uSizeMax")?,
         })

@@ -1,5 +1,6 @@
 """Exact-route assertions for the shared native Node Editor QA helpers."""
 
+import ast
 import copy
 import pathlib
 import runpy
@@ -11,6 +12,24 @@ import qa_support
 
 
 class NodeSuiteEntrypointTests(unittest.TestCase):
+    def test_all_shared_suite_main_calls_use_the_complete_signature(self):
+        scripts = pathlib.Path(__file__).parent.glob("qa-*-e2e.py")
+        checked = []
+        for script in scripts:
+            tree = ast.parse(script.read_text(encoding="utf-8"), filename=str(script))
+            calls = [
+                node
+                for node in ast.walk(tree)
+                if isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "run_suite_main"
+            ]
+            for call in calls:
+                checked.append(script.name)
+                self.assertEqual(len(call.args), 3, script.name)
+                self.assertEqual(call.keywords, [], script.name)
+        self.assertIn("qa-particle-collision-e2e.py", checked)
+
     def test_point_size_uses_shared_cli_and_propagates_exit_code(self):
         script = pathlib.Path(__file__).with_name("qa-point-size-e2e.py")
         with mock.patch.object(qa_support, "run_suite_main", autospec=True, return_value=37) as main:
@@ -82,7 +101,16 @@ class NodeRouteTests(unittest.TestCase):
 
     def test_header_drag_refuses_another_nodes_body_at_the_origin(self):
         client = mock.Mock()
-        canvas = {"rect_points": {"min_x": 0.0, "min_y": 0.0, "width": 800.0}}
+        canvas = {
+            "rect_points": {
+                "min_x": 0.0,
+                "max_x": 800.0,
+                "min_y": 0.0,
+                "max_y": 300.0,
+                "width": 800.0,
+                "height": 300.0,
+            }
+        }
         header = {"rect_points": {"center_x": 40.0, "center_y": 30.0}}
         snapshot = {
             "components": [{
@@ -92,9 +120,203 @@ class NodeRouteTests(unittest.TestCase):
             }]
         }
         client.wait_component_settled.side_effect = [(snapshot, canvas), (snapshot, header)]
-        with self.assertRaisesRegex(support.QaFailure, "drag origin is occluded"):
+        with (
+            mock.patch.object(support, "_bring_node_header_into_view", return_value=header),
+            self.assertRaisesRegex(support.QaFailure, "drag origin is occluded"),
+        ):
             support.place_created_node(client, "requested", 0.5)
         client.drag.assert_not_called()
+
+    def test_wide_header_target_is_clamped_inside_the_canvas(self):
+        client = mock.Mock()
+        canvas = {
+            "rect_points": {
+                "min_x": 0.0,
+                "max_x": 1000.0,
+                "min_y": 0.0,
+                "max_y": 300.0,
+                "width": 1000.0,
+                "height": 300.0,
+            }
+        }
+        header = {
+            "rect_points": {
+                "center_x": 200.0,
+                "center_y": 50.0,
+                "width": 200.0,
+                "height": 20.0,
+            }
+        }
+        moved = {"rect_points": {"center_x": 896.0}}
+        client.wait_component_settled.side_effect = [
+            ({}, canvas),
+            ({"components": []}, header),
+            ({}, moved),
+        ]
+        with mock.patch.object(
+            support, "_bring_node_header_into_view", return_value=header
+        ):
+            self.assertIs(support.place_created_node(client, "wide", 0.95), moved)
+        client.drag.assert_called_once_with(
+            {"x": 200.0, "y": 50.0},
+            {"x": 896.0, "y": 26.0},
+            steps=10,
+        )
+
+    def test_authoring_scale_zooms_in_without_mutating_project_or_history(self):
+        client = mock.Mock()
+        before = {"project": {"name": "same"}, "history": {"revision": 7}}
+        client.state.return_value = before
+        low = {"metadata": {"scale": 0.35}}
+        ready = {"metadata": {"scale": 0.45}}
+        client.wait_component_settled.side_effect = [({}, low), ({}, ready), ({}, ready)]
+        self.assertIs(support.ensure_node_editor_authoring_scale(client), ready)
+        client.scroll_component.assert_called_once_with(
+            "node_editor.canvas", 0.0, 100.0, modifiers={"command": True}
+        )
+
+    def test_offscreen_header_pan_uses_the_published_canvas_transform(self):
+        client = mock.Mock()
+        header = {
+            "id": "node_editor.node_header:target",
+            "visible": True,
+            "rect_points": {
+                "min_x": 270.0,
+                "max_x": 370.0,
+                "min_y": 50.0,
+                "max_y": 70.0,
+                "width": 100.0,
+                "height": 20.0,
+            },
+        }
+        client.component_snapshot.side_effect = [
+            {"components": []},
+            {"components": [header]},
+        ]
+        canvas = {
+            "metadata": {
+                "scale": 0.5,
+                "translation": {"x": 10.0, "y": 20.0},
+            },
+            "rect_points": {
+                "min_x": 0.0,
+                "max_x": 400.0,
+                "min_y": 0.0,
+                "max_y": 200.0,
+                "center_x": 200.0,
+                "center_y": 100.0,
+                "width": 400.0,
+                "height": 200.0,
+            },
+        }
+        moved_canvas = copy.deepcopy(canvas)
+        moved_canvas["metadata"]["translation"] = {"x": -130.0, "y": -50.0}
+        client.wait_component_settled.side_effect = [({}, canvas), ({}, moved_canvas)]
+        client.state.return_value = {
+            "editor": {"node_editor": {"document": {"kind": "module_definition", "definition_id": "definition"}}},
+            "project": {
+                "module_definitions": {
+                    "definition": {
+                        "graph": {
+                            "nodes": {
+                                "target": {
+                                    "ui_position": [800.0, 200.0],
+                                    "ui_size": [200.0, 100.0],
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+        }
+        self.assertIs(support._bring_node_header_into_view(client, "target"), header)
+        client.drag.assert_called_once_with(
+            {"x": 200.0, "y": 100.0},
+            {"x": 60.0, "y": 30.0},
+            steps=10,
+            button="middle",
+        )
+
+    def test_clipped_header_uses_authored_width_before_becoming_visible(self):
+        client = mock.Mock()
+        clipped = {
+            "id": "node_editor.node_header:target",
+            "visible": True,
+            "rect_points": {
+                "min_x": 350.0,
+                "max_x": 400.0,
+                "min_y": 20.0,
+                "max_y": 40.0,
+                "width": 50.0,
+                "height": 20.0,
+            },
+        }
+        visible = {
+            **clipped,
+            "rect_points": {
+                "min_x": 210.0,
+                "max_x": 310.0,
+                "min_y": 42.0,
+                "max_y": 62.0,
+                "width": 100.0,
+                "height": 20.0,
+            },
+        }
+        canvas = {
+            "metadata": {
+                "scale": 0.5,
+                "translation": {"x": 0.0, "y": 20.0},
+            },
+            "rect_points": {
+                "min_x": 0.0,
+                "max_x": 400.0,
+                "min_y": 0.0,
+                "max_y": 200.0,
+                "center_x": 200.0,
+                "center_y": 100.0,
+                "width": 400.0,
+                "height": 200.0,
+            },
+        }
+        moved_canvas = copy.deepcopy(canvas)
+        moved_canvas["metadata"]["translation"]["x"] = -140.0
+        moved_canvas["metadata"]["translation"]["y"] = 42.0
+        client.wait_component_settled.side_effect = [({}, canvas), ({}, moved_canvas)]
+        client.component_snapshot.side_effect = [
+            {"components": [clipped]},
+            {"components": [visible]},
+        ]
+        client.state.return_value = {
+            "editor": {
+                "node_editor": {
+                    "document": {
+                        "kind": "module_definition",
+                        "definition_id": "definition",
+                    }
+                }
+            },
+            "project": {
+                "module_definitions": {
+                    "definition": {
+                        "graph": {
+                            "nodes": {
+                                "target": {
+                                    "ui_position": [700.0, 0.0],
+                                    "ui_size": [200.0, 100.0],
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+        }
+        self.assertIs(support._bring_node_header_into_view(client, "target"), visible)
+        client.drag.assert_called_once_with(
+            {"x": 200.0, "y": 100.0},
+            {"x": 60.0, "y": 122.0},
+            steps=10,
+            button="middle",
+        )
 
 
 class PreviewSamplingTests(unittest.TestCase):

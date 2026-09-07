@@ -4,7 +4,6 @@ use glow::HasContext;
 use sha2::{Digest, Sha256};
 
 use super::*;
-use crate::model::property::Vec3;
 
 pub(super) fn validate_transform(transform: &Affine2D) -> Result<(), LibraryError> {
     [
@@ -210,21 +209,6 @@ pub(super) fn draw_points(
         gl.memory_barrier(glow::FRAMEBUFFER_BARRIER_BIT | glow::TEXTURE_FETCH_BARRIER_BIT);
     }
     gl_operation_result(gl, "sprite render")
-}
-
-pub(super) fn vec3_f32(value: Vec3, label: &str) -> Result<[f32; 3], LibraryError> {
-    let converted = [
-        value.x.into_inner() as f32,
-        value.y.into_inner() as f32,
-        value.z.into_inner() as f32,
-    ];
-    converted
-        .iter()
-        .all(|component| component.is_finite())
-        .then_some(converted)
-        .ok_or_else(|| {
-            LibraryError::Validation(format!("GPU Point {label} must fit finite GPU floats"))
-        })
 }
 
 pub(super) fn gl_operation_result(gl: &glow::Context, operation: &str) -> Result<(), LibraryError> {

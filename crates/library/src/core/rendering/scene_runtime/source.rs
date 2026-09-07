@@ -1,5 +1,6 @@
 //! Producer-specific access behind one logical render-Point shader contract.
 
+use super::vectors::vec3_f32;
 use glow::HasContext;
 
 use crate::error::LibraryError;
@@ -155,19 +156,6 @@ fn uniform(
 ) -> Option<glow::UniformLocation> {
     // SAFETY: the program is linked and belongs to this current context.
     unsafe { gl.get_uniform_location(program, name) }
-}
-
-fn vec3_f32(value: crate::model::property::Vec3, label: &str) -> Result<[f32; 3], LibraryError> {
-    let value = [
-        value.x.into_inner() as f32,
-        value.y.into_inner() as f32,
-        value.z.into_inner() as f32,
-    ];
-    value
-        .iter()
-        .all(|component| component.is_finite())
-        .then_some(value)
-        .ok_or_else(|| LibraryError::Validation(format!("{label} must fit finite GPU floats")))
 }
 
 pub(super) const RENDER_POINT_GLSL: &str = r#"

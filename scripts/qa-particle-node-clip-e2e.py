@@ -36,6 +36,7 @@ PARTICLE_CATALOG_IDS = {
     "native.particle.gravity-force",
     "native.particle.turbulence",
     "native.particle.drag-force",
+    "native.particle.collision-plane",
     "native.particle.sprite-renderer",
 }
 
@@ -256,8 +257,8 @@ def _assert_open_particle_definition(
     if native_ids != PARTICLE_CATALOG_IDS:
         raise QaFailure("production Node Editor opened the wrong Particle topology")
     output_ids = _module_output_node_ids(opened_definition)
-    if len(nodes) != 8 or len(output_ids) != 1:
-        raise QaFailure("Particle Node Editor omitted its seven Nodes or Output terminal")
+    if len(nodes) != 9 or len(output_ids) != 1:
+        raise QaFailure("Particle Node Editor omitted its eight Nodes or Output terminal")
     for node_id in nodes:
         component = _wait_registered_component(client, "node_editor.node:" + node_id)
         metadata = component.get("metadata") or {}
@@ -413,8 +414,8 @@ def _create_unpublished_emitter_and_assert_locked_rate(
     restored = client.wait_until("one Undo restoring the Particle topology", emitter_undone)
     restored_graph = restored["project"]["module_definitions"][definition_id]["graph"]
     if (
-        len(restored_graph["nodes"]) != 8
-        or len(restored_graph["connections"]) != 7
+        len(restored_graph["nodes"]) != 9
+        or len(restored_graph["connections"]) != 8
         or restored["history"].get("can_redo") is not True
     ):
         raise QaFailure("Particle Emitter creation was not one Undo boundary")

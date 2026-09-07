@@ -181,6 +181,7 @@ fn particle_catalog_advertises_bypass_only_for_type_preserving_modifiers() {
         "native.particle.turbulence",
         "native.particle.vortex-force",
         "native.particle.point-force",
+        "native.particle.collision-plane",
     ] {
         let node = Node::new_catalog_node(catalog_id).expect("implemented Particle modifier");
         assert!(node.supports_bypass(), "{catalog_id}");
@@ -193,6 +194,75 @@ fn particle_catalog_advertises_bypass_only_for_type_preserving_modifiers() {
     for catalog_id in ["native.particle.emitter", "native.particle.sprite-renderer"] {
         let node = Node::new_catalog_node(catalog_id).expect("implemented Particle endpoint");
         assert!(!node.supports_bypass(), "{catalog_id}");
+    }
+}
+
+#[test]
+fn collision_plane_catalog_exposes_the_bounded_simulation_contract() {
+    let descriptor = native_node_descriptor(ParticleNodeRole::CollisionPlane.catalog_id())
+        .expect("Collision Plane descriptor");
+    assert_eq!(
+        descriptor.qa_id(),
+        "node_editor.menu.create.particle_collision_plane"
+    );
+    assert_eq!(
+        descriptor.runtime_status(),
+        NativeNodeRuntimeStatus::Implemented
+    );
+    assert_eq!(ParticleNodeRole::CollisionPlane.execution_rank(), 4);
+    assert!(ParticleNodeRole::CollisionPlane.is_collision());
+    assert!(!ParticleNodeRole::CollisionPlane.is_force());
+    assert_eq!(
+        descriptor
+            .ports()
+            .iter()
+            .filter(|port| port.direction == PortDirection::Input)
+            .map(|port| port.key.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "particles",
+            "active",
+            "plane_point",
+            "plane_normal",
+            "radius",
+            "bounce",
+            "friction",
+        ]
+    );
+    let node = Node::new_catalog_node(descriptor.catalog_id()).expect("Collision Plane node");
+    assert!(node.supports_bypass());
+    assert_eq!(node.bypass_input_for_output("particles"), Some("particles"));
+    for (key, value) in [
+        ("active", PropertyValue::Boolean(true)),
+        (
+            "plane_point",
+            PropertyValue::Vec3(Vec3 {
+                x: OrderedFloat(0.0),
+                y: OrderedFloat(120.0),
+                z: OrderedFloat(0.0),
+            }),
+        ),
+        (
+            "plane_normal",
+            PropertyValue::Vec3(Vec3 {
+                x: OrderedFloat(0.0),
+                y: OrderedFloat(-1.0),
+                z: OrderedFloat(0.0),
+            }),
+        ),
+        ("radius", PropertyValue::Number(OrderedFloat(0.0))),
+        ("bounce", PropertyValue::Number(OrderedFloat(0.5))),
+        ("friction", PropertyValue::Number(OrderedFloat(0.1))),
+    ] {
+        assert_eq!(
+            node.properties().get(key).unwrap().get_static_value(),
+            Some(&value),
+            "{key}"
+        );
+        assert!(matches!(
+            descriptor.input_automation_capability(key),
+            crate::model::authoring::PublishedParameterAutomationCapability::ConstantOnly { .. }
+        ));
     }
 }
 

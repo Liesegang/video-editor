@@ -18,6 +18,10 @@ pub(super) fn particle_compute_source() -> String {
         )
         .replace("// PARTICLE_RANDOM_FUNCTIONS", PARTICLE_RANDOM_FUNCTIONS)
         .replace("// PARTICLE_FORCE_FUNCTIONS", super::forces::FORCE_GLSL)
+        .replace(
+            "// PARTICLE_COLLISION_FUNCTIONS",
+            &super::collisions::collision_source(),
+        )
 }
 
 pub(super) const PARTICLE_STRUCT_GLSL: &str = r#"
@@ -109,6 +113,7 @@ vec3 emitter_position(uint serial) {
 }
 
 // PARTICLE_FORCE_FUNCTIONS
+// PARTICLE_COLLISION_FUNCTIONS
 
 void spawn(inout Particle particle, uint serial) {
     vec3 random_velocity = vec3(
@@ -163,13 +168,22 @@ void main() {
 
         if (emitted) {
             spawn(particle, serial);
+            if (uCollisionCount > 0 && !project_particle_contacts(
+                particle.position_age.xyz, particle.velocity_lifetime.xyz)) {
+                particle.position_age.w = -1.0;
+            }
         } else if (particle.position_age.w >= 0.0) {
             particle.position_age.w += STEP_SECONDS;
             if (particle.position_age.w >= particle.velocity_lifetime.w) {
                 particle.position_age.w = -1.0;
             } else {
                 apply_forces(particle.position_age.xyz, particle.velocity_lifetime.xyz, step);
-                particle.position_age.xyz += particle.velocity_lifetime.xyz * STEP_SECONDS;
+                if (uCollisionCount == 0) {
+                    particle.position_age.xyz += particle.velocity_lifetime.xyz * STEP_SECONDS;
+                } else if (!advance_particle_contacts(
+                    particle.position_age.xyz, particle.velocity_lifetime.xyz, STEP_SECONDS)) {
+                    particle.position_age.w = -1.0;
+                }
             }
         }
     }

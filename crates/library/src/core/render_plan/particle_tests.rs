@@ -489,23 +489,19 @@ fn implemented_particle_modifiers_are_optional_in_canonical_order() {
     let mut fixture = particle_fixture(1);
     let (renderer_id, _) = particle_renderer_and_output(&fixture);
     let emitter_id = particle_node_id(&fixture, "native.particle.emitter");
-    let shape_location_id = particle_node_id(&fixture, "native.particle.shape-location");
     let initialize_id = particle_node_id(&fixture, "native.particle.initialize");
     let gravity_id = particle_node_id(&fixture, "native.particle.gravity-force");
-    let drag_id = particle_node_id(&fixture, "native.particle.drag-force");
     let definition = fixture
         .project
         .module_definitions
         .get_mut(&fixture.definition_id)
         .unwrap();
     definition.graph.connections.retain(|connection| {
-        connection.from.node_id != drag_id
-            && connection.to.node_id != drag_id
-            && connection.from.node_id != shape_location_id
-            && connection.to.node_id != shape_location_id
+        connection.from.port != "particles" && connection.to.port != "particles"
     });
     definition.graph.connections.extend([
         connection(emitter_id, "particles", initialize_id, "particles", 0),
+        connection(initialize_id, "particles", gravity_id, "particles", 0),
         connection(gravity_id, "particles", renderer_id, "particles", 0),
     ]);
     definition.topology_revision += 1;

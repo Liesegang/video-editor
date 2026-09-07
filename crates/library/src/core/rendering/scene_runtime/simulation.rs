@@ -88,6 +88,7 @@ pub(super) fn simulate_particles(
     let velocity_min = vec3_f32(request.parameters.velocity_min, "minimum velocity")?;
     let velocity_max = vec3_f32(request.parameters.velocity_max, "maximum velocity")?;
     let force_uniforms = forces::ForceUniformData::new(&request.parameters.forces)?;
+    let collision_uniforms = collisions::CollisionUniformData::new(&request.parameters.collisions)?;
     let emitter_position = vec3_f32(request.parameters.emitter_position, "emitter position")?;
     let emitter_size = vec3_f32(request.parameters.emitter_size, "emitter size")?;
     let emitter_shape = match request.parameters.emitter_shape {
@@ -148,6 +149,7 @@ pub(super) fn simulate_particles(
             velocity_max[2],
         );
         force_uniforms.upload(gl, &pipeline.compute.forces);
+        collision_uniforms.upload(gl, &pipeline.compute.collisions);
         gl.uniform_1_f32(
             Some(&pipeline.compute.size_min),
             request.parameters.size_min.into_inner(),

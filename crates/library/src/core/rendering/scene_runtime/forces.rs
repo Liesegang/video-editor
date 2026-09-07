@@ -9,6 +9,7 @@ use crate::model::frame::particle::{PARTICLE_MAX_FORCES, ParticleForce};
 
 use super::gl_backend::required_uniform;
 use super::vec3_f32;
+use super::vectors::normalized_direction;
 
 #[derive(Clone)]
 pub(super) struct ForceUniformLocations {
@@ -84,7 +85,7 @@ impl ForceUniformData {
                     center,
                     strength,
                 } => {
-                    let [x, y, z] = normalized_axis(*axis)?;
+                    let [x, y, z] = normalized_direction(*axis, "Particle vortex axis")?;
                     let [cx, cy, cz] = vec3_f32(*center, "vortex center")?;
                     (3, [x, y, z, strength.into_inner()], [cx, cy, cz, 0.0], 0)
                 }
@@ -123,29 +124,6 @@ impl ForceUniformData {
             gl.uniform_4_f32_slice(Some(&locations.second), &self.second);
         }
     }
-}
-
-fn normalized_axis(axis: crate::model::property::Vec3) -> Result<[f32; 3], LibraryError> {
-    let components = [
-        axis.x.into_inner(),
-        axis.y.into_inner(),
-        axis.z.into_inner(),
-    ];
-    let scale = components
-        .iter()
-        .copied()
-        .map(f64::abs)
-        .fold(0.0_f64, f64::max);
-    if !scale.is_finite() || scale == 0.0 || components.iter().any(|value| !value.is_finite()) {
-        return Err(LibraryError::Validation(
-            "Particle vortex axis must be finite and non-zero".into(),
-        ));
-    }
-    // Rescale before squaring or converting to f32, so tiny but valid authored
-    // direction vectors cannot underflow into GLSL normalize(vec3(0)).
-    let scaled = components.map(|value| value / scale);
-    let length = scaled.iter().map(|value| value * value).sum::<f64>().sqrt();
-    Ok(scaled.map(|value| (value / length) as f32))
 }
 
 // Analytic derivatives of smooth value noise provide a curl field without
@@ -254,13 +232,16 @@ mod tests {
             y: OrderedFloat(0.0),
             z: OrderedFloat(0.0),
         };
-        assert_eq!(normalized_axis(axis).unwrap(), [1.0, 0.0, 0.0]);
+        assert_eq!(
+            normalized_direction(axis, "Particle vortex axis").unwrap(),
+            [1.0, 0.0, 0.0]
+        );
         let zero = crate::model::property::Vec3 {
             x: OrderedFloat(0.0),
             y: OrderedFloat(0.0),
             z: OrderedFloat(0.0),
         };
-        assert!(normalized_axis(zero).is_err());
+        assert!(normalized_direction(zero, "Particle vortex axis").is_err());
     }
 
     #[test]

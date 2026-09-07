@@ -8,6 +8,10 @@ use crate::model::authoring::{MediaTime, RationalRate};
 use crate::model::property::Vec3;
 use serde::{Deserialize, Serialize};
 
+mod collision;
+use collision::PARTICLE_COLLISION_WORK_UNITS_PER_STAGE;
+pub use collision::{PARTICLE_MAX_COLLIDERS, PARTICLE_MAX_COLLISION_CONTACTS, ParticleCollider};
+
 pub const PARTICLE_FIXED_STEP_HZ: i64 = 120;
 pub const PARTICLE_MAX_CAPACITY: u32 = 100_000;
 pub const PARTICLE_MAX_REPLAY_STEPS: u64 = 14_400;
@@ -223,20 +227,26 @@ pub(crate) fn validate_particle_cold_replay_budget(
 
 /// Conservatively estimates fixed-step work without charging every allocated
 /// slot for force evaluation. The base simulation visits `capacity` slots;
-/// forces run only for the bounded number of particles that emission and
+/// modifiers run only for the bounded number of particles that emission and
 /// lifetime can keep active. Turbulence charges its actual 3 gradients x 8
-/// lattice corners per octave, while simple forces charge one unit each.
-fn validate_particle_force_replay_budget(
+/// lattice corners per octave, simple forces charge one unit each, and each
+/// collision charges the complete bounded contact kernel.
+fn validate_particle_modifier_replay_budget(
     capacity: u32,
     emission_rate: f32,
     lifetime_seconds: f32,
     forces: &[ParticleForce],
+    collisions: &[ParticleCollider],
 ) -> Result<(), String> {
     let lifetime_steps = particle_lifetime_steps(f64::from(lifetime_seconds));
     let fixed_step_seconds = 1.0 / PARTICLE_FIXED_STEP_HZ as f64;
     let emitted_during_lifetime =
         (f64::from(emission_rate) * (f64::from(lifetime_seconds) + fixed_step_seconds)).ceil();
-    let active_bound = u64::from(capacity).min(emitted_during_lifetime as u64 + 1);
+    let active_bound = if emission_rate == 0.0 {
+        0
+    } else {
+        u64::from(capacity).min(emitted_during_lifetime as u64 + 1)
+    };
     let force_cost = forces.iter().fold(0_u64, |cost, force| {
         cost.saturating_add(match force {
             ParticleForce::Turbulence {
@@ -253,10 +263,13 @@ fn validate_particle_force_replay_budget(
         })
     });
     let base_work = u64::from(capacity).saturating_mul(lifetime_steps);
-    let force_work = active_bound
+    let collision_cost =
+        (collisions.len() as u64).saturating_mul(PARTICLE_COLLISION_WORK_UNITS_PER_STAGE);
+    let modifier_cost = force_cost.saturating_add(collision_cost);
+    let modifier_work = active_bound
         .saturating_mul(lifetime_steps)
-        .saturating_mul(force_cost);
-    let estimated_work = base_work.saturating_add(force_work);
+        .saturating_mul(modifier_cost);
+    let estimated_work = base_work.saturating_add(modifier_work);
     if estimated_work > PARTICLE_MAX_COLD_REPLAY_PARTICLE_STEPS {
         return Err(format!(
             "Particle cold replay is estimated at {estimated_work} work units, exceeding the {PARTICLE_MAX_COLD_REPLAY_PARTICLE_STEPS} work budget"
@@ -282,6 +295,7 @@ pub struct ParticleSceneParameters {
     pub velocity_min: Vec3,
     pub velocity_max: Vec3,
     pub forces: Vec<ParticleForce>,
+    pub collisions: Vec<ParticleCollider>,
     pub size_min: ordered_float::OrderedFloat<f32>,
     pub size_max: ordered_float::OrderedFloat<f32>,
 }
@@ -344,11 +358,20 @@ impl ParticleSceneParameters {
         for force in &self.forces {
             force.validate()?;
         }
-        validate_particle_force_replay_budget(
+        if self.collisions.len() > PARTICLE_MAX_COLLIDERS {
+            return Err(format!(
+                "Particle scenes support at most {PARTICLE_MAX_COLLIDERS} ordered collisions"
+            ));
+        }
+        for collision in &self.collisions {
+            collision.validate()?;
+        }
+        validate_particle_modifier_replay_budget(
             self.capacity,
             self.emission_rate.into_inner(),
             self.lifetime_seconds.into_inner(),
             &self.forces,
+            &self.collisions,
         )?;
         if !(0.0..=1_000_000.0).contains(&self.emitter_radius.into_inner()) {
             return Err("Particle emitter radius must be between 0 and 1000000px".to_string());
@@ -398,8 +421,19 @@ mod tests {
             velocity_min: vec3(0.0, 0.0, 0.0),
             velocity_max: vec3(0.0, 0.0, 0.0),
             forces: Vec::new(),
+            collisions: Vec::new(),
             size_min: OrderedFloat(1.0),
             size_max: OrderedFloat(1.0),
+        }
+    }
+
+    fn plane_collision() -> ParticleCollider {
+        ParticleCollider::Plane {
+            plane_point: vec3(0.0, 0.0, 0.0),
+            plane_normal: vec3(0.0, -1.0, 0.0),
+            radius: OrderedFloat(0.0),
+            bounce: OrderedFloat(0.5),
+            friction: OrderedFloat(0.1),
         }
     }
 
@@ -508,6 +542,36 @@ mod tests {
             coefficient: OrderedFloat(0.0),
         });
         assert!(parameters.validate().unwrap_err().contains("at most 16"));
+    }
+
+    #[test]
+    fn scene_validation_caps_the_ordered_collision_program() {
+        let plane = plane_collision();
+        let mut parameters = valid_parameters();
+        parameters.collisions = vec![plane.clone(); PARTICLE_MAX_COLLIDERS];
+        parameters.validate().expect("maximum collision count");
+        parameters.collisions.push(plane);
+        assert!(parameters.validate().unwrap_err().contains("at most 8"));
+    }
+
+    #[test]
+    fn scene_collision_budget_charges_the_bounded_contact_kernel() {
+        let mut parameters = valid_parameters();
+        parameters.capacity = 8_192;
+        parameters.emission_rate = OrderedFloat(120.0);
+        parameters.lifetime_seconds = OrderedFloat(4.0);
+        parameters.collisions = vec![plane_collision()];
+        parameters
+            .validate()
+            .expect("one collision fits the default Particle workload");
+
+        parameters.collisions = vec![plane_collision(); PARTICLE_MAX_COLLIDERS];
+        assert!(parameters.validate().unwrap_err().contains("work budget"));
+
+        parameters.emission_rate = OrderedFloat(0.0);
+        parameters
+            .validate()
+            .expect("collisions add no active-particle work without emission");
     }
 
     #[test]

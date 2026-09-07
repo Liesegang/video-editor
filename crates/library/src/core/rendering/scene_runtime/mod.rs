@@ -1,5 +1,6 @@
 //! Stateful GPU execution boundary shared by preview and export renderers.
 
+mod collisions;
 #[cfg(test)]
 mod diagnostics;
 mod forces;
@@ -16,6 +17,7 @@ mod render;
 mod shaders;
 mod simulation;
 mod source;
+mod vectors;
 
 use crate::rendering::gl_resources::SavedGlState;
 use invocation::PointInvocation;
@@ -38,13 +40,13 @@ pub(crate) use render::invocation_seed;
 use render::{
     PointDrawRequest, bounded_replay_origin, drain_gl_errors, draw_points, gl_operation_result,
     point_source_binding, validate_color, validate_replay, validate_target, validate_transform,
-    vec3_f32,
 };
 use simulation::{
     ParticleSimulationRequest, allocate_particle_buffer, copy_particle_buffer,
     delete_particle_buffer, reset_particles, simulate_particles,
 };
 use source::{PointSourceBinding, PointSourceKind};
+use vectors::vec3_f32;
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct SceneRuntimeLimits {

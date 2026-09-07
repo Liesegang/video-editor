@@ -16,6 +16,7 @@ use crate::model::authoring::{
 };
 use crate::model::node::{Node, PARTICLE_SYSTEM_PORT, ParticleNodeRole};
 use crate::model::project::{IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, PortDataType};
+use crate::model::property::{Property, PropertyValue};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ParticlePublishedParameters {
@@ -39,6 +40,12 @@ pub struct ParticlePublishedParameters {
     pub turbulence_evolution: PublishedParameterId,
     pub turbulence_seed: PublishedParameterId,
     pub drag: PublishedParameterId,
+    pub collision_active: PublishedParameterId,
+    pub collision_plane_point: PublishedParameterId,
+    pub collision_plane_normal: PublishedParameterId,
+    pub collision_radius: PublishedParameterId,
+    pub collision_bounce: PublishedParameterId,
+    pub collision_friction: PublishedParameterId,
     pub color: PublishedParameterId,
 }
 
@@ -87,28 +94,48 @@ impl ParticleNodeClipFactory {
 
         let mut emitter = Node::new_catalog_node(ParticleNodeRole::Emitter.catalog_id())
             .map_err(LibraryError::Validation)?;
-        emitter.ui_position = [0.0, 140.0];
         let mut shape_location =
             Node::new_catalog_node(ParticleNodeRole::ShapeLocation.catalog_id())
                 .map_err(LibraryError::Validation)?;
-        shape_location.ui_position = [240.0, 140.0];
         let mut initialize = Node::new_catalog_node(ParticleNodeRole::Initialize.catalog_id())
             .map_err(LibraryError::Validation)?;
-        initialize.ui_position = [480.0, 140.0];
         let mut gravity = Node::new_catalog_node(ParticleNodeRole::Gravity.catalog_id())
             .map_err(LibraryError::Validation)?;
-        gravity.ui_position = [720.0, 140.0];
         let mut turbulence = Node::new_catalog_node(ParticleNodeRole::Turbulence.catalog_id())
             .map_err(LibraryError::Validation)?;
-        turbulence.ui_position = [960.0, 140.0];
         let mut drag = Node::new_catalog_node(ParticleNodeRole::Drag.catalog_id())
             .map_err(LibraryError::Validation)?;
-        drag.ui_position = [1_200.0, 140.0];
+        let mut collision = Node::new_catalog_node(ParticleNodeRole::CollisionPlane.catalog_id())
+            .map_err(LibraryError::Validation)?;
+        collision
+            .set_property(
+                "active".to_string(),
+                Property::constant(PropertyValue::Boolean(false)),
+            )
+            .map_err(LibraryError::Validation)?;
         let mut renderer = Node::new_catalog_node(ParticleNodeRole::SpriteRenderer.catalog_id())
             .map_err(LibraryError::Validation)?;
-        renderer.ui_position = [1_440.0, 140.0];
-        if let Some(output) = definition.graph.nodes.get_mut(&output_node_id) {
-            output.ui_position = [1_680.0, 140.0];
+        // Vec3 rows exceed the generic 240px header minimum. Author both the
+        // presentation size and placement so Fit and Clean Layout share the
+        // same usable bounds instead of reintroducing overlapping controls.
+        const STAGE_WIDTH: f32 = 600.0;
+        const STAGE_GAP: f32 = 120.0;
+        for (index, node) in [
+            &mut emitter,
+            &mut shape_location,
+            &mut initialize,
+            &mut gravity,
+            &mut turbulence,
+            &mut drag,
+            &mut collision,
+            &mut renderer,
+        ]
+        .into_iter()
+        .chain(definition.graph.nodes.get_mut(&output_node_id))
+        .enumerate()
+        {
+            node.ui_size[0] = STAGE_WIDTH;
+            node.ui_position = [index as f32 * (STAGE_WIDTH + STAGE_GAP), 140.0];
         }
 
         let emitter_id = emitter.id;
@@ -117,6 +144,7 @@ impl ParticleNodeClipFactory {
         let gravity_id = gravity.id;
         let turbulence_id = turbulence.id;
         let drag_id = drag.id;
+        let collision_id = collision.id;
         let renderer_id = renderer.id;
         definition.graph.nodes.extend([
             (emitter_id, emitter),
@@ -125,6 +153,7 @@ impl ParticleNodeClipFactory {
             (gravity_id, gravity),
             (turbulence_id, turbulence),
             (drag_id, drag),
+            (collision_id, collision),
             (renderer_id, renderer),
         ]);
         definition.graph.connections = vec![
@@ -160,6 +189,12 @@ impl ParticleNodeClipFactory {
             ),
             connection(
                 drag_id,
+                PARTICLE_SYSTEM_PORT,
+                collision_id,
+                PARTICLE_SYSTEM_PORT,
+            ),
+            connection(
+                collision_id,
                 PARTICLE_SYSTEM_PORT,
                 renderer_id,
                 PARTICLE_SYSTEM_PORT,
@@ -312,6 +347,48 @@ impl ParticleNodeClipFactory {
             "Drag",
             PortDataType::Number,
         )?;
+        let collision_active = publish(
+            &mut definition,
+            collision_id,
+            "active",
+            "Collision Enabled",
+            PortDataType::Boolean,
+        )?;
+        let collision_plane_point = publish(
+            &mut definition,
+            collision_id,
+            "plane_point",
+            "Plane Point",
+            PortDataType::Vec3,
+        )?;
+        let collision_plane_normal = publish(
+            &mut definition,
+            collision_id,
+            "plane_normal",
+            "Plane Normal",
+            PortDataType::Vec3,
+        )?;
+        let collision_radius = publish(
+            &mut definition,
+            collision_id,
+            "radius",
+            "Radius",
+            PortDataType::Number,
+        )?;
+        let collision_bounce = publish(
+            &mut definition,
+            collision_id,
+            "bounce",
+            "Bounce",
+            PortDataType::Number,
+        )?;
+        let collision_friction = publish(
+            &mut definition,
+            collision_id,
+            "friction",
+            "Friction",
+            PortDataType::Number,
+        )?;
         let color = publish(
             &mut definition,
             renderer_id,
@@ -347,6 +424,12 @@ impl ParticleNodeClipFactory {
                 turbulence_evolution,
                 turbulence_seed,
                 drag: drag_parameter,
+                collision_active,
+                collision_plane_point,
+                collision_plane_normal,
+                collision_radius,
+                collision_bounce,
+                collision_friction,
                 color,
             },
         })

@@ -31,6 +31,12 @@ PARTICLE_PUBLISHED_PARAMETERS = [
     "Turbulence Evolution",
     "Turbulence Seed",
     "Drag",
+    "Collision Enabled",
+    "Plane Point",
+    "Plane Normal",
+    "Radius",
+    "Bounce",
+    "Friction",
     "Color",
 ]
 
@@ -86,12 +92,50 @@ def create_particle_node_clip(client, requested_start_seconds=6.5):
     parameters = (definition.get("interface") or {}).get("parameters") or []
     if [entry.get("name") for entry in parameters] != PARTICLE_PUBLISHED_PARAMETERS:
         raise QaFailure("Particle Definition omitted its curated published parameters")
-    if len(definition["graph"]["nodes"]) != 8 or len(
+    if len(definition["graph"]["nodes"]) != 9 or len(
         definition["graph"]["connections"]
-    ) != 7:
+    ) != 8:
         raise QaFailure("Particle Definition omitted its authoritative topology")
     created["parameters"] = parameters
     return created
+
+
+def particle_factory_terminal_route(definition):
+    """Return the canonical Collision-to-Sprite terminal route."""
+
+    catalog_nodes = {}
+    for node_id, node in definition["graph"]["nodes"].items():
+        if catalog_id := native_catalog_id(node):
+            catalog_nodes.setdefault(catalog_id, []).append(node_id)
+    collision = catalog_nodes.get("native.particle.collision-plane") or []
+    drag = catalog_nodes.get("native.particle.drag-force") or []
+    sprite = catalog_nodes.get("native.particle.sprite-renderer") or []
+    if len(drag) != 1 or len(collision) != 1 or len(sprite) != 1:
+        raise QaFailure("Particle factory has no unique Drag, Collision, and Sprite Nodes")
+    predecessor = next(
+        (
+            candidate
+            for candidate in definition["graph"]["connections"]
+            if candidate["from"] == {"node_id": drag[0], "port": "particles"}
+            and candidate["to"] == {"node_id": collision[0], "port": "particles"}
+        ),
+        None,
+    )
+    if predecessor is None:
+        raise QaFailure("Particle factory does not place Collision after its force chain")
+    route = next(
+        (
+            candidate
+            for candidate in definition["graph"]["connections"]
+            if candidate["from"]
+            == {"node_id": collision[0], "port": "particles"}
+            and candidate["to"] == {"node_id": sprite[0], "port": "particles"}
+        ),
+        None,
+    )
+    if route is None:
+        raise QaFailure("Particle factory has no exact Collision-to-Sprite route")
+    return collision[0], sprite[0], route
 
 
 def wait_particle_preview(client, revision, frame):
@@ -150,7 +194,7 @@ def constant_property(node, key):
     return (prop.get("properties") or {}).get("value")
 
 
-def _native_catalog_id(node):
+def native_catalog_id(node):
     content = node.get("content") or {}
     if str(content.get("type", "")).replace("_", "").lower() != "nativeoperation":
         return None
@@ -273,7 +317,7 @@ def edit_turbulence_and_assert_history(
     node_value = (node_control.get("metadata") or {}).get("value")
     if not isinstance(node_value, (int, float)) or float(node_value) != 120.0:
         raise QaFailure("Node Turbulence Strength diverged from its Inspector parameter")
-    if _native_catalog_id(definition["graph"]["nodes"][node_id]) != "native.particle.turbulence":
+    if native_catalog_id(definition["graph"]["nodes"][node_id]) != "native.particle.turbulence":
         raise QaFailure("Turbulence parameter targets the wrong native Node")
 
     activate_dock_tab(client, "dock.tab:timeline", "Timeline", "Particle reset")

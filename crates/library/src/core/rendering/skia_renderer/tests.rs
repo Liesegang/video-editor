@@ -43,6 +43,9 @@ mod layer_styles;
 #[path = "tests/neutral_ensemble_text.rs"]
 mod neutral_ensemble_text;
 #[cfg(all(feature = "gl", target_os = "windows"))]
+#[path = "tests/particle_collision_gpu.rs"]
+mod particle_collision_gpu;
+#[cfg(all(feature = "gl", target_os = "windows"))]
 #[path = "tests/particle_gpu.rs"]
 mod particle_gpu;
 #[cfg(all(feature = "gl", target_os = "windows"))]

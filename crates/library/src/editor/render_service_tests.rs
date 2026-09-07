@@ -579,6 +579,7 @@ fn particle_without_effects_uses_the_backend_native_draw_boundary() {
                     z: OrderedFloat(0.0),
                 },
                 forces: Vec::new(),
+                collisions: Vec::new(),
                 size_min: OrderedFloat(1.0),
                 size_max: OrderedFloat(1.0),
             },

@@ -7,7 +7,9 @@ use super::frame_values::{
 };
 use super::*;
 use crate::core::render_plan::CompiledParticleSource;
-use crate::model::frame::particle::{ParticleEmitterShape, ParticleForce, ParticleSceneParameters};
+use crate::model::frame::particle::{
+    ParticleCollider, ParticleEmitterShape, ParticleForce, ParticleSceneParameters,
+};
 use crate::model::frame::point::PointSceneSource;
 use crate::model::node::ParticleNodeRole;
 use crate::model::property::Vec3;
@@ -34,6 +36,17 @@ impl ModuleImageRuntime<'_> {
                     .and_then(|values| particle_force(force.role, &values))
             })
             .collect::<Result<Vec<_>, _>>()?;
+        let collisions = particle
+            .collision_nodes
+            .iter()
+            .map(|collision| {
+                self.particle_node_values(collision.node_id)
+                    .and_then(|values| particle_collision(collision.role, &values))
+            })
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .flatten()
+            .collect();
         let capacity = required_u32(&emitter, "capacity", "Particle Emitter")?;
         let seed = required_u32(&emitter, "seed", "Particle Emitter")?;
         let parameters = ParticleSceneParameters {
@@ -86,6 +99,7 @@ impl ModuleImageRuntime<'_> {
                 neutral_vec3(),
             )?,
             forces,
+            collisions,
             size_min: optional_f32(
                 initialize.as_ref(),
                 "size_min",
@@ -165,10 +179,41 @@ fn particle_force(
         ParticleNodeRole::Emitter
         | ParticleNodeRole::ShapeLocation
         | ParticleNodeRole::Initialize
+        | ParticleNodeRole::CollisionPlane
         | ParticleNodeRole::SpriteRenderer => Err(LibraryError::Validation(format!(
             "Particle executable contains non-force role {role:?} in its force list"
         ))),
     }
+}
+
+fn particle_collision(
+    role: ParticleNodeRole,
+    values: &HashMap<String, PropertyValue>,
+) -> Result<Option<ParticleCollider>, LibraryError> {
+    if role != ParticleNodeRole::CollisionPlane {
+        return Err(LibraryError::Validation(format!(
+            "Particle executable contains non-collision role {role:?} in its collision list"
+        )));
+    }
+    let active = match values.get("active") {
+        Some(PropertyValue::Boolean(value)) => *value,
+        _ => {
+            return Err(frame_values::type_error(
+                "Collision Plane active",
+                "Boolean",
+            ));
+        }
+    };
+    if !active {
+        return Ok(None);
+    }
+    Ok(Some(ParticleCollider::Plane {
+        plane_point: required_vec3(values, "plane_point", "Collision Plane")?,
+        plane_normal: required_vec3(values, "plane_normal", "Collision Plane")?,
+        radius: required_f32(values, "radius", "Collision Plane", "collision radius")?,
+        bounce: required_f32(values, "bounce", "Collision Plane", "collision bounce")?,
+        friction: required_f32(values, "friction", "Collision Plane", "collision friction")?,
+    }))
 }
 
 fn optional_emitter_shape(

@@ -463,18 +463,64 @@ def create_node_from_menu(client, expected_host, query, choice_id):
     return client.wait_until(query + " Node creation", created)
 
 
+def ensure_node_editor_authoring_scale(client, minimum=0.4, maximum=0.75):
+    """Reach a detail-visible authoring scale through the shared canvas controller."""
+
+    before = client.state()
+    previous = None
+    for _ in range(8):
+        _, canvas = client.wait_component_settled("node_editor.canvas")
+        scale = float((canvas.get("metadata") or {}).get("scale", 0.0))
+        if minimum <= scale <= maximum:
+            after = client.state()
+            if after["project"] != before["project"] or after["history"] != before["history"]:
+                raise QaFailure("Node Editor zoom mutated the Project or undo history")
+            return canvas
+        delta = 100.0 if scale < minimum else -100.0
+        client.scroll_component(
+            "node_editor.canvas", 0.0, delta, modifiers={"command": True}
+        )
+        _, changed = client.wait_component_settled("node_editor.canvas")
+        changed_scale = float((changed.get("metadata") or {}).get("scale", 0.0))
+        if (delta > 0.0 and changed_scale <= scale) or (
+            delta < 0.0 and changed_scale >= scale
+        ):
+            raise QaFailure("Node Editor authoring zoom moved in the wrong direction")
+        if previous == changed_scale:
+            raise QaFailure("Node Editor authoring zoom stopped making progress")
+        previous = changed_scale
+    raise QaFailure("Node Editor could not reach a usable authoring scale")
+
+
 def place_created_node(client, node_id, horizontal_fraction, vertical_offset=26.0):
     """Move a just-created Node to a stable visible canvas fraction."""
 
     _, canvas = client.wait_component_settled("node_editor.canvas")
+    _bring_node_header_into_view(client, node_id)
     snapshot, header = client.wait_component_settled(
         "node_editor.node_header:" + node_id
     )
     bounds = canvas["rect_points"]
+    header_bounds = header["rect_points"]
+    margin = 4.0
+    half_width = float(header_bounds.get("width", 0.0)) * 0.5
+    half_height = float(header_bounds.get("height", 0.0)) * 0.5
+    if (
+        half_width * 2.0 + margin * 2.0 > float(bounds["width"])
+        or half_height * 2.0 + margin * 2.0 > float(bounds["height"])
+    ):
+        raise QaFailure("Node header is larger than the production canvas")
+    requested_x = float(bounds["min_x"]) + float(bounds["width"]) * horizontal_fraction
+    requested_y = float(bounds["min_y"]) + vertical_offset
     target = {
-        "x": float(bounds["min_x"])
-        + float(bounds["width"]) * horizontal_fraction,
-        "y": float(bounds["min_y"]) + vertical_offset,
+        "x": max(
+            float(bounds["min_x"]) + half_width + margin,
+            min(float(bounds["max_x"]) - half_width - margin, requested_x),
+        ),
+        "y": max(
+            float(bounds["min_y"]) + half_height + margin,
+            min(float(bounds["max_y"]) - half_height - margin, requested_y),
+        ),
     }
     origin = component_center(header)
     blocked = []
@@ -502,6 +548,68 @@ def place_created_node(client, node_id, horizontal_fraction, vertical_offset=26.
     if abs(float(moved["rect_points"]["center_x"]) - target["x"]) > 3.0:
         raise QaFailure("created Node did not follow its production header drag")
     return moved
+
+
+def _bring_node_header_into_view(client, node_id):
+    """Pan the production canvas until one authored Node header is interactable."""
+
+    header_id = "node_editor.node_header:" + node_id
+    for _ in range(12):
+        _, canvas = client.wait_component_settled("node_editor.canvas")
+        definition = active_definition(client.state())[1]
+        node = definition["graph"]["nodes"].get(node_id)
+        if node is None:
+            raise QaFailure("Node Editor cannot reveal a missing Node " + node_id)
+        metadata = canvas.get("metadata") or {}
+        scale = float(metadata.get("scale", 0.0))
+        translation = metadata.get("translation") or {}
+        position = node.get("ui_position") or []
+        size = node.get("ui_size") or []
+        if scale <= 0.0 or len(position) != 2 or len(size) != 2:
+            raise QaFailure("Node Editor omitted the Canvas transform or Node geometry")
+        bounds = canvas["rect_points"]
+        current = {
+            "x": float(translation["x"]) + float(position[0]) * scale,
+            "y": float(translation["y"]) + float(position[1]) * scale,
+        }
+        model_width = float(size[0]) * scale
+        snapshot = client.component_snapshot()
+        header = component(snapshot, header_id)
+        if header is not None and header.get("visible"):
+            rect = header.get("rect_points") or {}
+            # QA response rects are clipped to the viewport. Use the authored
+            # Node width through the same Canvas transform to distinguish a
+            # genuinely visible header from a clipped fragment.
+            fully_inside = (
+                current["x"] >= float(bounds["min_x"])
+                and current["x"] + model_width + 12.0 <= float(bounds["max_x"])
+                and current["y"] >= float(bounds["min_y"])
+                and float(rect.get("max_y", current["y"])) <= float(bounds["max_y"])
+            )
+            if (
+                float(rect.get("width", 0.0)) > 0.0
+                and float(rect.get("height", 0.0)) > 0.0
+                and fully_inside
+            ):
+                return header
+        target = {
+            "x": float(bounds["center_x"]) - model_width * 0.5,
+            "y": float(bounds["min_y"]) + 42.0,
+        }
+        limit_x = float(bounds["width"]) * 0.35
+        limit_y = float(bounds["height"]) * 0.35
+        delta = {
+            "x": max(-limit_x, min(limit_x, target["x"] - current["x"])),
+            "y": max(-limit_y, min(limit_y, target["y"] - current["y"])),
+        }
+        origin = {"x": float(bounds["center_x"]), "y": float(bounds["center_y"])}
+        client.drag(
+            origin,
+            {"x": origin["x"] + delta["x"], "y": origin["y"] + delta["y"]},
+            steps=10,
+            button="middle",
+        )
+    raise QaFailure("Node Editor could not pan the requested Node header into view")
 
 
 def insert_image_opacity_in_primary_route(client, expected_host):
@@ -553,8 +661,9 @@ def place_node_for_inline_edit(client, node_id, component_id):
     if candidate is not None and candidate.get("visible"):
         return candidate
 
+    ensure_node_editor_authoring_scale(client)
     header_id = "node_editor.node_header:" + node_id
-    _, header = client.wait_component_settled(header_id)
+    header = _bring_node_header_into_view(client, node_id)
     _, canvas = client.wait_component_settled("node_editor.canvas")
     bounds = canvas["rect_points"]
     target = {

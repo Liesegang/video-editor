@@ -23,11 +23,22 @@ fn seconds(value: i64) -> MediaTime {
 #[test]
 fn factory_builds_one_private_typed_chain_and_mandatory_output() {
     let result = ParticleNodeClipFactory::create("GPU Particles").expect("factory");
-    assert_eq!(result.definition.graph.nodes.len(), 8);
-    assert_eq!(result.definition.graph.connections.len(), 7);
+    assert_eq!(result.definition.graph.nodes.len(), 9);
+    assert_eq!(result.definition.graph.connections.len(), 8);
     assert_eq!(result.definition.outputs().count(), 1);
-    assert_eq!(result.definition.interface.parameters.len(), 21);
+    assert_eq!(result.definition.interface.parameters.len(), 27);
     assert_eq!(result.definition.sharing, ModuleDefinitionSharing::Private);
+    for connection in &result.definition.graph.connections {
+        let from = &result.definition.graph.nodes[&connection.from.node_id];
+        let to = &result.definition.graph.nodes[&connection.to.node_id];
+        assert!(
+            from.ui_position[0] + from.ui_size[0] < to.ui_position[0],
+            "starter rows must leave space for Vec3 controls and adjacent headers"
+        );
+        assert_eq!(from.ui_position[1], to.ui_position[1]);
+        assert!(from.ui_size[0] >= 560.0);
+        assert_eq!(from.ui_size[0], to.ui_size[0]);
+    }
     result
         .definition
         .validate()
@@ -107,6 +118,54 @@ fn factory_inserts_a_neutral_turbulence_force_in_order_and_publishes_every_contr
 }
 
 #[test]
+fn factory_inserts_one_inactive_collision_between_drag_and_sprite() {
+    let result = ParticleNodeClipFactory::create("GPU Particles").expect("factory");
+    let parameter = |id| {
+        result
+            .definition
+            .interface
+            .parameters
+            .iter()
+            .find(|parameter| parameter.id == id)
+            .expect("published parameter")
+    };
+    let collision_node = parameter(result.parameters.collision_active).target.node_id;
+    assert_eq!(
+        parameter(result.parameters.collision_active).default_value,
+        PropertyValue::Boolean(false)
+    );
+    for (id, port) in [
+        (result.parameters.collision_active, "active"),
+        (result.parameters.collision_plane_point, "plane_point"),
+        (result.parameters.collision_plane_normal, "plane_normal"),
+        (result.parameters.collision_radius, "radius"),
+        (result.parameters.collision_bounce, "bounce"),
+        (result.parameters.collision_friction, "friction"),
+    ] {
+        let published = parameter(id);
+        assert_eq!(published.target.node_id, collision_node);
+        assert_eq!(published.target.port, port);
+    }
+    let drag_node = parameter(result.parameters.drag).target.node_id;
+    let renderer_node = parameter(result.parameters.color).target.node_id;
+    for (from, to) in [(drag_node, collision_node), (collision_node, renderer_node)] {
+        assert!(
+            result
+                .definition
+                .graph
+                .connections
+                .iter()
+                .any(|connection| {
+                    connection.from.node_id == from
+                        && connection.from.port == PARTICLE_SYSTEM_PORT
+                        && connection.to.node_id == to
+                        && connection.to.port == PARTICLE_SYSTEM_PORT
+                })
+        );
+    }
+}
+
+#[test]
 fn only_the_executable_particle_slice_is_enabled_in_the_catalog() {
     for catalog_id in [
         "native.particle.emitter",
@@ -117,6 +176,7 @@ fn only_the_executable_particle_slice_is_enabled_in_the_catalog() {
         "native.particle.drag-force",
         "native.particle.vortex-force",
         "native.particle.point-force",
+        "native.particle.collision-plane",
         "native.particle.sprite-renderer",
     ] {
         assert_eq!(
@@ -158,6 +218,12 @@ fn particle_published_parameter_capabilities_follow_their_native_target_ports() 
         particle.parameters.turbulence_evolution,
         particle.parameters.turbulence_seed,
         particle.parameters.drag,
+        particle.parameters.collision_active,
+        particle.parameters.collision_plane_point,
+        particle.parameters.collision_plane_normal,
+        particle.parameters.collision_radius,
+        particle.parameters.collision_bounce,
+        particle.parameters.collision_friction,
     ] {
         assert!(matches!(
             particle

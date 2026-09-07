@@ -10,6 +10,7 @@ from qa_node_module_support import (
     connect_nodes,
     create_node_from_menu,
     disconnect_node_connection,
+    ensure_node_editor_authoring_scale,
     enter_exact_numeric,
     node_content_type,
     open_timeline_item_definition,
@@ -17,7 +18,10 @@ from qa_node_module_support import (
     reload_node_clip_project,
     sample_rendered_preview,
 )
-from qa_particle_force_support import create_particle_node_clip
+from qa_particle_force_support import (
+    create_particle_node_clip,
+    particle_factory_terminal_route,
+)
 from qa_support import (
     QaFailure,
     activate_dock_tab,
@@ -63,28 +67,6 @@ def _routes(definition):
         )
         for route in definition["graph"]["connections"]
     }
-
-
-def _factory_route(definition):
-    catalog_nodes = {}
-    for node_id, node in definition["graph"]["nodes"].items():
-        catalog_nodes.setdefault(_catalog_id(node), []).append(node_id)
-    drag = catalog_nodes.get("native.particle.drag-force") or []
-    sprite = catalog_nodes.get("native.particle.sprite-renderer") or []
-    if len(drag) != 1 or len(sprite) != 1:
-        raise QaFailure("Particle factory has no unique Drag and Sprite Nodes")
-    route = next(
-        (
-            candidate
-            for candidate in definition["graph"]["connections"]
-            if candidate["from"] == {"node_id": drag[0], "port": "particles"}
-            and candidate["to"] == {"node_id": sprite[0], "port": "particles"}
-        ),
-        None,
-    )
-    if route is None:
-        raise QaFailure("Particle factory has no direct Drag-to-Sprite route")
-    return drag[0], sprite[0], route
 
 
 def _assert_definition(definition, context, scale):
@@ -158,7 +140,7 @@ def run_suite(client):
     )
     if opened_id != definition_id:
         raise QaFailure("Node Editor opened a different Particle Definition")
-    drag_id, sprite_id, direct_route = _factory_route(initial)
+    source_id, sprite_id, direct_route = particle_factory_terminal_route(initial)
     output_ids = [
         node_id
         for node_id, node in initial["graph"]["nodes"].items()
@@ -167,9 +149,8 @@ def run_suite(client):
     if len(output_ids) != 1:
         raise QaFailure("Particle factory has no unique Module Output")
     output_id = output_ids[0]
-    place_created_node(client, drag_id, 0.58)
     disconnected = disconnect_node_connection(
-        client, "node_clip", direct_route["id"], "direct Drag-to-Sprite route"
+        client, "node_clip", direct_route["id"], "Collision-to-Sprite route"
     )
     no_particle = sample_rendered_preview(
         client,
@@ -182,17 +163,9 @@ def run_suite(client):
         raise QaFailure("Disconnecting Particle output did not remove rendered sprites")
 
     open_timeline_item_definition(client, item_id, "node_clip", "Point Size authoring")
-    _, canvas_before = client.wait_component_settled("node_editor.canvas")
-    old_scale = float(canvas_before["metadata"]["scale"])
-    client.scroll_component(
-        "node_editor.canvas", 0.0, -100.0, modifiers={"command": True}
-    )
-    _, canvas = client.wait_component_settled("node_editor.canvas")
-    overview_scale = float(canvas["metadata"]["scale"])
-    if overview_scale >= old_scale or not 0.4 <= overview_scale <= 0.75:
-        raise QaFailure("Node Editor did not reach Point Size authoring overview")
+    ensure_node_editor_authoring_scale(client)
     place_created_node(client, output_id, 0.95, vertical_offset=140.0)
-    place_created_node(client, drag_id, 0.05)
+    place_created_node(client, source_id, 0.05)
     place_created_node(client, sprite_id, 0.90)
 
     specs = [
@@ -226,8 +199,8 @@ def run_suite(client):
         nodes[name] = node_id
 
     route_specs = [
-        (drag_id, "particles", nodes["info"], "points", "Drag to Point Info"),
-        (drag_id, "particles", nodes["store"], "points", "Drag to Size Store"),
+        (source_id, "particles", nodes["info"], "points", "Collision to Point Info"),
+        (source_id, "particles", nodes["store"], "points", "Collision to Size Store"),
         (nodes["info"], "size", nodes["multiply"], "a", "Size to Multiply"),
         (
             nodes["info"],
@@ -268,7 +241,7 @@ def run_suite(client):
     connections = [connect_nodes(client, "node_clip", *route) for route in route_specs]
     routed = client.state()
     expected_routes = _routes(initial)
-    expected_routes.remove((drag_id, "particles", sprite_id, "particles"))
+    expected_routes.remove((source_id, "particles", sprite_id, "particles"))
     expected_routes.update(route[:4] for route in route_specs)
     context = {
         "info_id": nodes["info"],

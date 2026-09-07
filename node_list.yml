@@ -2772,14 +2772,19 @@ Collision Plane:
   category: Particles
   catalog_status: native
   catalog_id: native.particle.collision-plane
-  runtime_status: design-needed
+  runtime_status: implemented
   inputs:
     - name: particles
       type: ParticleSystem
+    - name: active
+      label: Collision Enabled
+      type: Boolean
     - name: plane_point
       type: Vector3
     - name: plane_normal
       type: Vector3
+    - name: radius
+      type: Scalar
     - name: bounce
       type: Scalar
     - name: friction

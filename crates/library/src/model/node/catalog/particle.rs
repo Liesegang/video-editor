@@ -1,7 +1,7 @@
 //! Typed Particle node contracts.
 //!
 //! The bounded native slice owns emission, birth attributes, an ordered force
-//! stage, and sprite rendering. Descriptors outside that slice remain
+//! stage, plane collisions, and sprite rendering. Descriptors outside that slice remain
 //! explicitly disabled.
 
 use ordered_float::OrderedFloat;
@@ -9,7 +9,8 @@ use ordered_float::OrderedFloat;
 use super::descriptor::{DescriptorIdentity, DescriptorSpec, PortSpec};
 use crate::model::frame::color::Color;
 use crate::model::frame::particle::{
-    ParticleForce, validate_particle_cold_replay_budget, validate_particle_size_range,
+    ParticleCollider, ParticleForce, validate_particle_cold_replay_budget,
+    validate_particle_size_range,
 };
 use crate::model::project::{IMAGE_OUTPUT_PORT, PortDataType};
 use crate::model::property::{
@@ -30,6 +31,7 @@ pub(crate) enum ParticleNodeRole {
     Drag,
     Vortex,
     Point,
+    CollisionPlane,
     SpriteRenderer,
 }
 
@@ -44,6 +46,7 @@ impl ParticleNodeRole {
             Self::Drag => "native.particle.drag-force",
             Self::Vortex => "native.particle.vortex-force",
             Self::Point => "native.particle.point-force",
+            Self::CollisionPlane => "native.particle.collision-plane",
             Self::SpriteRenderer => "native.particle.sprite-renderer",
         }
     }
@@ -54,8 +57,13 @@ impl ParticleNodeRole {
             Self::ShapeLocation => 1,
             Self::Initialize => 2,
             Self::Gravity | Self::Turbulence | Self::Drag | Self::Vortex | Self::Point => 3,
-            Self::SpriteRenderer => 4,
+            Self::CollisionPlane => 4,
+            Self::SpriteRenderer => 5,
         }
+    }
+
+    pub(crate) const fn is_collision(self) -> bool {
+        matches!(self, Self::CollisionPlane)
     }
 
     pub(crate) const fn is_force(self) -> bool {
@@ -75,6 +83,7 @@ impl ParticleNodeRole {
             Self::Drag,
             Self::Vortex,
             Self::Point,
+            Self::CollisionPlane,
             Self::SpriteRenderer,
         ]
         .into_iter()
@@ -165,8 +174,10 @@ const SIZE_OVER_LIFE_INPUTS: &[PortSpec] = &[
 ];
 const COLLISION_PLANE_INPUTS: &[PortSpec] = &[
     PARTICLE,
+    PortSpec::single("active", "Collision Enabled", PortDataType::Boolean),
     PortSpec::single("plane_point", "Plane Point", PortDataType::Vec3),
     PortSpec::single("plane_normal", "Plane Normal", PortDataType::Vec3),
+    PortSpec::single("radius", "Radius", PortDataType::Number),
     PortSpec::single("bounce", "Bounce", PortDataType::Number),
     PortSpec::single("friction", "Friction", PortDataType::Number),
 ];
@@ -191,6 +202,14 @@ const TURBULENCE_CONSTANT_ONLY_INPUTS: &[&str] =
     &["strength", "frequency", "octaves", "evolution", "seed"];
 const VORTEX_CONSTANT_ONLY_INPUTS: &[&str] = &["axis", "center", "strength"];
 const POINT_FORCE_CONSTANT_ONLY_INPUTS: &[&str] = &["target", "strength", "radius", "falloff"];
+const COLLISION_PLANE_CONSTANT_ONLY_INPUTS: &[&str] = &[
+    "active",
+    "plane_point",
+    "plane_normal",
+    "radius",
+    "bounce",
+    "friction",
+];
 const MESH_RENDERER_INPUTS: &[PortSpec] = &[
     PARTICLE,
     PortSpec::single("mesh", "Mesh", PortDataType::Asset),
@@ -347,12 +366,29 @@ const SPECS: &[DescriptorSpec] = &[
         SIZE_OVER_LIFE_INPUTS,
         PARTICLE_OUTPUT,
     ),
-    DescriptorSpec::placeholder(
-        "native.particle.collision-plane",
-        "Collision Plane",
-        "Particles",
+    DescriptorSpec::implemented_native(
+        DescriptorIdentity::new(
+            ParticleNodeRole::CollisionPlane.catalog_id(),
+            "Collision Plane",
+            "Particles",
+            "node_editor.menu.create.particle_collision_plane",
+            &[
+                "particle",
+                "collision",
+                "plane",
+                "bounce",
+                "friction",
+                "gpu",
+            ],
+        ),
         COLLISION_PLANE_INPUTS,
         PARTICLE_OUTPUT,
+        collision_plane_properties,
+    )
+    .validate_property_set(validate_collision_plane_property_set)
+    .constant_only_inputs(
+        COLLISION_PLANE_CONSTANT_ONLY_INPUTS,
+        PARTICLE_FIXED_STEP_REASON,
     ),
     DescriptorSpec::placeholder(
         "native.particle.collision-depth",
@@ -578,6 +614,40 @@ fn validate_point_force_property_set(properties: &PropertyMap) -> Result<(), Str
         strength: OrderedFloat(required_number(properties, "Point Force", "strength")? as f32),
         radius: OrderedFloat(required_number(properties, "Point Force", "radius")? as f32),
         falloff: OrderedFloat(required_number(properties, "Point Force", "falloff")? as f32),
+    }
+    .validate()
+}
+
+fn collision_plane_properties() -> Vec<PropertyDefinition> {
+    vec![
+        PropertyDefinition::new(
+            "active",
+            PropertyUiType::Bool,
+            "Collision Enabled",
+            PropertyValue::Boolean(true),
+        ),
+        vec3_property("plane_point", "Plane Point", [0.0, 120.0, 0.0], " px"),
+        vec3_property("plane_normal", "Plane Normal", [0.0, -1.0, 0.0], ""),
+        number_property("radius", "Radius", 0.0, 1_000_000.0, 0.0, " px"),
+        number_property("bounce", "Bounce", 0.0, 1.0, 0.5, ""),
+        number_property("friction", "Friction", 0.0, 1.0, 0.1, ""),
+    ]
+}
+
+fn validate_collision_plane_property_set(properties: &PropertyMap) -> Result<(), String> {
+    match properties
+        .get("active")
+        .and_then(|property| property.value())
+    {
+        Some(PropertyValue::Boolean(_)) => {}
+        _ => return Err("Collision Plane requires a Boolean 'active' Property".to_string()),
+    }
+    ParticleCollider::Plane {
+        plane_point: required_vec3(properties, "Collision Plane", "plane_point")?,
+        plane_normal: required_vec3(properties, "Collision Plane", "plane_normal")?,
+        radius: OrderedFloat(required_number(properties, "Collision Plane", "radius")? as f32),
+        bounce: OrderedFloat(required_number(properties, "Collision Plane", "bounce")? as f32),
+        friction: OrderedFloat(required_number(properties, "Collision Plane", "friction")? as f32),
     }
     .validate()
 }
