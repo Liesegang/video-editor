@@ -1,5 +1,4 @@
 use super::*;
-use crate::model::frame::draw_type::{GradientStyle, GradientStyleStop};
 use crate::model::property::{GradientGeometry, GradientSpread, Vec2};
 use ordered_float::OrderedFloat;
 
@@ -22,30 +21,30 @@ fn normalized_gradient() -> DrawStyle {
 
 fn gradient_overlay(geometry: GradientGeometry) -> DrawStyle {
     DrawStyle::GradientOverlay {
-        gradient: GradientStyle {
+        gradient: gradient_value(
             geometry,
-            spread: GradientSpread::Pad,
-            stops: vec![
-                GradientStyleStop {
-                    offset: OrderedFloat(0.0),
-                    color: Color {
+            GradientSpread::Pad,
+            &[
+                (
+                    0.0,
+                    Color {
                         r: 255,
                         g: 0,
                         b: 0,
                         a: 255,
                     },
-                },
-                GradientStyleStop {
-                    offset: OrderedFloat(1.0),
-                    color: Color {
+                ),
+                (
+                    1.0,
+                    Color {
                         r: 0,
                         g: 0,
                         b: 255,
                         a: 255,
                     },
-                },
+                ),
             ],
-        },
+        ),
         opacity: 1.0,
         blend_mode: BlendMode::Normal,
     }
@@ -53,12 +52,13 @@ fn gradient_overlay(geometry: GradientGeometry) -> DrawStyle {
 
 fn stroke() -> DrawStyle {
     DrawStyle::Stroke {
-        color: Color {
+        paint: solid_paint(Color {
             r: 255,
             g: 255,
             b: 255,
             a: 255,
-        },
+        }),
+        opacity: 1.0,
         width: 8.0,
         offset: 0.0,
         cap: Default::default(),
@@ -78,7 +78,8 @@ fn render_text_gradient(
         "MMMM",
         &[
             DrawStyle::Fill {
-                color: Color::white(),
+                paint: solid_paint(Color::white()),
+                opacity: 1.0,
                 offset: 0.0,
             },
             normalized_gradient(),
@@ -141,7 +142,8 @@ fn render_shape_gradient(dimensions: (u32, u32)) -> Vec<[f32; 4]> {
         "M 0 0 L 72 0 L 72 38 L 0 38 Z",
         &[
             DrawStyle::Fill {
-                color: Color::white(),
+                paint: solid_paint(Color::white()),
+                opacity: 1.0,
                 offset: 0.0,
             },
             normalized_gradient(),

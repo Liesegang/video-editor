@@ -15,7 +15,7 @@ use super::*;
 use crate::animation::EasingFunction;
 use crate::editor::{AppearanceOperationFactory, TextEnsembleOperationKind};
 use crate::model::authoring::{AttachmentProcessor, ModuleDefinitionSharing};
-use crate::model::project::property::{ColorValue, Keyframe, Property};
+use crate::model::project::property::{ColorValue, Keyframe, Paint, Property};
 use crate::plugin::PROPERTY_PORT_PREFIX;
 
 struct TextFixture {
@@ -69,9 +69,11 @@ fn text_fixture() -> TextFixture {
                 item_id,
                 operation_id: fill_id,
             },
-            "color".to_string(),
+            "paint".to_string(),
             MediaTime::zero(),
-            PropertyValue::ColorValue(ColorValue::from_straight_srgba8(&color(220, 40, 80, 255))),
+            PropertyValue::Paint(Paint::Solid(ColorValue::from_straight_srgba8(&color(
+                220, 40, 80, 255,
+            )))),
         )
         .expect("Fill Keyframe");
     let (tracking_key, _) = service
@@ -290,12 +292,12 @@ fn direct_text_ensemble_and_appearance_projection_match_one_undoable_commit() {
             item_id: fixture.item_id,
             operation_id: fixture.fill_id,
         },
-        "color",
+        "paint",
         fixture.fill_key,
         AuthoringKeyframeUpdate {
             time: None,
-            value: Some(PropertyValue::ColorValue(ColorValue::from_straight_srgba8(
-                &color(30, 210, 120, 255),
+            value: Some(PropertyValue::Paint(Paint::Solid(
+                ColorValue::from_straight_srgba8(&color(30, 210, 120, 255)),
             ))),
             easing: Some(EasingFunction::Constant),
         },

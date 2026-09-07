@@ -147,3 +147,124 @@ fn gradient_domain_is_source_ink_not_composition_resolution() {
         }
     }
 }
+
+#[test]
+fn fill_and_stroke_paints_render_spatially_and_survive_conversion_undo_and_reload() {
+    use crate::model::property::{GradientValue, Paint, PatternValue};
+
+    let plugins = Arc::new(PluginManager::default());
+    for component in ["fill", "stroke"] {
+        for paint in [
+            Paint::Gradient(GradientValue::default()),
+            Paint::Pattern(PatternValue::default()),
+        ] {
+            let mut operation = AppearanceOperationFactory::create(&plugins, component).unwrap();
+            operation.properties.set(
+                "paint".to_string(),
+                Property::constant(PropertyValue::Paint(paint.clone())),
+            );
+            if component == "stroke" {
+                operation.properties.set(
+                    "width".to_string(),
+                    Property::constant(PropertyValue::from(8.0)),
+                );
+            }
+            let (service, item) = rectangle(96, 64, vec![operation]);
+            let direct_project = service.snapshot().unwrap();
+            let direct = rendered_pixels(&direct_project, Arc::clone(&plugins), 0);
+            let y = if component == "fill" { 32 } else { 22 };
+            let left = pixel(&direct, 96, 38, y);
+            let right = pixel(&direct, 96, 56, y);
+            assert!(
+                (i16::from(left[0]) - i16::from(right[0])).abs() > 60,
+                "{component} {paint:?} was flattened or missing: {left:?}, {right:?}"
+            );
+            service.convert_source_to_node_clip(&plugins, item).unwrap();
+            let converted = service.snapshot().unwrap();
+            assert_eq!(
+                rendered_pixels(&converted, Arc::clone(&plugins), 0),
+                direct,
+                "{component} {paint:?} changed pixels during explicit conversion"
+            );
+            let serialized = serde_json::to_string(converted.as_ref()).unwrap();
+            let loaded: AuthoringProject = serde_json::from_str(&serialized).unwrap();
+            loaded.validate().unwrap();
+            assert_eq!(&loaded, converted.as_ref());
+            assert_eq!(rendered_pixels(&loaded, Arc::clone(&plugins), 0), direct);
+            service.undo().unwrap().unwrap();
+            assert_eq!(
+                service.snapshot().unwrap().as_ref(),
+                direct_project.as_ref()
+            );
+            service.redo().unwrap().unwrap();
+            assert_eq!(service.snapshot().unwrap().as_ref(), converted.as_ref());
+        }
+    }
+}
+
+#[test]
+fn gradient_node_injects_losslessly_into_converted_fill_paint() {
+    use crate::model::node::DataContent;
+    use crate::model::project::connection::DATA_VALUE_OUTPUT_PORT;
+    use crate::model::property::{GradientValue, Paint};
+
+    let plugins = Arc::new(PluginManager::default());
+    let mut operation = fill(&plugins, Color::white());
+    operation.properties.set(
+        "paint".to_string(),
+        Property::constant(PropertyValue::Paint(Paint::Gradient(
+            GradientValue::default(),
+        ))),
+    );
+    let (service, item) = rectangle(96, 64, vec![operation]);
+    let expected = rendered_pixels(&service.snapshot().unwrap(), Arc::clone(&plugins), 0);
+    let conversion = service.convert_source_to_node_clip(&plugins, item).unwrap();
+    let snapshot = service.snapshot().unwrap();
+    let definition = &snapshot.module_definitions[&conversion.definition_id];
+    let fill_id = definition.graph.nodes.values().find(|node| {
+        matches!(node.content(), NodeContent::PluginOperation(operation) if operation.component_id == "fill")
+    }).unwrap().id;
+    let paint_parameter = definition
+        .interface
+        .parameters
+        .iter()
+        .find(|parameter| {
+            parameter.target.node_id == fill_id
+                && parameter.target.port == crate::plugin::property_port_key("paint")
+        })
+        .unwrap()
+        .id;
+    service
+        .edit_instance_module_interface(
+            conversion.instance_id,
+            crate::editor::ModuleInterfaceCommand::UnpublishParameter {
+                parameter_id: paint_parameter,
+            },
+        )
+        .unwrap();
+    let gradient = crate::model::Node::new_data("Gradient", DataContent::Gradient);
+    let gradient_id = gradient.id;
+    service
+        .add_instance_module_node(conversion.instance_id, gradient)
+        .unwrap();
+    service
+        .connect_instance_module_ports(
+            conversion.instance_id,
+            ModulePortAddress {
+                node_id: gradient_id,
+                port: DATA_VALUE_OUTPUT_PORT.to_string(),
+            },
+            ModulePortAddress {
+                node_id: fill_id,
+                port: crate::plugin::property_port_key("paint"),
+            },
+            0,
+        )
+        .unwrap();
+    let connected = service.snapshot().unwrap();
+    assert_eq!(
+        rendered_pixels(&connected, Arc::clone(&plugins), 0),
+        expected
+    );
+    assert!(pixel(&expected, 96, 56, 32)[0] > pixel(&expected, 96, 38, 32)[0] + 60);
+}

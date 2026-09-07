@@ -366,6 +366,37 @@ pub(super) fn authored_color4f(
     }
 }
 
+pub(super) fn authored_paint_color4f(
+    contract: &SkiaSurfaceContract,
+    color: &crate::model::property::ColorValue,
+    opacity: f32,
+) -> Result<(Color4f, Option<ColorSpace>), LibraryError> {
+    match contract {
+        SkiaSurfaceContract::UnmanagedSrgba8 => {
+            let [r, g, b, alpha] =
+                crate::color_management::to_display_srgb(color).map_err(|error| {
+                    LibraryError::Render(format!("cannot convert Paint color: {error}"))
+                })?;
+            Ok((
+                Color4f::new(
+                    r as f32,
+                    g as f32,
+                    b as f32,
+                    (alpha * f64::from(opacity)).clamp(0.0, 1.0) as f32,
+                ),
+                None,
+            ))
+        }
+        SkiaSurfaceContract::ProjectLinear(contract) => {
+            let rgba = contract.authored_paint_color_to_working(color, opacity)?;
+            Ok((
+                Color4f::new(rgba[0], rgba[1], rgba[2], rgba[3]),
+                Some(working_color_space()),
+            ))
+        }
+    }
+}
+
 #[cfg(feature = "gl")]
 pub(super) fn authored_premultiplied_rgba(
     contract: &SkiaSurfaceContract,

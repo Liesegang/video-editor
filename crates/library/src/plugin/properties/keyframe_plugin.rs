@@ -223,6 +223,9 @@ fn interpolate_property_values(
                 PropertyValue::ColorValue,
             )
         }
+        (PropertyValue::Paint(start), PropertyValue::Paint(end)) => start
+            .interpolate_solid(end, t)
+            .map_or_else(|| PropertyValue::Paint(start.clone()), PropertyValue::Paint),
         (PropertyValue::Array(s), PropertyValue::Array(e)) => PropertyValue::Array(
             s.iter()
                 .zip(e.iter())
@@ -343,7 +346,7 @@ fn hsv_to_rgb(h: f64, s: f64, v: f64) -> (u8, u8, u8) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::property::{ColorSpaceRef, ColorValue, Keyframe};
+    use crate::model::property::{ColorSpaceRef, ColorValue, Keyframe, Paint};
 
     #[test]
     fn canonical_color_keyframes_interpolate_only_within_one_space()
@@ -388,6 +391,28 @@ mod tests {
             overshoot, start,
             "overshoot discontinuously fell back to start"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn solid_paint_keyframes_keep_managed_color_interpolation()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let start = Paint::Solid(ColorValue::new(
+            ColorSpaceRef::linear_srgb(),
+            [0.0, 0.25, 0.5, 0.0],
+        )?);
+        let end = Paint::Solid(ColorValue::new(
+            ColorSpaceRef::linear_srgb(),
+            [2.0, 0.75, 1.5, 1.0],
+        )?);
+        let property = Property::keyframe(vec![
+            Keyframe::new(0.0, PropertyValue::Paint(start), EasingFunction::Linear),
+            Keyframe::new(2.0, PropertyValue::Paint(end), EasingFunction::Linear),
+        ]);
+        let PropertyValue::Paint(Paint::Solid(middle)) = evaluate_keyframes(&property, 1.0) else {
+            return Err("Solid Paint keyframe changed type".into());
+        };
+        assert_eq!(middle.rgba(), [1.0, 0.5, 1.0, 0.5]);
         Ok(())
     }
 }

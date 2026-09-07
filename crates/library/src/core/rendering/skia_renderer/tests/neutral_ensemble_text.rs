@@ -25,12 +25,13 @@ fn style(style: DrawStyle) -> StyleConfig {
 
 pub(super) fn fill() -> StyleConfig {
     style(DrawStyle::Fill {
-        color: Color {
+        paint: solid_paint(Color {
             r: 232,
             g: 171,
             b: 61,
             a: 213,
-        },
+        }),
+        opacity: 1.0,
         offset: 0.0,
     })
 }
@@ -94,7 +95,13 @@ fn render_paragraph_reference(
         let paint = crate::core::rendering::skia_renderer::paint::PaintFactory::new(
             &renderer.surface_contract,
         )
-        .text_paint(&config.style, 1.0, None)
+        .text_paint(
+            &config.style,
+            1.0,
+            None,
+            skia_safe::Rect::from_wh(WIDTH as f32, HEIGHT as f32),
+            None,
+        )
         .expect("Paragraph reference paint");
         let paragraph =
             crate::rendering::text_layout::build_text_paragraph(text, "Arial", 42.0, Some(&paint));
@@ -234,12 +241,13 @@ fn plain_fill_and_stroke_retain_the_original_paragraph_paint_oracle() {
     let styles = [
         fill(),
         style(DrawStyle::Stroke {
-            color: Color {
+            paint: solid_paint(Color {
                 r: 35,
                 g: 211,
                 b: 184,
                 a: 197,
-            },
+            }),
+            opacity: 1.0,
             width: 2.5,
             offset: 0.0,
             cap: CapType::Round,
@@ -260,12 +268,13 @@ fn plain_fill_and_stroke_match_paragraph_under_fractional_nonuniform_transform()
     let styles = [
         fill(),
         style(DrawStyle::Stroke {
-            color: Color {
+            paint: solid_paint(Color {
                 r: 35,
                 g: 211,
                 b: 184,
                 a: 197,
-            },
+            }),
+            opacity: 1.0,
             width: 2.5,
             offset: 0.0,
             cap: CapType::Round,
@@ -298,12 +307,13 @@ fn neutral_ensemble_preserves_fill_stroke_shadow_opacity_and_outer_transform() {
     let styles = [
         fill(),
         style(DrawStyle::Stroke {
-            color: Color {
+            paint: solid_paint(Color {
                 r: 35,
                 g: 211,
                 b: 184,
                 a: 197,
-            },
+            }),
+            opacity: 1.0,
             width: 2.5,
             offset: 0.0,
             cap: CapType::Round,

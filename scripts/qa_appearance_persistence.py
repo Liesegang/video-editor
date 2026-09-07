@@ -3,9 +3,15 @@
 import os
 import pathlib
 
+from qa_automation_support import history_shortcut
 from qa_node_module_support import (
     assert_node_editor_nodes_do_not_overlap,
     open_timeline_item_definition,
+)
+from qa_appearance_support import (
+    constant_property as _constant,
+    paint_property,
+    select_paint_kind,
 )
 from qa_support import (
     AUTHORING_FIXTURE,
@@ -209,13 +215,6 @@ def assert_canonical_appearance_graph(project, definition_id, output_id, operati
     }
 
 
-def _constant(operation, key):
-    prop = (operation.get("properties") or {}).get(key) or {}
-    if prop.get("type") != "constant":
-        return None
-    return (prop.get("properties") or {}).get("value")
-
-
 def _project_file():
     value = os.environ.get("RUVIE_QA_PROJECT_PATH")
     if not value:
@@ -339,12 +338,85 @@ def _author_direct_appearance(
     edited_state, edited_stroke = client.wait_until(
         description + " Stroke width edit", edited
     )
-    return edited_state, {
+    active_seconds = media_seconds(item["interval"]["start"]) + 0.2
+    solid_render = _preview_at(client, active_seconds, edited_state["history"]["revision"])
+    activate_dock_tab(
+        client, "dock.tab:inspector", "Inspector", description + " Stroke Paint"
+    )
+    paint_control = "inspector.property:appearance:{}:{}:paint".format(
+        item_id, stroke_id
+    )
+    bring_into_inspector(client, paint_control)
+    if paint_property(edited_stroke)["kind"] != "solid":
+        raise QaFailure(description + " initial Stroke Paint is not Solid")
+    paint_interaction = select_paint_kind(
+        client, paint_control, "solid", "gradient"
+    )
+
+    def gradient_selected():
+        state = client.state()
+        operation = next(
+            candidate
+            for candidate in appearance(state, item_id)
+            if candidate["id"] == stroke_id
+        )
+        return (
+            (state, operation)
+            if state["history"]["revision"] == edited_state["history"]["revision"] + 1
+            and paint_property(operation)["kind"] == "gradient"
+            else None
+        )
+
+    gradient_state, gradient_stroke = client.wait_until(
+        description + " Stroke Gradient selection", gradient_selected
+    )
+    gradient_render = _preview_at(
+        client, active_seconds, gradient_state["history"]["revision"]
+    )
+    if gradient_render["pixel_hash"] == solid_render["pixel_hash"]:
+        raise QaFailure(description + " Stroke Gradient did not change Preview pixels")
+    history_shortcut(client)
+    undone = client.wait_until(
+        description + " Stroke Paint Undo",
+        lambda: state
+        if (
+            (state := client.state())["history"]["revision"]
+            == gradient_state["history"]["revision"] + 1
+            and state["project"] == edited_state["project"]
+        )
+        else None,
+    )
+    if _preview_at(client, active_seconds, undone["history"]["revision"])[
+        "pixel_hash"
+    ] != solid_render["pixel_hash"]:
+        raise QaFailure(description + " Stroke Paint Undo did not restore pixels")
+    history_shortcut(client, redo=True)
+    redone = client.wait_until(
+        description + " Stroke Paint Redo",
+        lambda: state
+        if (
+            (state := client.state())["history"]["revision"]
+            == undone["history"]["revision"] + 1
+            and state["project"] == gradient_state["project"]
+        )
+        else None,
+    )
+    if _preview_at(client, active_seconds, redone["history"]["revision"])[
+        "pixel_hash"
+    ] != gradient_render["pixel_hash"]:
+        raise QaFailure(description + " Stroke Paint Redo did not restore pixels")
+    return redone, {
         "item_id": item_id,
         "fill_id": initial[0]["id"],
         "stroke_id": stroke_id,
-        "stroke_width": _constant(edited_stroke, "width"),
-        "active_seconds": media_seconds(item["interval"]["start"]) + 0.2,
+        "stroke_width": _constant(gradient_stroke, "width"),
+        "stroke_paint": paint_property(gradient_stroke),
+        "stroke_paint_interaction": paint_interaction,
+        "stroke_pixel_hashes": {
+            "solid": solid_render["pixel_hash"],
+            "gradient": gradient_render["pixel_hash"],
+        },
+        "active_seconds": active_seconds,
     }
 
 
@@ -528,6 +600,47 @@ def exercise_appearance_persistence(
     expected_operation_ids = [operation["id"] for operation in text_operations]
     if converted_operation_ids != expected_operation_ids:
         raise QaFailure("Text Appearance stable IDs/order changed during Node Clip conversion")
+    source_fill = next(
+        operation
+        for operation in text_operations
+        if operation["operation"].get("component_id") == "fill"
+    )
+    expected_fill_paint = paint_property(source_fill)
+    fill_parameter = next(
+        (
+            parameter
+            for parameter in converted["project"]["module_definitions"][definition_id][
+                "interface"
+            ]["parameters"]
+            if parameter["target"].get("node_id") == source_fill["id"]
+            and parameter["target"].get("port") == "property:paint"
+        ),
+        None,
+    )
+    if fill_parameter is None:
+        raise QaFailure("Text conversion did not publish the canonical Fill Paint")
+    default_fill_paint = fill_parameter.get("default_value")
+    if (
+        not isinstance(default_fill_paint, dict)
+        or default_fill_paint.get("$type") != "paint_value"
+        or default_fill_paint.get("kind") != "solid"
+    ):
+        raise QaFailure("Text conversion published a non-canonical Fill Paint default")
+    fill_override = converted["project"]["module_instances"][instance_id][
+        "parameter_overrides"
+    ].get(fill_parameter["id"])
+    if fill_override != expected_fill_paint:
+        raise QaFailure("Text conversion changed the effective Fill Paint override")
+    fill_control_id = "inspector.property:module_instance:{}:{}".format(
+        instance_id, fill_parameter["id"]
+    )
+    fill_control = bring_into_inspector(client, fill_control_id)
+    fill_control_metadata = fill_control.get("metadata") or {}
+    if (
+        fill_control_metadata.get("editor_kind") != "paint"
+        or fill_control_metadata.get("value") != expected_fill_paint
+    ):
+        raise QaFailure("converted Text Inspector did not preserve shared Fill Paint")
     converted_graph = assert_canonical_appearance_graph(
         converted["project"],
         definition_id,
@@ -574,6 +687,13 @@ def exercise_appearance_persistence(
         operation.get("id") for operation in reopened_metadata.get("operations") or []
     ] != expected_operation_ids:
         raise QaFailure("reopened Node Clip Appearance facade changed stable IDs/order")
+    reopened_fill_control = bring_into_inspector(client, fill_control_id)
+    reopened_fill_metadata = reopened_fill_control.get("metadata") or {}
+    if (
+        reopened_fill_metadata.get("editor_kind") != "paint"
+        or reopened_fill_metadata.get("value") != expected_fill_paint
+    ):
+        raise QaFailure("reopened Node Clip Inspector changed shared Fill Paint")
     reopened_graph = assert_canonical_appearance_graph(
         converted_reopened["project"],
         definition_id,
@@ -593,6 +713,22 @@ def exercise_appearance_persistence(
         or graph_capture_state["project"] != before_graph_capture["project"]
     ):
         raise QaFailure("opening the converted Appearance graph mutated the Project")
+    node_fill_control_id = "node_editor.property.node:{}:paint".format(source_fill["id"])
+    _, node_fill_control = client.wait_component_settled(node_fill_control_id)
+    node_fill_metadata = node_fill_control.get("metadata") or {}
+    if (
+        node_fill_metadata.get("property_scope") != "module_instance"
+        or node_fill_metadata.get("parameter_id") != fill_parameter["id"]
+        or node_fill_metadata.get("instance_id") != instance_id
+        or node_fill_metadata.get("value") != expected_fill_paint
+    ):
+        raise QaFailure("converted Fill Node did not preserve its published Paint value")
+    _, node_fill_kind = client.wait_component_settled(
+        node_fill_control_id + ".paint.kind"
+    )
+    node_fill_kind_metadata = node_fill_kind.get("metadata") or {}
+    if node_fill_kind_metadata.get("paint_kind") != "gradient":
+        raise QaFailure("converted Fill Node did not render its shared Paint editor")
     graph_layout = assert_node_editor_nodes_do_not_overlap(
         client,
         [
@@ -648,4 +784,13 @@ def exercise_appearance_persistence(
         "graph_capture": graph_capture,
         "graph_layout": graph_layout,
         "reopened_facade": reopened_metadata,
+        "fill_paint": {
+            "parameter_id": fill_parameter["id"],
+            "default": default_fill_paint,
+            "expected": expected_fill_paint,
+            "converted_inspector": fill_control_metadata,
+            "reopened_inspector": reopened_fill_metadata,
+            "node": node_fill_metadata,
+            "node_kind": node_fill_kind_metadata,
+        },
     }

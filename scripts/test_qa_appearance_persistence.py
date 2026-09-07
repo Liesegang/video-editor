@@ -2,6 +2,7 @@ import copy
 import unittest
 
 from qa_appearance_persistence import assert_canonical_appearance_graph
+from qa_appearance_support import paint_property
 from qa_support import QaFailure
 
 
@@ -85,6 +86,52 @@ class CanonicalAppearanceGraphTests(unittest.TestCase):
             assert_canonical_appearance_graph(
                 project, "definition", "output-id", OPERATIONS
             )
+
+
+class AppearancePaintTests(unittest.TestCase):
+    def test_accepts_canonical_typed_paint_envelope(self):
+        paint = {
+            "$type": "paint_value",
+            "kind": "solid",
+            "value": {"space": "srgb", "components": [1.0, 0.0, 0.0, 1.0]},
+        }
+        operation = {
+            "properties": {
+                "paint": {"type": "constant", "properties": {"value": paint}}
+            }
+        }
+        self.assertEqual(paint_property(operation), paint)
+
+    def test_rejects_legacy_fill_color_as_paint(self):
+        operation = {
+            "properties": {
+                "color": {
+                    "type": "constant",
+                    "properties": {"value": [1.0, 0.0, 0.0, 1.0]},
+                }
+            }
+        }
+        with self.assertRaisesRegex(QaFailure, "canonical Paint"):
+            paint_property(operation)
+
+    def test_rejects_unknown_paint_envelope_field(self):
+        operation = {
+            "properties": {
+                "paint": {
+                    "type": "constant",
+                    "properties": {
+                        "value": {
+                            "$type": "paint_value",
+                            "kind": "pattern",
+                            "value": {},
+                            "legacy": True,
+                        }
+                    },
+                }
+            }
+        }
+        with self.assertRaisesRegex(QaFailure, "envelope is not canonical"):
+            paint_property(operation)
 
 
 if __name__ == "__main__":

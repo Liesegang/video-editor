@@ -177,6 +177,8 @@ pub enum PortDataType {
     Asset,
     Gradient,
     Pattern,
+    /// Lossless union of Color, Gradient, and Pattern graph values.
+    Paint,
     Curve,
     ParticleSystem,
     Material,
@@ -206,6 +208,8 @@ impl PortDataType {
             || (source == Self::Any && self.is_property_value_family())
             || (self == Self::Number && source == Self::Integer)
             || (self == Self::PointSource && source == Self::ParticleSystem)
+            || (self == Self::Paint
+                && matches!(source, Self::Color | Self::Gradient | Self::Pattern))
             || ((self == Self::Numeric || source == Self::Numeric)
                 && self.is_numeric_family()
                 && source.is_numeric_family())
@@ -236,6 +240,7 @@ impl PortDataType {
                 | Self::Path
                 | Self::Gradient
                 | Self::Pattern
+                | Self::Paint
                 | Self::Vec2
                 | Self::Vec3
                 | Self::Vec4

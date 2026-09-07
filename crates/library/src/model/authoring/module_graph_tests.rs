@@ -6,6 +6,7 @@ use crate::model::node::Node;
 use crate::model::project::{
     IMAGE_INPUT_PORT, NUMBER_RESULT_OUTPUT_PORT, PortDataType, SOUND_INPUT_PORT,
 };
+use crate::model::property::{GradientValue, Paint, PropertyValue};
 use crate::plugin::PluginManager;
 
 #[test]
@@ -109,4 +110,16 @@ fn module_graph_rejects_unsupported_bypass_and_keeps_typed_image_passthrough() {
     }
     .validate()
     .expect("an Image-to-Image Effect keeps its type-preserving bypass");
+}
+
+#[test]
+fn authored_paint_parameters_require_the_canonical_sum_value() {
+    assert!(authored_parameter_value_is_compatible(
+        PortDataType::Paint,
+        &PropertyValue::Paint(Paint::Gradient(GradientValue::default()))
+    ));
+    assert!(!authored_parameter_value_is_compatible(
+        PortDataType::Paint,
+        &PropertyValue::Gradient(GradientValue::default())
+    ));
 }

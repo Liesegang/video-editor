@@ -119,6 +119,7 @@ impl TextBody {
         &self,
         contract: &SkiaSurfaceContract,
         canvas: &Canvas,
+        geometry: skia_safe::Rect,
         config: &StyleConfig,
     ) -> Result<(), LibraryError> {
         if config.style.composite_phase() != super::layer_styles::CompositePhase::Body {
@@ -127,10 +128,20 @@ impl TextBody {
             ));
         }
         self.paint_batches(canvas, |material| {
+            // Glyphs are drawn under their individual Ensemble affine, while
+            // authored Paint geometry belongs to the complete Text object.
+            // Cancel that batch CTM in the shader so Gradient and Pattern do
+            // not restart or rotate independently for each shaped element.
+            let shader_local_matrix = material
+                .affine
+                .inverse()
+                .map(|inverse| build_transform_matrix(&inverse));
             PaintFactory::new(contract).text_paint(
                 &config.style,
                 material.opacity,
                 material.color.as_ref(),
+                geometry,
+                shader_local_matrix.as_ref(),
             )
         })
     }

@@ -50,13 +50,13 @@ fn vec2(x: f64, y: f64) -> PropertyValue {
 
 fn fill(plugins: &PluginManager, color: Color) -> Result<Node> {
     let mut node = plugins.create_style_operation_node("fill")?;
-    set(&mut node, "color", PropertyValue::Color(color))?;
+    set(&mut node, "paint", PropertyValue::Paint(color.into()))?;
     Ok(node)
 }
 
 fn stroke(plugins: &PluginManager, color: Color, width: f64, dash_array: &str) -> Result<Node> {
     let mut node = plugins.create_style_operation_node("stroke")?;
-    set(&mut node, "color", PropertyValue::Color(color))?;
+    set(&mut node, "paint", PropertyValue::Paint(color.into()))?;
     set(&mut node, "width", width.into())?;
     set(
         &mut node,
@@ -333,10 +333,10 @@ fn text_converter_styles_transform_round_trip_and_export_are_real_pixels() -> Re
         transform.opacity, 1.0,
         "base alpha must not live on Transform"
     );
-    let DrawStyle::Fill { ref color, .. } = styles[0].style else {
+    let DrawStyle::Fill { opacity, .. } = styles[0].style else {
         bail!("first Style branch must remain Fill");
     };
-    assert_eq!(color.a, 204, "static opacity must be evaluated by Style");
+    assert_eq!(opacity, 0.8, "static opacity must be evaluated by Style");
 
     let standard = preview(&project, 0, &plugins)?;
     assert!(
@@ -822,7 +822,8 @@ fn empty_text_is_safe_missing_text_is_validation_and_parts_is_render_error() -> 
     let styles = vec![StyleConfig {
         id: Uuid::new_v4(),
         style: DrawStyle::Fill {
-            color: Color::white(),
+            paint: (Color::white()).into(),
+            opacity: 1.0,
             offset: 0.0,
         },
     }];

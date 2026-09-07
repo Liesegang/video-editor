@@ -192,6 +192,7 @@ fn expression_value_from_property(
         PropertyValue::Path(_)
         | PropertyValue::Gradient(_)
         | PropertyValue::Pattern(_)
+        | PropertyValue::Paint(_)
         | PropertyValue::Array(_)
         | PropertyValue::Map(_)
         | PropertyValue::OpaqueJson(_) => Err(evaluation_error(

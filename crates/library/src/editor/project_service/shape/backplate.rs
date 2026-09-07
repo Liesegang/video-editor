@@ -33,8 +33,8 @@ impl ProjectManager {
         style.name = "Backplate Fill".to_string();
         style
             .set_property(
-                "color".to_string(),
-                Property::constant(PropertyValue::Color(Color::black())),
+                "paint".to_string(),
+                Property::constant(PropertyValue::Paint(Color::black().into())),
             )
             .map_err(LibraryError::Validation)?;
         let mut merge = Node::new_merge("Backplate Merge");

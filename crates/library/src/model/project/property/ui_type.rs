@@ -29,6 +29,8 @@ pub enum PropertyUiType {
     Gradient,
     /// Managed procedural pattern with stable geometry and two authored colors.
     Pattern,
+    /// Lossless Solid, Gradient, or Pattern paint selector.
+    Paint,
     Color,
     Text,
     MultilineText,
@@ -73,7 +75,7 @@ impl PropertyUiType {
     pub const fn supports_expression(&self) -> bool {
         !matches!(
             self,
-            Self::ColorValue | Self::Path | Self::Gradient | Self::Pattern
+            Self::ColorValue | Self::Path | Self::Gradient | Self::Pattern | Self::Paint
         )
     }
 

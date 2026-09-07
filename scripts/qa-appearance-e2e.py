@@ -12,7 +12,15 @@ from qa_support import (
     seek_timeline_seconds,
     settled_preview_state,
 )
+from qa_automation_support import history_shortcut
 from qa_appearance_persistence import exercise_appearance_persistence
+from qa_appearance_support import (
+    canonical_paint_value,
+    constant_property as _constant,
+    edit_first_gradient_stop,
+    paint_property,
+    select_paint_kind,
+)
 
 
 def _component(snapshot, component_id):
@@ -63,13 +71,6 @@ def _appearance(state, item_id):
     raise QaFailure("item no longer owns a direct Text/Shape Appearance")
 
 
-def _constant(operation, key):
-    prop = (operation.get("properties") or {}).get(key) or {}
-    if prop.get("type") != "constant":
-        return None
-    return (prop.get("properties") or {}).get("value")
-
-
 def _add_style(client, item_id, query, component_id):
     add_id = "inspector.appearance.add_menu:" + item_id
     add_component = _bring_into_inspector(client, add_id)
@@ -107,6 +108,176 @@ def _add_style(client, item_id, query, component_id):
     return metadata, sorted(available_styles)
 
 
+def _exercise_fill_paint(client, item_id, fill, before, frame):
+    control_id = "inspector.property:appearance:{}:{}:paint".format(item_id, fill["id"])
+    _bring_into_inspector(client, control_id)
+    solid = paint_property(fill)
+    if solid["kind"] != "solid":
+        raise QaFailure("initial Fill Paint is not Solid")
+    interaction = select_paint_kind(client, control_id, "solid", "gradient")
+
+    def gradient_selected():
+        state = client.state()
+        operation = next(
+            candidate
+            for candidate in _appearance(state, item_id)
+            if candidate["id"] == fill["id"]
+        )
+        return (
+            (state, operation)
+            if state["history"]["revision"] == before["history"]["revision"] + 1
+            and paint_property(operation)["kind"] == "gradient"
+            else None
+        )
+
+    gradient_state, gradient_fill = client.wait_until(
+        "Fill Paint Gradient selection", gradient_selected
+    )
+    gradient_render = client.wait_until(
+        "Fill Paint Gradient Preview",
+        lambda: state
+        if (
+            (state := settled_preview_state(
+                client, gradient_state["history"]["revision"], frame
+            ))
+            and state["editor"]["preview"]["pixel_hash"]
+            != before["editor"]["preview"]["pixel_hash"]
+        )
+        else None,
+        timeout=30.0,
+    )
+    before_gradient = paint_property(gradient_fill)
+    stop = edit_first_gradient_stop(client, control_id)
+
+    def stop_edited():
+        state = client.state()
+        operation = next(
+            candidate
+            for candidate in _appearance(state, item_id)
+            if candidate["id"] == fill["id"]
+        )
+        return (
+            state
+            if state["history"]["revision"] == gradient_state["history"]["revision"] + 1
+            and paint_property(operation) != before_gradient
+            else None
+        )
+
+    stop_state = client.wait_until("Fill Paint Gradient stop edit", stop_edited)
+    stop_render = client.wait_until(
+        "Fill Paint Gradient stop Preview",
+        lambda: state
+        if (
+            (state := settled_preview_state(client, stop_state["history"]["revision"], frame))
+            and state["editor"]["preview"]["pixel_hash"]
+            != gradient_render["editor"]["preview"]["pixel_hash"]
+        )
+        else None,
+        timeout=30.0,
+    )
+    artifact_dir = pathlib.Path(
+        os.environ.get("RUVIE_QA_ARTIFACT_DIR", "target/qa-appearance")
+    )
+    gradient_capture = capture_viewport(
+        client, artifact_dir / "fill-paint-gradient-stop.png"
+    )
+    client.click_component(control_id + ".paint.value")
+    history_shortcut(client)
+    stop_undo = client.wait_until(
+        "Fill Paint Gradient stop Undo",
+        lambda: state
+        if (
+            (state := client.state())["history"]["revision"]
+            == stop_state["history"]["revision"] + 1
+            and state["project"] == gradient_state["project"]
+        )
+        else None,
+    )
+    client.wait_until(
+        "Fill Paint Gradient stop Undo Preview",
+        lambda: state
+        if (
+            (state := settled_preview_state(client, stop_undo["history"]["revision"], frame))
+            and state["editor"]["preview"]["pixel_hash"]
+            == gradient_render["editor"]["preview"]["pixel_hash"]
+        )
+        else None,
+        timeout=30.0,
+    )
+    interaction["pattern"] = select_paint_kind(
+        client, control_id, "gradient", "pattern"
+    )
+
+    def pattern_selected():
+        state = client.state()
+        operation = next(
+            candidate
+            for candidate in _appearance(state, item_id)
+            if candidate["id"] == fill["id"]
+        )
+        return (
+            state
+            if state["history"]["revision"] == stop_undo["history"]["revision"] + 1
+            and paint_property(operation)["kind"] == "pattern"
+            else None
+        )
+
+    pattern_state = client.wait_until("Fill Paint Pattern selection", pattern_selected)
+    pattern_render = client.wait_until(
+        "Fill Paint Pattern Preview",
+        lambda: state
+        if (
+            (state := settled_preview_state(client, pattern_state["history"]["revision"], frame))
+            and state["editor"]["preview"]["pixel_hash"]
+            != gradient_render["editor"]["preview"]["pixel_hash"]
+        )
+        else None,
+        timeout=30.0,
+    )
+    pattern_capture = capture_viewport(
+        client, artifact_dir / "fill-paint-pattern.png"
+    )
+    history_shortcut(client)
+    pattern_undo = client.wait_until(
+        "Fill Paint Pattern Undo",
+        lambda: state
+        if (
+            (state := client.state())["history"]["revision"]
+            == pattern_state["history"]["revision"] + 1
+            and state["project"] == gradient_state["project"]
+        )
+        else None,
+    )
+    restored_render = client.wait_until(
+        "Fill Paint Pattern Undo Preview",
+        lambda: state
+        if (
+            (state := settled_preview_state(client, pattern_undo["history"]["revision"], frame))
+            and state["editor"]["preview"]["pixel_hash"]
+            == gradient_render["editor"]["preview"]["pixel_hash"]
+        )
+        else None,
+        timeout=30.0,
+    )
+    return pattern_undo, restored_render, {
+        "control_id": control_id,
+        "interaction": interaction,
+        "solid": solid,
+        "gradient": before_gradient,
+        "stop": stop,
+        "captures": {
+            "gradient_stop": gradient_capture,
+            "pattern": pattern_capture,
+        },
+        "pixel_hashes": {
+            "solid": before["editor"]["preview"]["pixel_hash"],
+            "gradient": gradient_render["editor"]["preview"]["pixel_hash"],
+            "stop_edited": stop_render["editor"]["preview"]["pixel_hash"],
+            "pattern": pattern_render["editor"]["preview"]["pixel_hash"],
+        },
+    }
+
+
 def run_suite(client):
     client.wait_health()
     initial = client.state()
@@ -130,6 +301,10 @@ def run_suite(client):
         lambda: settled_preview_state(client, before["history"]["revision"], frame),
         timeout=30.0,
     )
+    before, baseline, fill_paint = _exercise_fill_paint(
+        client, item_id, original_operations[0], baseline, frame
+    )
+    original_operations = _appearance(before, item_id)
 
     choice_metadata, available_styles = _add_style(
         client, item_id, "drop shadow", "drop_shadow"
@@ -586,13 +761,19 @@ def run_suite(client):
             == pattern_undo["history"]["revision"] + 1
             and len(state["project"]["palette"]["definitions"]) == palette_count + 1
             and any(
-                definition.get("paint", {}).get("kind") == "pattern"
+                definition.get("paint", {}).get("$type") == "paint_value"
+                and definition.get("paint", {}).get("kind") == "pattern"
                 for definition in state["project"]["palette"]["definitions"].values()
             )
         )
         else None,
     )
     client.click_component(pattern_control)
+    palette_pattern = next(
+        canonical_paint_value(definition.get("paint"), "Project Palette Paint")
+        for definition in palette_state["project"]["palette"]["definitions"].values()
+        if definition.get("paint", {}).get("kind") == "pattern"
+    )
     persistence = exercise_appearance_persistence(
         client,
         item_id,
@@ -627,7 +808,9 @@ def run_suite(client):
             "palette_definition_count": len(
                 palette_state["project"]["palette"]["definitions"]
             ),
+            "palette_pattern": palette_pattern,
         },
+        "fill_paint": fill_paint,
         "preview_hashes": {
             "baseline": baseline["editor"]["preview"]["pixel_hash"],
             "added": added_render["editor"]["preview"]["pixel_hash"],

@@ -105,11 +105,11 @@ fn appearance_property_uses_the_operation_property_owner_and_preserves_stack_ide
             &plugins,
             item_id,
             fill_id,
-            "color",
+            "paint",
             MediaTime::zero(),
-            PropertyValue::ColorValue(authored.clone()),
+            PropertyValue::Paint(crate::model::property::Paint::Solid(authored.clone())),
         )
-        .expect("set Fill color");
+        .expect("set Fill paint");
 
     let snapshot = service.snapshot().expect("snapshot");
     let appearance = operations(&snapshot, item_id);
@@ -118,9 +118,11 @@ fn appearance_property_uses_the_operation_property_owner_and_preserves_stack_ide
     assert_eq!(
         appearance[0]
             .properties
-            .get("color")
+            .get("paint")
             .and_then(crate::model::property::Property::value),
-        Some(&PropertyValue::ColorValue(authored))
+        Some(&PropertyValue::Paint(crate::model::property::Paint::Solid(
+            authored
+        )))
     );
     assert!(
         snapshot.items[&item_id]

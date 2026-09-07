@@ -55,7 +55,11 @@ fn setup_project(
 ) -> Result<(Project, Uuid)> {
     let mut stroke = plugins.create_style_operation_node("stroke")?;
     set(&mut stroke, "width", 5.0.into())?;
-    set(&mut stroke, "color", PropertyValue::Color(Color::white()))?;
+    set(
+        &mut stroke,
+        "paint",
+        PropertyValue::Paint(Color::white().into()),
+    )?;
     set(
         &mut stroke,
         "dash_array",

@@ -45,9 +45,9 @@ fn vec2(x: f64, y: f64) -> PropertyValue {
 fn fill(plugins: &PluginManager, color: Color) -> AppearanceOperation {
     let mut fill = AppearanceOperationFactory::create(plugins, "fill").expect("Fill style");
     fill.properties.set(
-        "color".to_string(),
-        Property::constant(PropertyValue::ColorValue(ColorValue::from_straight_srgba8(
-            &color,
+        "paint".to_string(),
+        Property::constant(PropertyValue::Paint(crate::model::property::Paint::Solid(
+            ColorValue::from_straight_srgba8(&color),
         ))),
     );
     fill
@@ -56,9 +56,9 @@ fn fill(plugins: &PluginManager, color: Color) -> AppearanceOperation {
 fn stroke(plugins: &PluginManager, color: Color, width: f64) -> AppearanceOperation {
     let mut stroke = AppearanceOperationFactory::create(plugins, "stroke").expect("Stroke style");
     stroke.properties.set(
-        "color".to_string(),
-        Property::constant(PropertyValue::ColorValue(ColorValue::from_straight_srgba8(
-            &color,
+        "paint".to_string(),
+        Property::constant(PropertyValue::Paint(crate::model::property::Paint::Solid(
+            ColorValue::from_straight_srgba8(&color),
         ))),
     );
     stroke.properties.set(
@@ -170,9 +170,11 @@ fn text_source_ensemble_and_pre_effect_convert_with_pixel_parity_and_one_undo() 
             plugins.as_ref(),
             item_id,
             text_fill_id,
-            "color",
+            "paint",
             MediaTime::zero(),
-            PropertyValue::ColorValue(ColorValue::from_straight_srgba8(&color(245, 120, 30, 255))),
+            PropertyValue::Paint(crate::model::property::Paint::Solid(
+                ColorValue::from_straight_srgba8(&color(245, 120, 30, 255)),
+            )),
         )
         .unwrap();
     let (placement_key_a, _) = service
@@ -460,9 +462,11 @@ fn shape_and_image_sources_keep_raster_parity() {
                     item_id: shape_id,
                     operation_id: shape_fill_id,
                 },
-                "color".to_string(),
+                "paint".to_string(),
                 MediaTime::from_whole_seconds(seconds),
-                PropertyValue::ColorValue(ColorValue::from_straight_srgba8(&value)),
+                PropertyValue::Paint(crate::model::property::Paint::Solid(
+                    ColorValue::from_straight_srgba8(&value),
+                )),
                 None,
             )
             .unwrap();

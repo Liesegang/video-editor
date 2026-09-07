@@ -16,8 +16,8 @@ mod ui_type;
 pub use color_value::{ColorSpaceRef, ColorValue, ColorValueError};
 pub use evaluation::PropertySampleError;
 pub use paint::{
-    GradientGeometry, GradientSpread, GradientStop, GradientValue, PaintValueError, PatternKind,
-    PatternValue,
+    GradientGeometry, GradientSpread, GradientStop, GradientValue, Paint, PaintValueError,
+    PatternKind, PatternValue,
 };
 pub use ui_type::PropertyUiType;
 pub use value::{PropertyValue, TryGetProperty, Vec2, Vec3, Vec4};
@@ -856,6 +856,26 @@ impl PropertyDefinition {
             _ => {}
         }
         Ok(())
+    }
+
+    /// Normalize the lossless graph-value injections accepted by this
+    /// property's typed input, then validate the canonical authored value.
+    /// Persistent defaults and keyframes remain canonical; only evaluated
+    /// connections cross this boundary.
+    pub fn coerce_evaluated_value(&self, value: &PropertyValue) -> Result<PropertyValue, String> {
+        let value = match (&self.ui_type, value) {
+            (PropertyUiType::ColorValue, PropertyValue::Color(color)) => {
+                PropertyValue::ColorValue(ColorValue::from_straight_srgba8(color))
+            }
+            (PropertyUiType::Paint, value) => Paint::from_property_value(value)
+                .map(PropertyValue::Paint)
+                .ok_or_else(|| {
+                    format!("Property '{}' expects Paint, got {:?}", self.name, value)
+                })?,
+            _ => value.clone(),
+        };
+        self.validate_value(&value)?;
+        Ok(value)
     }
 
     /// Validate one complete persisted Property against this canonical

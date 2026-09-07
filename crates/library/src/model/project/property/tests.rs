@@ -262,3 +262,27 @@ fn vector_validation_enforces_finite_and_hard_bounds_componentwise() {
         .is_err()
     );
 }
+
+#[test]
+fn paint_definition_coerces_only_lossless_evaluated_variant_injections() {
+    let definition = PropertyDefinition::new(
+        "paint",
+        PropertyUiType::Paint,
+        "Paint",
+        PropertyValue::Paint(Paint::default()),
+    );
+    let gradient = PropertyValue::Gradient(GradientValue::default());
+    assert!(
+        definition.validate_value(&gradient).is_err(),
+        "persisted Paint properties must retain their canonical envelope"
+    );
+    assert_eq!(
+        definition.coerce_evaluated_value(&gradient).unwrap(),
+        PropertyValue::Paint(Paint::Gradient(GradientValue::default()))
+    );
+    assert!(
+        definition
+            .coerce_evaluated_value(&PropertyValue::Number(OrderedFloat(0.5)))
+            .is_err()
+    );
+}

@@ -3274,7 +3274,7 @@ Fill:
   operation_category: style
   component_id: fill
   operation: style.apply.v1
-  description: Rasterize one Shape with a fill; owns the Shape branch's base opacity
+  description: Rasterize one Shape with Solid, Gradient, or Pattern Paint and independent opacity
   inputs:
     - name: time
       key: time
@@ -3283,17 +3283,17 @@ Fill:
       side: Left
       exposure: Graph
       multiplicity: Single
-    - name: color
-      key: property:color
-      label: Color
-      type: Color
+    - name: paint
+      key: property:paint
+      label: Paint
+      type: Paint
       side: Left
       exposure: Graph
       multiplicity: Single
-      property: color
+      property: paint
       property_metadata:
-        ui_type: ColorValue
-        default: { space: srgb, r: 1.0, g: 1.0, b: 1.0, a: 1.0 }
+        ui_type: Paint
+        default: '{"$type":"paint_value","kind":"solid","value":{"$type":"color_value","space":"srgb","rgba":[1.0,1.0,1.0,1.0]}}'
     - name: opacity
       key: property:opacity
       label: Opacity
@@ -4097,7 +4097,7 @@ Stroke:
   operation_category: style
   component_id: stroke
   operation: style.apply.v1
-  description: Rasterize one Shape with a stroke; owns the Shape branch's base opacity
+  description: Rasterize one Shape's stroke with Solid, Gradient, or Pattern Paint and independent opacity
   inputs:
     - name: time
       key: time
@@ -4106,17 +4106,17 @@ Stroke:
       side: Left
       exposure: Graph
       multiplicity: Single
-    - name: color
-      key: property:color
-      label: Color
-      type: Color
+    - name: paint
+      key: property:paint
+      label: Paint
+      type: Paint
       side: Left
       exposure: Graph
       multiplicity: Single
-      property: color
+      property: paint
       property_metadata:
-        ui_type: ColorValue
-        default: { space: srgb, r: 1.0, g: 1.0, b: 1.0, a: 1.0 }
+        ui_type: Paint
+        default: '{"$type":"paint_value","kind":"solid","value":{"$type":"color_value","space":"srgb","rgba":[1.0,1.0,1.0,1.0]}}'
     - name: width
       key: property:width
       label: Width

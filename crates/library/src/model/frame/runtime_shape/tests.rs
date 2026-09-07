@@ -87,7 +87,8 @@ fn ensemble_decoration_outset_is_applied_after_element_scale() {
         StyleConfig {
             id: Uuid::new_v4(),
             style: DrawStyle::Fill {
-                color: Color::white(),
+                paint: (Color::white()).into(),
+                opacity: 1.0,
                 offset: 0.0,
             },
         },
@@ -180,7 +181,8 @@ fn canonical_conic_bounds_do_not_use_the_quadratic_svg_fallback() -> Result<(), 
     let style = StyleConfig {
         id: Uuid::new_v4(),
         style: DrawStyle::Fill {
-            color: Color::white(),
+            paint: (Color::white()).into(),
+            opacity: 1.0,
             offset: 0.0,
         },
     };
@@ -212,7 +214,7 @@ fn canonical_conic_bounds_do_not_use_the_quadratic_svg_fallback() -> Result<(), 
     };
     assert!(matches!(
         styles.first().map(|style| &style.style),
-        Some(DrawStyle::Fill { color, .. }) if color.a == 255
+        Some(DrawStyle::Fill { paint: crate::model::property::Paint::Solid(color), opacity, .. }) if color.rgba()[3] == 1.0 && *opacity == 1.0
     ));
     Ok(())
 }

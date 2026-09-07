@@ -5,11 +5,156 @@ use serde::de::Error as _;
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use super::{ColorValue, Vec2};
+use super::{ColorValue, PropertyValue, Vec2};
 
 const PROPERTY_TYPE_FIELD: &str = "$type";
 const GRADIENT_VALUE_TAG: &str = "gradient_value";
 const PATTERN_VALUE_TAG: &str = "pattern_value";
+const PAINT_VALUE_TAG: &str = "paint_value";
+
+/// A reusable authored paint. Every variant retains managed colors and exact
+/// typed geometry; consumers never flatten Gradient or Pattern to a
+/// representative Solid swatch.
+#[derive(Clone, PartialEq, Eq, Debug, Hash)]
+pub enum Paint {
+    Solid(ColorValue),
+    Gradient(GradientValue),
+    Pattern(PatternValue),
+}
+
+impl Default for Paint {
+    fn default() -> Self {
+        Self::Solid(ColorValue::from_straight_srgba8(
+            &crate::model::frame::color::Color::white(),
+        ))
+    }
+}
+
+impl Serialize for Paint {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let (kind, value) = match self {
+            Self::Solid(value) => ("solid", serde_json::to_value(value)),
+            Self::Gradient(value) => ("gradient", serde_json::to_value(value)),
+            Self::Pattern(value) => ("pattern", serde_json::to_value(value)),
+        };
+        let mut state = serializer.serialize_struct("Paint", 3)?;
+        state.serialize_field(PROPERTY_TYPE_FIELD, PAINT_VALUE_TAG)?;
+        state.serialize_field("kind", kind)?;
+        state.serialize_field("value", &value.map_err(serde::ser::Error::custom)?)?;
+        state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for Paint {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Wire {
+            #[serde(rename = "$type")]
+            value_type: String,
+            kind: String,
+            value: serde_json::Value,
+        }
+
+        let wire = Wire::deserialize(deserializer)?;
+        if wire.value_type != PAINT_VALUE_TAG {
+            return Err(D::Error::custom(format!(
+                "paint value tag must be {PAINT_VALUE_TAG:?}, got {:?}",
+                wire.value_type
+            )));
+        }
+        match wire.kind.as_str() {
+            "solid" => serde_json::from_value(wire.value)
+                .map(Self::Solid)
+                .map_err(D::Error::custom),
+            "gradient" => serde_json::from_value(wire.value)
+                .map(Self::Gradient)
+                .map_err(D::Error::custom),
+            "pattern" => serde_json::from_value(wire.value)
+                .map(Self::Pattern)
+                .map_err(D::Error::custom),
+            kind => Err(D::Error::custom(format!(
+                "unknown paint value kind {kind:?}"
+            ))),
+        }
+    }
+}
+
+impl From<ColorValue> for Paint {
+    fn from(value: ColorValue) -> Self {
+        Self::Solid(value)
+    }
+}
+
+impl From<crate::model::frame::color::Color> for Paint {
+    fn from(value: crate::model::frame::color::Color) -> Self {
+        Self::Solid(ColorValue::from_straight_srgba8(&value))
+    }
+}
+
+impl From<GradientValue> for Paint {
+    fn from(value: GradientValue) -> Self {
+        Self::Gradient(value)
+    }
+}
+
+impl From<PatternValue> for Paint {
+    fn from(value: PatternValue) -> Self {
+        Self::Pattern(value)
+    }
+}
+
+impl Paint {
+    /// Lossless one-way injection from a concrete graph value into Paint.
+    /// Paint is never flattened back to a representative Color or Gradient.
+    pub fn from_property_value(value: &PropertyValue) -> Option<Self> {
+        match value {
+            PropertyValue::Paint(paint) => Some(paint.clone()),
+            PropertyValue::ColorValue(color) => Some(Self::Solid(color.clone())),
+            PropertyValue::Color(color) => {
+                Some(Self::Solid(ColorValue::from_straight_srgba8(color)))
+            }
+            PropertyValue::Gradient(gradient) => Some(Self::Gradient(gradient.clone())),
+            PropertyValue::Pattern(pattern) => Some(Self::Pattern(pattern.clone())),
+            PropertyValue::Integer(_)
+            | PropertyValue::Number(_)
+            | PropertyValue::String(_)
+            | PropertyValue::Boolean(_)
+            | PropertyValue::Vec2(_)
+            | PropertyValue::Vec3(_)
+            | PropertyValue::Vec4(_)
+            | PropertyValue::Path(_)
+            | PropertyValue::Array(_)
+            | PropertyValue::Map(_)
+            | PropertyValue::OpaqueJson(_) => None,
+        }
+    }
+
+    /// Interpolate only the existing managed Solid-color case. Structural
+    /// paints and changes between variants retain keyframe step semantics.
+    pub fn interpolate_solid(&self, end: &Self, t: f64) -> Option<Self> {
+        match (self, end) {
+            (Self::Solid(start), Self::Solid(end)) => {
+                start.interpolate_same_space(end, t).map(Self::Solid)
+            }
+            _ => None,
+        }
+    }
+}
+
+pub(crate) fn has_paint_value_tag_json(value: &serde_json::Value) -> bool {
+    value
+        .as_object()
+        .and_then(|object| object.get(PROPERTY_TYPE_FIELD))
+        .and_then(serde_json::Value::as_str)
+        == Some(PAINT_VALUE_TAG)
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -209,6 +354,30 @@ pub struct PatternValue {
     phase: Vec2,
     angle: OrderedFloat<f64>,
     duty: OrderedFloat<f64>,
+}
+
+impl Default for PatternValue {
+    fn default() -> Self {
+        Self {
+            kind: PatternKind::Checker,
+            foreground: ColorValue::from_straight_srgba8(
+                &crate::model::frame::color::Color::white(),
+            ),
+            background: ColorValue::from_straight_srgba8(
+                &crate::model::frame::color::Color::black(),
+            ),
+            scale: Vec2 {
+                x: OrderedFloat(32.0),
+                y: OrderedFloat(32.0),
+            },
+            phase: Vec2 {
+                x: OrderedFloat(0.0),
+                y: OrderedFloat(0.0),
+            },
+            angle: OrderedFloat(0.0),
+            duty: OrderedFloat(0.5),
+        }
+    }
 }
 
 impl PatternValue {
@@ -468,6 +637,91 @@ mod tests {
         assert_eq!(
             value.stops()[1].color(),
             &ColorValue::from_straight_srgba8(&crate::model::frame::color::Color::white())
+        );
+    }
+
+    #[test]
+    fn shared_pattern_default_preserves_the_bundled_checker() {
+        let value = PatternValue::default();
+        assert_eq!(value.kind(), PatternKind::Checker);
+        assert_eq!(
+            value.foreground(),
+            &ColorValue::from_straight_srgba8(&crate::model::frame::color::Color::white())
+        );
+        assert_eq!(
+            value.background(),
+            &ColorValue::from_straight_srgba8(&crate::model::frame::color::Color::black())
+        );
+        assert_eq!(value.scale(), point(32.0, 32.0));
+        assert_eq!(value.phase(), point(0.0, 0.0));
+        assert_eq!(value.angle(), 0.0);
+        assert_eq!(value.duty(), 0.5);
+    }
+
+    #[test]
+    fn paint_property_round_trip_and_injections_preserve_the_selected_variant() {
+        let solid = Paint::from(color(0.75));
+        let property = PropertyValue::Paint(solid.clone());
+        let encoded = serde_json::to_value(&property).unwrap();
+        assert_eq!(encoded["$type"], "paint_value");
+        assert_eq!(encoded["kind"], "solid");
+        assert_eq!(
+            serde_json::from_value::<PropertyValue>(encoded).unwrap(),
+            property
+        );
+        assert_eq!(Paint::from_property_value(&property), Some(solid));
+        assert!(matches!(
+            Paint::from_property_value(&PropertyValue::Gradient(GradientValue::default())),
+            Some(Paint::Gradient(_))
+        ));
+        assert!(matches!(
+            Paint::from_property_value(&PropertyValue::Pattern(PatternValue::default())),
+            Some(Paint::Pattern(_))
+        ));
+    }
+
+    #[test]
+    fn malformed_paint_envelopes_are_preserved_as_opaque_json() {
+        let malformed = serde_json::json!({
+            "$type": "paint_value",
+            "kind": "solid",
+            "value": color(0.5),
+            "unexpected": true,
+        });
+        assert_eq!(
+            serde_json::from_value::<PropertyValue>(malformed.clone()).unwrap(),
+            PropertyValue::OpaqueJson(malformed)
+        );
+        assert!(
+            serde_json::from_value::<Paint>(serde_json::json!({
+                "kind": "solid",
+                "value": color(0.5),
+            }))
+            .is_err(),
+            "canonical Paint must require its explicit type tag"
+        );
+    }
+
+    #[test]
+    fn paint_interpolation_preserves_solid_color_and_steps_structural_variants() {
+        let start = PropertyValue::Paint(Paint::Solid(color(0.0)));
+        let end = PropertyValue::Paint(Paint::Solid(color(1.0)));
+        let PropertyValue::Paint(Paint::Solid(middle)) =
+            PropertyValue::interpolate(&start, &end, 0.5)
+        else {
+            panic!("Solid Paint interpolation changed type");
+        };
+        assert_eq!(middle.rgba(), [0.5, 0.25, 0.5, 1.0]);
+
+        let gradient = PropertyValue::Paint(Paint::Gradient(GradientValue::default()));
+        let pattern = PropertyValue::Paint(Paint::Pattern(PatternValue::default()));
+        assert_eq!(
+            PropertyValue::interpolate(&gradient, &pattern, 0.5),
+            gradient
+        );
+        assert_eq!(
+            PropertyValue::interpolate(&gradient, &pattern, 1.0),
+            pattern
         );
     }
 

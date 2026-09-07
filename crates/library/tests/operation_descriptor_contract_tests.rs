@@ -159,7 +159,7 @@ fn bundled_fill_descriptor_keeps_its_persisted_port_contract() {
         descriptor.declared_ports(),
         &[
             PortDefinition::input(TIME_PORT, "Time", PortDataType::Number),
-            PortDefinition::input(&property_port_key("color"), "Color", PortDataType::Color),
+            PortDefinition::input(&property_port_key("paint"), "Paint", PortDataType::Paint),
             PortDefinition::input(
                 &property_port_key("opacity"),
                 "Opacity",

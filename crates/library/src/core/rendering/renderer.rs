@@ -245,14 +245,39 @@ impl WorkingSurfaceContract {
         color: &Color,
         opacity: f32,
     ) -> Result<[f32; 4], LibraryError> {
-        let alpha = (f32::from(color.a) / 255.0 * opacity).clamp(0.0, 1.0);
-        let rgb = self
-            .authoring_to_working
-            .transform_rgb([
+        self.authoring_srgb_to_working(
+            [
                 f64::from(color.r) / 255.0,
                 f64::from(color.g) / 255.0,
                 f64::from(color.b) / 255.0,
-            ])
+            ],
+            f64::from(color.a) / 255.0,
+            opacity,
+        )
+    }
+
+    pub(crate) fn authored_paint_color_to_working(
+        &self,
+        color: &crate::model::property::ColorValue,
+        opacity: f32,
+    ) -> Result<[f32; 4], LibraryError> {
+        let [r, g, b, alpha] =
+            crate::color_management::to_display_srgb(color).map_err(|error| {
+                LibraryError::Render(format!("cannot convert Paint color: {error}"))
+            })?;
+        self.authoring_srgb_to_working([r, g, b], alpha, opacity)
+    }
+
+    fn authoring_srgb_to_working(
+        &self,
+        rgb: [f64; 3],
+        alpha: f64,
+        opacity: f32,
+    ) -> Result<[f32; 4], LibraryError> {
+        let alpha = (alpha * f64::from(opacity)).clamp(0.0, 1.0) as f32;
+        let rgb = self
+            .authoring_to_working
+            .transform_rgb(rgb)
             .map_err(|error| {
                 LibraryError::Render(format!(
                     "cannot convert an authored sRGB color into Project working space '{}': {error}",

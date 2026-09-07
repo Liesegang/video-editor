@@ -66,26 +66,32 @@ fn explicit_shape_effector_style_merge_keeps_straight_alpha_and_bounds() -> AnyR
             "fill" => {
                 set_constant(
                     node,
-                    "color",
-                    PropertyValue::Color(Color {
-                        r: 240,
-                        g: 70,
-                        b: 20,
-                        a: 160,
-                    }),
+                    "paint",
+                    PropertyValue::Paint(
+                        Color {
+                            r: 240,
+                            g: 70,
+                            b: 20,
+                            a: 160,
+                        }
+                        .into(),
+                    ),
                 );
                 set_constant(node, "opacity", 0.75.into());
             }
             "stroke" => {
                 set_constant(
                     node,
-                    "color",
-                    PropertyValue::Color(Color {
-                        r: 20,
-                        g: 80,
-                        b: 245,
-                        a: 176,
-                    }),
+                    "paint",
+                    PropertyValue::Paint(
+                        Color {
+                            r: 20,
+                            g: 80,
+                            b: 245,
+                            a: 176,
+                        }
+                        .into(),
+                    ),
                 );
                 set_constant(node, "opacity", 0.8.into());
             }

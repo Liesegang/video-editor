@@ -675,6 +675,7 @@ pub fn property_ui_type_to_port_data_type(ui_type: &PropertyUiType) -> PortDataT
         PropertyUiType::Path => PortDataType::Path,
         PropertyUiType::Gradient => PortDataType::Gradient,
         PropertyUiType::Pattern => PortDataType::Pattern,
+        PropertyUiType::Paint => PortDataType::Paint,
         PropertyUiType::Text
         | PropertyUiType::MultilineText
         | PropertyUiType::Dropdown { .. }

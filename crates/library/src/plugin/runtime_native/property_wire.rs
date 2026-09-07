@@ -99,6 +99,7 @@ pub(super) fn property_views(
                 PropertyValue::Path(_)
                 | PropertyValue::Gradient(_)
                 | PropertyValue::Pattern(_)
+                | PropertyValue::Paint(_)
                 | PropertyValue::Array(_)
                 | PropertyValue::Map(_)
                 | PropertyValue::OpaqueJson(_) => {
@@ -185,6 +186,7 @@ pub(super) fn property_value_to_wire(
         PropertyValue::Path(_)
         | PropertyValue::Gradient(_)
         | PropertyValue::Pattern(_)
+        | PropertyValue::Paint(_)
         | PropertyValue::Array(_)
         | PropertyValue::Map(_) => {
             Err("path, paint, array, and map values are not supported by ABI v1")

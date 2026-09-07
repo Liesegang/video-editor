@@ -12,6 +12,7 @@ from qa_support import (
     run_suite_main,
     seek_timeline_seconds,
 )
+from qa_appearance_support import canonical_paint_value
 
 
 INSPECTOR_TAB_ID = "dock.tab:inspector"
@@ -210,7 +211,12 @@ def _add_current(client, before, expected_color, expected_count):
     palette = _palette(state["project"])
     definition_id = palette["ungrouped_order"][-1]
     definition = palette["definitions"][definition_id]
-    if definition["paint"] != {"kind": "solid", "value": expected_color}:
+    paint = canonical_paint_value(definition.get("paint"), "Project Palette Paint")
+    if paint != {
+        "$type": "paint_value",
+        "kind": "solid",
+        "value": expected_color,
+    }:
         raise QaFailure("Add Current did not preserve the managed ColorValue")
     return state, definition_id
 
@@ -509,7 +515,13 @@ def _exercise_node_editor_palette(
     _place_node_for_inline_edit(client, node_id, property_id)
     initial_color = _node_property_value(created_definition, node_id, "color")
     candidates = [
-        (definition_id, palette_before["definitions"][definition_id]["paint"]["value"])
+        (
+            definition_id,
+            canonical_paint_value(
+                palette_before["definitions"][definition_id].get("paint"),
+                "Project Palette Paint",
+            )["value"],
+        )
         for definition_id in (second_id, first_id)
     ]
     paint_id, expected_color = next(

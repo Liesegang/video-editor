@@ -316,32 +316,24 @@ impl<'a> FrameEvaluationContext<'a> {
     ) -> Option<HashMap<String, PropertyValue>> {
         let mut evaluated = HashMap::with_capacity(definitions.len());
         for definition in definitions {
-            let Some(mut value) = self.evaluate_key(properties, definition.name(), time) else {
+            let Some(value) = self.evaluate_key(properties, definition.name(), time) else {
                 log::warn!(
                     "{operation_label} property {} is missing or produced NoOutput",
                     definition.name()
                 );
                 return None;
             };
-            if matches!(
-                definition.ui_type(),
-                crate::model::property::PropertyUiType::ColorValue
-            ) && let PropertyValue::Color(color) = &value
-            {
-                // Persisted pre-v1 Style values are adapted losslessly at the
-                // read boundary. Authoritative Project state is not mutated.
-                value = PropertyValue::ColorValue(
-                    crate::model::property::ColorValue::from_straight_srgba8(color),
-                );
-            }
-            if let Err(error) = definition.validate_value(&value) {
-                log::warn!(
-                    "{operation_label} property {} evaluated to an invalid value: {}",
-                    definition.name(),
-                    error
-                );
-                return None;
-            }
+            let value = match definition.coerce_evaluated_value(&value) {
+                Ok(value) => value,
+                Err(error) => {
+                    log::warn!(
+                        "{operation_label} property {} evaluated to an invalid value: {}",
+                        definition.name(),
+                        error
+                    );
+                    return None;
+                }
+            };
             evaluated.insert(definition.name().to_string(), value);
         }
         Some(evaluated)

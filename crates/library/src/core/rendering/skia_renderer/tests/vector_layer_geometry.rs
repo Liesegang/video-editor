@@ -19,7 +19,11 @@ fn style(style: DrawStyle) -> StyleConfig {
 }
 
 fn fill(color: Color) -> StyleConfig {
-    style(DrawStyle::Fill { color, offset: 0.0 })
+    style(DrawStyle::Fill {
+        paint: solid_paint(color),
+        opacity: 1.0,
+        offset: 0.0,
+    })
 }
 
 fn shadow() -> StyleConfig {

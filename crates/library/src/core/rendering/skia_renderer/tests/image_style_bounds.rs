@@ -1,5 +1,4 @@
 use super::*;
-use crate::model::frame::draw_type::{GradientStyle, GradientStyleStop};
 use crate::model::frame::entity::FrameBounds;
 use crate::model::frame::image_bounds::FrameImageBounds;
 use crate::model::property::{GradientGeometry, GradientSpread, Vec2};
@@ -72,23 +71,14 @@ fn image_gradient_uses_supplied_ink_bounds_instead_of_the_surface_extent() {
     let style = StyleConfig {
         id: Uuid::new_v4(),
         style: DrawStyle::GradientOverlay {
-            gradient: GradientStyle {
-                geometry: GradientGeometry::Linear {
+            gradient: gradient_value(
+                GradientGeometry::Linear {
                     start: point(0.0, 0.5),
                     end: point(1.0, 0.5),
                 },
-                spread: GradientSpread::Pad,
-                stops: vec![
-                    GradientStyleStop {
-                        offset: OrderedFloat(0.0),
-                        color: opaque(255, 0, 0),
-                    },
-                    GradientStyleStop {
-                        offset: OrderedFloat(1.0),
-                        color: opaque(0, 0, 255),
-                    },
-                ],
-            },
+                GradientSpread::Pad,
+                &[(0.0, opaque(255, 0, 0)), (1.0, opaque(0, 0, 255))],
+            ),
             opacity: 1.0,
             blend_mode: BlendMode::Normal,
         },

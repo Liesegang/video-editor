@@ -126,6 +126,10 @@ impl NodeListPropertyMetadata {
                 self.reject_non_scalar_metadata(context)?;
                 PropertyUiType::Pattern
             }
+            "Paint" => {
+                self.reject_non_scalar_metadata(context)?;
+                PropertyUiType::Paint
+            }
             "Color" => {
                 self.reject_non_scalar_metadata(context)?;
                 PropertyUiType::Color
@@ -359,7 +363,7 @@ fn parse_property_default(
                 .map(PropertyValue::ColorValue)
                 .map_err(|error| format!("{context}: invalid ColorValue default: {error}"))
         }
-        PropertyUiType::Gradient | PropertyUiType::Pattern => {
+        PropertyUiType::Gradient | PropertyUiType::Pattern | PropertyUiType::Paint => {
             let parsed = serde_json::from_str::<PropertyValue>(value)
                 .map_err(|error| format!("{context}: invalid structured Paint default: {error}"))?;
             if parsed.is_compatible_with(ui_type) {

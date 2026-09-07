@@ -1,15 +1,13 @@
 use super::*;
-use crate::model::frame::draw_type::{
-    BevelDirection, BevelStyle, BevelTechnique, GradientStyle, GradientStyleStop, PatternStyle,
-};
+use crate::model::frame::draw_type::{BevelDirection, BevelStyle, BevelTechnique};
 use crate::model::frame::entity::FramePathPart;
-use crate::model::property::{GradientGeometry, GradientSpread, PatternKind, Vec2};
+use crate::model::property::{GradientGeometry, GradientSpread, PatternKind, PatternValue, Vec2};
 use ordered_float::OrderedFloat;
 
 const WIDTH: usize = 72;
 const HEIGHT: usize = 72;
 
-fn render_shape(styles: Vec<DrawStyle>) -> Vec<[f32; 4]> {
+pub(super) fn render_shape(styles: Vec<DrawStyle>) -> Vec<[f32; 4]> {
     render_shape_with_transform(styles, Affine2D::IDENTITY)
 }
 
@@ -80,7 +78,7 @@ fn render_text_with_ensemble(styles: Vec<DrawStyle>, ensemble_enabled: bool) -> 
     render_text_content(styles, "T", ensemble)
 }
 
-fn render_text_content(
+pub(super) fn render_text_content(
     styles: Vec<DrawStyle>,
     text: &str,
     ensemble: Option<crate::core::ensemble::EnsembleData>,
@@ -121,7 +119,7 @@ fn render_text_content(
     output.pixels().pixels().to_vec()
 }
 
-fn pixel(pixels: &[[f32; 4]], x: usize, y: usize) -> [f32; 4] {
+pub(super) fn pixel(pixels: &[[f32; 4]], x: usize, y: usize) -> [f32; 4] {
     pixels[y * WIDTH + x]
 }
 
@@ -129,7 +127,7 @@ fn non_transparent_count(pixels: &[[f32; 4]]) -> usize {
     pixels.iter().filter(|pixel| pixel[3] > 0.002).count()
 }
 
-fn alpha_bounds(pixels: &[[f32; 4]]) -> (usize, usize, usize, usize) {
+pub(super) fn alpha_bounds(pixels: &[[f32; 4]]) -> (usize, usize, usize, usize) {
     let mut left = WIDTH;
     let mut top = HEIGHT;
     let mut right = 0;
@@ -151,16 +149,18 @@ fn alpha_bounds(pixels: &[[f32; 4]]) -> (usize, usize, usize, usize) {
     (left, top, right, bottom)
 }
 
-fn white_fill() -> DrawStyle {
+pub(super) fn white_fill() -> DrawStyle {
     DrawStyle::Fill {
-        color: Color::white(),
+        paint: solid_paint(Color::white()),
+        opacity: 1.0,
         offset: 0.0,
     }
 }
 
 fn stroke(color: Color, width: f64) -> DrawStyle {
     DrawStyle::Stroke {
-        color,
+        paint: solid_paint(color),
+        opacity: 1.0,
         width,
         offset: 0.0,
         cap: Default::default(),
@@ -171,14 +171,14 @@ fn stroke(color: Color, width: f64) -> DrawStyle {
     }
 }
 
-fn point(x: f64, y: f64) -> Vec2 {
+pub(super) fn point(x: f64, y: f64) -> Vec2 {
     Vec2 {
         x: OrderedFloat(x),
         y: OrderedFloat(y),
     }
 }
 
-fn opaque(r: u8, g: u8, b: u8) -> Color {
+pub(super) fn opaque(r: u8, g: u8, b: u8) -> Color {
     Color { r, g, b, a: 255 }
 }
 
@@ -199,23 +199,14 @@ fn color_gradient_and_pattern_overlays_render_real_masked_pixels() {
     let gradient = render_shape(vec![
         white_fill(),
         DrawStyle::GradientOverlay {
-            gradient: GradientStyle {
-                geometry: GradientGeometry::Linear {
+            gradient: gradient_value(
+                GradientGeometry::Linear {
                     start: point(20.0 / WIDTH as f64, 0.5),
                     end: point(44.0 / WIDTH as f64, 0.5),
                 },
-                spread: GradientSpread::Pad,
-                stops: vec![
-                    GradientStyleStop {
-                        offset: OrderedFloat(0.0),
-                        color: opaque(255, 0, 0),
-                    },
-                    GradientStyleStop {
-                        offset: OrderedFloat(1.0),
-                        color: opaque(0, 0, 255),
-                    },
-                ],
-            },
+                GradientSpread::Pad,
+                &[(0.0, opaque(255, 0, 0)), (1.0, opaque(0, 0, 255))],
+            ),
             opacity: 1.0,
             blend_mode: BlendMode::Normal,
         },
@@ -232,15 +223,16 @@ fn color_gradient_and_pattern_overlays_render_real_masked_pixels() {
     let pattern = render_shape(vec![
         white_fill(),
         DrawStyle::PatternOverlay {
-            pattern: PatternStyle {
-                kind: PatternKind::Stripes,
-                foreground: opaque(255, 255, 255),
-                background: opaque(0, 0, 0),
-                scale: point(8.0, 8.0),
-                phase: point(0.0, 0.0),
-                angle: OrderedFloat(0.0),
-                duty: OrderedFloat(0.5),
-            },
+            pattern: PatternValue::new(
+                PatternKind::Stripes,
+                managed_color(opaque(255, 255, 255)),
+                managed_color(opaque(0, 0, 0)),
+                point(8.0, 8.0),
+                point(0.0, 0.0),
+                0.0,
+                0.5,
+            )
+            .expect("valid test Pattern"),
             opacity: 1.0,
             blend_mode: BlendMode::Normal,
         },
@@ -465,12 +457,13 @@ fn image_effect_before_shape_has_transparent_input_and_does_not_reorder() {
 #[test]
 fn mask_comes_from_composed_fill_and_stroke_alpha() {
     let transparent_fill = DrawStyle::Fill {
-        color: Color {
+        paint: solid_paint(Color {
             r: 255,
             g: 255,
             b: 255,
             a: 0,
-        },
+        }),
+        opacity: 1.0,
         offset: 0.0,
     };
     let transparent = render_shape(vec![transparent_fill, red_shadow(8.0, 0.0)]);
@@ -480,7 +473,8 @@ fn mask_comes_from_composed_fill_and_stroke_alpha() {
     assert_eq!(pixel(&hollow, 32, 32), [0.0; 4]);
 
     let offset_fill = DrawStyle::Fill {
-        color: Color::white(),
+        paint: solid_paint(Color::white()),
+        opacity: 1.0,
         offset: 5.0,
     };
     let expanded = render_shape(vec![offset_fill, red_shadow(10.0, 0.0)]);
@@ -490,12 +484,13 @@ fn mask_comes_from_composed_fill_and_stroke_alpha() {
     );
 
     let half_fill = DrawStyle::Fill {
-        color: Color {
+        paint: solid_paint(Color {
             r: 255,
             g: 255,
             b: 255,
             a: 128,
-        },
+        }),
+        opacity: 1.0,
         offset: 0.0,
     };
     let partial = render_shape(vec![half_fill, red_shadow(10.0, 0.0)]);

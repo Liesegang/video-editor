@@ -210,12 +210,14 @@ fn verify_config_operations(
     if fill_config.id != fill.id
         || fill_config.style
             != (DrawStyle::Fill {
-                color: library::model::frame::color::Color {
+                paint: (library::model::frame::color::Color {
                     r: 255,
                     g: 128,
                     b: 32,
                     a: 255,
-                },
+                })
+                .into(),
+                opacity: 1.0,
                 offset: 2.0,
             })
     {
@@ -234,12 +236,14 @@ fn verify_config_operations(
     if stroke_config.id != stroke.id
         || stroke_config.style
             != (DrawStyle::Stroke {
-                color: library::model::frame::color::Color {
+                paint: (library::model::frame::color::Color {
                     r: 32,
                     g: 128,
                     b: 255,
                     a: 255,
-                },
+                })
+                .into(),
+                opacity: 1.0,
                 width: 3.0,
                 offset: 0.0,
                 cap: CapType::Round,
@@ -642,14 +646,10 @@ fn verify_runtime_config_graph(manager: &Arc<PluginManager>) -> anyhow::Result<(
             && matches!(
                 &style.style,
                 DrawStyle::Fill {
-                    color: library::model::frame::color::Color {
-                        r: 255,
-                        g: 128,
-                        b: 32,
-                        a: 255
-                    },
+                    paint,
+                    opacity: 1.0,
                     offset: 2.0
-                }
+                } if *paint == library::model::frame::color::Color { r: 255, g: 128, b: 32, a: 255 }.into()
             )
     }) {
         bail!("runtime Fill callback config did not reach the FrameItem")

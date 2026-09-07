@@ -24,7 +24,7 @@ use crate::model::frame::color::Color;
 use crate::model::node::Node;
 use crate::model::path::{FillRule, PathContour, PathPoint, PathSegment, PathValue};
 use crate::model::project::{IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, PortDataType};
-use crate::model::property::{ColorValue, Property, PropertyValue, Vec2};
+use crate::model::property::{ColorValue, Paint, Property, PropertyValue, Vec2};
 use crate::plugin::PluginManager;
 
 use super::{
@@ -585,8 +585,12 @@ fn default_fill(
 ) -> Result<crate::model::authoring::AppearanceOperation, LibraryError> {
     let mut fill = AppearanceOperationFactory::create(plugins, "fill")?;
     if let Some(color) = color {
-        fill.properties
-            .set("color".to_string(), Property::constant(color_value(color)));
+        fill.properties.set(
+            "paint".to_string(),
+            Property::constant(PropertyValue::Paint(Paint::Solid(
+                ColorValue::from_straight_srgba8(&color),
+            ))),
+        );
     }
     Ok(fill)
 }

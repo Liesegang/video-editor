@@ -30,6 +30,33 @@ use ruvie_color_management::{
 };
 use uuid::Uuid;
 
+fn managed_color(color: Color) -> crate::model::property::ColorValue {
+    crate::model::property::ColorValue::from_straight_srgba8(&color)
+}
+
+fn solid_paint(color: Color) -> crate::model::property::Paint {
+    crate::model::property::Paint::Solid(managed_color(color))
+}
+
+fn gradient_value(
+    geometry: crate::model::property::GradientGeometry,
+    spread: crate::model::property::GradientSpread,
+    stops: &[(f64, Color)],
+) -> crate::model::property::GradientValue {
+    crate::model::property::GradientValue::new(
+        geometry,
+        spread,
+        stops
+            .iter()
+            .map(|(offset, color)| {
+                crate::model::property::GradientStop::new(*offset, managed_color(color.clone()))
+                    .expect("valid test Gradient stop")
+            })
+            .collect(),
+    )
+    .expect("valid test Gradient")
+}
+
 #[cfg(all(feature = "gl", target_os = "windows"))]
 #[path = "tests/gpu_terminal.rs"]
 mod gpu_terminal;
@@ -44,6 +71,8 @@ mod layer_style_bounds;
 mod layer_styles;
 #[path = "tests/neutral_ensemble_text.rs"]
 mod neutral_ensemble_text;
+#[path = "tests/paint_materials.rs"]
+mod paint_materials;
 #[cfg(all(feature = "gl", target_os = "windows"))]
 #[path = "tests/particle_collision_gpu.rs"]
 mod particle_collision_gpu;
@@ -613,12 +642,13 @@ fn project_text_and_transformed_shape_rasterizers_keep_the_working_contract() {
     let styles = [StyleConfig {
         id: Uuid::new_v4(),
         style: DrawStyle::Fill {
-            color: Color {
+            paint: solid_paint(Color {
                 r: 0,
                 g: 255,
                 b: 0,
                 a: 255,
-            },
+            }),
+            opacity: 1.0,
             offset: 0.0,
         },
     }];

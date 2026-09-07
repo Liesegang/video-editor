@@ -111,7 +111,12 @@ pub(in crate::plugin::runtime_native) fn style_config_from_wire(
                 return Err(invalid("has an unsafe Fill offset"));
             }
             DrawStyle::Fill {
-                color: color_from_wire(color),
+                paint: crate::model::property::Paint::Solid(
+                    crate::model::property::ColorValue::from_straight_srgba8(&color_from_wire(
+                        color,
+                    )),
+                ),
+                opacity: 1.0,
                 offset,
             }
         }
@@ -134,7 +139,12 @@ pub(in crate::plugin::runtime_native) fn style_config_from_wire(
                 return Err(invalid("has invalid Stroke numeric fields"));
             }
             DrawStyle::Stroke {
-                color: color_from_wire(color),
+                paint: crate::model::property::Paint::Solid(
+                    crate::model::property::ColorValue::from_straight_srgba8(&color_from_wire(
+                        color,
+                    )),
+                ),
+                opacity: 1.0,
                 width,
                 offset,
                 cap: match cap {

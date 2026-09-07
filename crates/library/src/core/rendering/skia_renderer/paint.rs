@@ -6,12 +6,14 @@ use skia_safe::trim_path_effect::Mode;
 use skia_safe::{Canvas, Paint, PaintStyle, Path, PathMeasure, StrokeRec};
 
 use crate::error::LibraryError;
-use crate::model::frame::color::Color;
 use crate::model::frame::draw_type::{CapType, DrawStyle, JoinType, PathEffect, TrimPathUnits};
-use crate::rendering::skia_working_surface::{self, SkiaSurfaceContract};
+use crate::model::property::{ColorValue, Paint as PaintValue};
+use crate::rendering::skia_working_surface::SkiaSurfaceContract;
 
 pub(super) struct StrokeRenderConfig<'a> {
-    pub(super) color: &'a Color,
+    pub(super) paint: &'a PaintValue,
+    pub(super) opacity: f32,
+    pub(super) geometry: skia_safe::Rect,
     pub(super) width: f64,
     pub(super) offset: f64,
     pub(super) cap: &'a CapType,
@@ -19,6 +21,25 @@ pub(super) struct StrokeRenderConfig<'a> {
     pub(super) miter: f64,
     pub(super) dash_array: &'a [f64],
     pub(super) dash_offset: f64,
+}
+
+pub(super) struct FillRenderConfig<'a> {
+    pub(super) material: &'a PaintValue,
+    pub(super) opacity: f32,
+    pub(super) geometry: skia_safe::Rect,
+    pub(super) path_effects: &'a [PathEffect],
+    pub(super) offset: f64,
+}
+
+struct StrokePaintConfig<'a> {
+    material: &'a PaintValue,
+    opacity: f32,
+    geometry: skia_safe::Rect,
+    width: f32,
+    cap: &'a CapType,
+    join: &'a JoinType,
+    miter: f32,
+    shader_local_matrix: Option<&'a skia_safe::Matrix>,
 }
 
 pub(super) struct PaintFactory<'a> {
@@ -30,21 +51,25 @@ impl<'a> PaintFactory<'a> {
         Self { surface_contract }
     }
 
-    fn stroke_paint(
-        &self,
-        color: &Color,
-        width: f32,
-        cap: &CapType,
-        join: &JoinType,
-        miter: f32,
-    ) -> Result<Paint, LibraryError> {
+    fn stroke_paint(&self, config: StrokePaintConfig<'_>) -> Result<Paint, LibraryError> {
+        let StrokePaintConfig {
+            material,
+            opacity,
+            geometry,
+            width,
+            cap,
+            join,
+            miter,
+            shader_local_matrix,
+        } = config;
         let mut paint = Paint::default();
         paint.set_anti_alias(true);
-        skia_working_surface::set_paint_authored_color(
+        super::paint_shader::PaintShaderFactory::new(self.surface_contract, 1.0).configure(
             &mut paint,
-            self.surface_contract,
-            color,
-            1.0,
+            material,
+            geometry,
+            opacity,
+            shader_local_matrix,
         )?;
         paint.set_style(PaintStyle::Stroke);
         paint.set_stroke_width(width);
@@ -66,18 +91,28 @@ impl<'a> PaintFactory<'a> {
         &self,
         style: &DrawStyle,
         opacity: f32,
-        color_override: Option<&Color>,
+        color_override: Option<&crate::model::frame::color::Color>,
+        geometry: skia_safe::Rect,
+        shader_local_matrix: Option<&skia_safe::Matrix>,
     ) -> Result<Paint, LibraryError> {
         match style {
-            DrawStyle::Fill { color, offset } => {
-                let color = color_override.unwrap_or(color);
+            DrawStyle::Fill {
+                paint: material,
+                opacity: style_opacity,
+                offset,
+            } => {
+                let override_material = color_override
+                    .map(|color| PaintValue::Solid(ColorValue::from_straight_srgba8(color)));
+                let material = override_material.as_ref().unwrap_or(material);
                 let mut paint = Paint::default();
-                skia_working_surface::set_paint_authored_color(
-                    &mut paint,
-                    self.surface_contract,
-                    color,
-                    opacity,
-                )?;
+                super::paint_shader::PaintShaderFactory::new(self.surface_contract, 1.0)
+                    .configure(
+                        &mut paint,
+                        material,
+                        geometry,
+                        opacity * *style_opacity as f32,
+                        shader_local_matrix,
+                    )?;
                 if *offset > 0.0 {
                     paint.set_style(PaintStyle::StrokeAndFill);
                     paint.set_stroke_width((*offset * 2.0) as f32);
@@ -89,7 +124,8 @@ impl<'a> PaintFactory<'a> {
                 Ok(paint)
             }
             DrawStyle::Stroke {
-                color,
+                paint: material,
+                opacity: style_opacity,
                 width,
                 offset,
                 cap,
@@ -98,11 +134,20 @@ impl<'a> PaintFactory<'a> {
                 dash_array,
                 dash_offset,
             } => {
-                let color = color_override.unwrap_or(color);
+                let override_material = color_override
+                    .map(|color| PaintValue::Solid(ColorValue::from_straight_srgba8(color)));
+                let material = override_material.as_ref().unwrap_or(material);
                 let effective_width = (width + offset * 2.0).max(0.0);
-                let mut paint =
-                    self.stroke_paint(color, effective_width as f32, cap, join, *miter as f32)?;
-                paint.set_alpha_f(paint.alpha_f() * opacity.clamp(0.0, 1.0));
+                let mut paint = self.stroke_paint(StrokePaintConfig {
+                    material,
+                    opacity: opacity * *style_opacity as f32,
+                    geometry,
+                    width: effective_width as f32,
+                    cap,
+                    join,
+                    miter: *miter as f32,
+                    shader_local_matrix,
+                })?;
                 if !dash_array.is_empty() {
                     let intervals = dash_array
                         .iter()
@@ -133,18 +178,19 @@ impl<'a> PaintFactory<'a> {
         &self,
         canvas: &Canvas,
         path: &skia_safe::Path,
-        color: &Color,
-        path_effects: &[PathEffect],
-        offset: f64,
+        config: FillRenderConfig<'_>,
     ) -> Result<(), LibraryError> {
+        let FillRenderConfig {
+            material,
+            opacity,
+            geometry,
+            path_effects,
+            offset,
+        } = config;
         let mut paint = Paint::default();
         paint.set_anti_alias(true);
-        skia_working_surface::set_paint_authored_color(
-            &mut paint,
-            self.surface_contract,
-            color,
-            1.0,
-        )?;
+        super::paint_shader::PaintShaderFactory::new(self.surface_contract, 1.0)
+            .configure(&mut paint, material, geometry, opacity, None)?;
         apply_path_effects(path_effects, path, &mut paint)?;
 
         if offset >= 0.0 {
@@ -182,7 +228,9 @@ impl<'a> PaintFactory<'a> {
         config: StrokeRenderConfig<'_>,
     ) -> Result<(), LibraryError> {
         let StrokeRenderConfig {
-            color,
+            paint,
+            opacity,
+            geometry,
             width,
             offset,
             cap,
@@ -195,7 +243,16 @@ impl<'a> PaintFactory<'a> {
             return Ok(());
         }
 
-        let mut stroke_paint = self.stroke_paint(color, width as f32, cap, join, miter as f32)?;
+        let mut stroke_paint = self.stroke_paint(StrokePaintConfig {
+            material: paint,
+            opacity,
+            geometry,
+            width: width as f32,
+            cap,
+            join,
+            miter: miter as f32,
+            shader_local_matrix: None,
+        })?;
         let mut effects_to_apply = path_effects.to_vec();
         if !dash_array.is_empty() {
             effects_to_apply.push(PathEffect::Dash {

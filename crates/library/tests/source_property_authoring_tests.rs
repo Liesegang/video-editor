@@ -8,7 +8,7 @@ use library::model::property::{ColorValue, PropertyValue};
 use library::plugin::PluginManager;
 use std::collections::HashMap;
 
-fn source_shapes(items: &[FrameItem]) -> Vec<(&str, Color)> {
+fn source_shapes(items: &[FrameItem]) -> Vec<(&str, ColorValue)> {
     let mut result = Vec::new();
     for item in items {
         match item {
@@ -20,7 +20,11 @@ fn source_shapes(items: &[FrameItem]) -> Vec<(&str, Color)> {
             FrameItem::Object(object) => {
                 if let FrameContent::Shape { path, styles, .. } = &object.content {
                     for style in styles {
-                        if let DrawStyle::Fill { color, .. } = &style.style {
+                        if let DrawStyle::Fill {
+                            paint: library::model::property::Paint::Solid(color),
+                            ..
+                        } = &style.style
+                        {
                             result.push((path.as_str(), color.clone()));
                         }
                     }
@@ -98,12 +102,17 @@ fn solid_and_shape_source_controls_evaluate_timeline_keys_without_changing_sibli
             );
             let value = appearance_operation_id.map_or_else(
                 || PropertyValue::Color(color.clone()),
-                |_| PropertyValue::ColorValue(ColorValue::from_straight_srgba8(&color)),
+                |_| PropertyValue::Paint(color.clone().into()),
             );
             service
                 .upsert_authored_property_keyframe(
                     owner,
-                    "color".into(),
+                    if appearance_operation_id.is_some() {
+                        "paint"
+                    } else {
+                        "color"
+                    }
+                    .into(),
                     MediaTime::from_whole_seconds(seconds),
                     value,
                     None,
@@ -139,11 +148,12 @@ fn solid_and_shape_source_controls_evaluate_timeline_keys_without_changing_sibli
         let plan = RenderPlanCompiler::compile(&project).unwrap();
         let fps = project.timelines[&project.root_timeline_id].fps.to_f64() as u64;
         for (frame, color) in [(0, red), (fps, blue)] {
+            let color = ColorValue::from_straight_srgba8(&color);
             let frame =
                 evaluate_render_plan_frame(&project, &plan, &plugins, frame, 1.0, None).unwrap();
             let shapes = source_shapes(&frame.items);
             assert!(shapes.iter().any(|(_, actual)| actual == &color));
-            assert!(shapes.iter().any(|(_, actual)| actual == &Color::white()));
+            assert!(shapes.iter().any(|(_, actual)| actual == &ColorValue::from_straight_srgba8(&Color::white())));
             if matches!(source, SourceRef::Shape { .. }) {
                 assert!(
                     shapes

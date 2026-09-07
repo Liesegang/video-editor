@@ -11,7 +11,7 @@ use crate::model::authoring::{
 use crate::model::frame::color::Color;
 use crate::model::frame::entity::FrameItem;
 use crate::model::project::{IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, PortDataType};
-use crate::model::property::{Property, PropertyValue};
+use crate::model::property::{ColorValue, Paint, Property, PropertyValue};
 use crate::plugin::property_port_key;
 
 fn seconds(value: i64) -> MediaTime {
@@ -99,8 +99,10 @@ fn add_shape(service: &TimelineEditorService, plugins: &PluginManager) -> Timeli
     drop(snapshot);
     let mut fill = AppearanceOperationFactory::create(plugins, "fill").expect("Fill");
     fill.properties.set(
-        "color".to_string(),
-        Property::constant(PropertyValue::Color(Color::white())),
+        "paint".to_string(),
+        Property::constant(PropertyValue::Paint(Paint::Solid(
+            ColorValue::from_straight_srgba8(&Color::white()),
+        ))),
     );
     service
         .add_item(

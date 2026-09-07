@@ -243,9 +243,10 @@ pub(in crate::ui::panels::node_editor) fn pin_color(data_type: PortDataType) -> 
         PortDataType::Boolean => Color32::from_rgb(220, 160, 100),
         PortDataType::Enum => Color32::from_rgb(225, 154, 91),
         PortDataType::Asset | PortDataType::Material => Color32::from_rgb(105, 145, 180),
-        PortDataType::Gradient | PortDataType::Pattern | PortDataType::Curve => {
-            Color32::from_rgb(205, 120, 205)
-        }
+        PortDataType::Paint
+        | PortDataType::Gradient
+        | PortDataType::Pattern
+        | PortDataType::Curve => Color32::from_rgb(205, 120, 205),
         PortDataType::ParticleSystem => Color32::from_rgb(105, 205, 145),
         PortDataType::Geometry3D
         | PortDataType::Object3D

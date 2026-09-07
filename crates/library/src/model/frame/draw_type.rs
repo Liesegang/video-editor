@@ -1,6 +1,6 @@
 use crate::model::BlendMode;
 use crate::model::frame::color::Color;
-use crate::model::property::{GradientGeometry, GradientSpread, PatternKind, Vec2};
+use crate::model::property::{GradientValue, Paint, PatternValue};
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 use std::hash::{Hash, Hasher};
@@ -93,48 +93,17 @@ pub enum BevelDirection {
     Down,
 }
 
-/// Renderer-bound Gradient after every managed authored stop has crossed the
-/// color-management boundary exactly once.
-#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Hash, Debug)]
-#[serde(deny_unknown_fields)]
-pub struct GradientStyleStop {
-    pub offset: OrderedFloat<f64>,
-    pub color: Color,
-}
-
-#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Hash, Debug)]
-#[serde(deny_unknown_fields)]
-pub struct GradientStyle {
-    pub geometry: GradientGeometry,
-    pub spread: GradientSpread,
-    pub stops: Vec<GradientStyleStop>,
-}
-
-/// Renderer-bound procedural Pattern. Asset-backed patterns require a future
-/// explicit renderer resource owner and are intentionally not represented by
-/// an unresolvable Asset ID here.
-#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Hash, Debug)]
-#[serde(deny_unknown_fields)]
-pub struct PatternStyle {
-    pub kind: PatternKind,
-    pub foreground: Color,
-    pub background: Color,
-    pub scale: Vec2,
-    pub phase: Vec2,
-    pub angle: OrderedFloat<f64>,
-    pub duty: OrderedFloat<f64>,
-}
-
 #[derive(Serialize, Deserialize, Clone, Debug)] // Removed PartialEq, Eq
 pub enum DrawStyle {
     Fill {
-        color: Color,
+        paint: Paint,
+        opacity: f64,
         #[serde(default)]
         offset: f64,
     },
     Stroke {
-        #[serde(default)]
-        color: Color,
+        paint: Paint,
+        opacity: f64,
         #[serde(default)]
         width: f64,
         #[serde(default)]
@@ -159,12 +128,12 @@ pub enum DrawStyle {
         blend_mode: BlendMode,
     },
     GradientOverlay {
-        gradient: GradientStyle,
+        gradient: GradientValue,
         opacity: f64,
         blend_mode: BlendMode,
     },
     PatternOverlay {
-        pattern: PatternStyle,
+        pattern: PatternValue,
         opacity: f64,
         blend_mode: BlendMode,
     },
@@ -231,12 +200,18 @@ impl Hash for DrawStyle {
     fn hash<H: Hasher>(&self, state: &mut H) {
         std::mem::discriminant(self).hash(state);
         match self {
-            DrawStyle::Fill { color, offset } => {
-                color.hash(state);
+            DrawStyle::Fill {
+                paint,
+                opacity,
+                offset,
+            } => {
+                paint.hash(state);
+                OrderedFloat(*opacity).hash(state);
                 OrderedFloat(*offset).hash(state);
             }
             DrawStyle::Stroke {
-                color,
+                paint,
+                opacity,
                 width,
                 offset,
                 cap,
@@ -245,7 +220,8 @@ impl Hash for DrawStyle {
                 dash_array,
                 dash_offset,
             } => {
-                color.hash(state);
+                paint.hash(state);
+                OrderedFloat(*opacity).hash(state);
                 OrderedFloat(*width).hash(state);
                 OrderedFloat(*offset).hash(state);
                 cap.hash(state);
@@ -386,12 +362,10 @@ impl Hash for DrawStyle {
 impl Default for DrawStyle {
     fn default() -> Self {
         Self::Fill {
-            color: Color {
-                r: 255,
-                g: 255,
-                b: 255,
-                a: 255,
-            },
+            paint: Paint::Solid(crate::model::property::ColorValue::from_straight_srgba8(
+                &Color::white(),
+            )),
+            opacity: 1.0,
             offset: 0.0,
         }
     }
@@ -407,7 +381,8 @@ impl PartialEq for DrawStyle {
             (
                 DrawStyle::Stroke {
                     width: w1,
-                    color: c1,
+                    paint: p1,
+                    opacity: alpha1,
                     offset: o1,
                     join: j1,
                     cap: cp1,
@@ -417,7 +392,8 @@ impl PartialEq for DrawStyle {
                 },
                 DrawStyle::Stroke {
                     width: w2,
-                    color: c2,
+                    paint: p2,
+                    opacity: alpha2,
                     offset: o2,
                     join: j2,
                     cap: cp2,
@@ -427,7 +403,8 @@ impl PartialEq for DrawStyle {
                 },
             ) => {
                 OrderedFloat(*w1) == OrderedFloat(*w2)
-                    && c1 == c2
+                    && p1 == p2
+                    && OrderedFloat(*alpha1) == OrderedFloat(*alpha2)
                     && OrderedFloat(*o1) == OrderedFloat(*o2)
                     && j1 == j2
                     && cp1 == cp2
@@ -441,14 +418,20 @@ impl PartialEq for DrawStyle {
             }
             (
                 DrawStyle::Fill {
-                    color: c1,
+                    paint: p1,
+                    opacity: alpha1,
                     offset: e1,
                 },
                 DrawStyle::Fill {
-                    color: c2,
+                    paint: p2,
+                    opacity: alpha2,
                     offset: e2,
                 },
-            ) => c1 == c2 && OrderedFloat(*e1) == OrderedFloat(*e2),
+            ) => {
+                p1 == p2
+                    && OrderedFloat(*alpha1) == OrderedFloat(*alpha2)
+                    && OrderedFloat(*e1) == OrderedFloat(*e2)
+            }
             (
                 DrawStyle::ColorOverlay {
                     color: c1,
@@ -873,7 +856,10 @@ mod tests {
         miter: f64,
     ) -> DrawStyle {
         DrawStyle::Stroke {
-            color: Color::white(),
+            paint: Paint::Solid(crate::model::property::ColorValue::from_straight_srgba8(
+                &Color::white(),
+            )),
+            opacity: 1.0,
             width,
             offset,
             cap,

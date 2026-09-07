@@ -1,4 +1,4 @@
-//! Typed Gradient and procedural Pattern controls shared by Inspector and Node properties.
+//! Typed Paint, Gradient and Pattern controls shared by Inspector and Node properties.
 
 use egui::{Color32, Id, Mesh, Popup, PopupCloseBehavior, Response, Sense, StrokeKind, Ui};
 use egui_phosphor::regular as icons;
@@ -22,6 +22,124 @@ pub(crate) struct PaintValueEdit {
 struct PaintVectorEdit {
     response: Response,
     finished: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PaintKind {
+    Solid,
+    Gradient,
+    Pattern,
+}
+
+impl PaintKind {
+    fn of(paint: &Paint) -> Self {
+        match paint {
+            Paint::Solid(_) => Self::Solid,
+            Paint::Gradient(_) => Self::Gradient,
+            Paint::Pattern(_) => Self::Pattern,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Solid => "Solid",
+            Self::Gradient => "Gradient",
+            Self::Pattern => "Pattern",
+        }
+    }
+
+    fn key(self) -> &'static str {
+        match self {
+            Self::Solid => "solid",
+            Self::Gradient => "gradient",
+            Self::Pattern => "pattern",
+        }
+    }
+
+    fn default_value(self) -> Paint {
+        match self {
+            Self::Solid => Paint::default(),
+            Self::Gradient => Paint::Gradient(GradientValue::default()),
+            Self::Pattern => Paint::Pattern(PatternValue::default()),
+        }
+    }
+}
+
+/// A Paint changes kind here, never by flattening a Gradient into a Color.
+/// The existing typed editors retain ownership of their gestures, popups,
+/// color management and Palette actions in both Inspector and Node surfaces.
+pub(crate) fn paint_value_editor(
+    ui: &mut Ui,
+    id: Id,
+    qa_id: &str,
+    value: &mut Paint,
+    palette: &ProjectPalette,
+) -> PaintValueEdit {
+    ui.horizontal(|ui| {
+        let previous_kind = PaintKind::of(value);
+        let mut kind = previous_kind;
+        let kind_edit = egui::ComboBox::from_id_salt(id.with("kind"))
+            .width(82.0)
+            .selected_text(kind.label())
+            .show_ui(ui, |ui| {
+                for option in [PaintKind::Solid, PaintKind::Gradient, PaintKind::Pattern] {
+                    let response = ui.selectable_value(&mut kind, option, option.label());
+                    crate::qa::register_component_with_metadata(
+                        format!("{qa_id}.paint.kind.{}", option.key()),
+                        "paint_kind_option",
+                        response.rect,
+                        response.enabled(),
+                        Some(serde_json::json!({ "paint_kind": option.key() })),
+                    );
+                }
+            });
+        crate::qa::register_component_with_metadata(
+            format!("{qa_id}.paint.kind"),
+            "paint_kind_selector",
+            crate::qa::global_response_rect(ui.ctx(), &kind_edit.response),
+            kind_edit.response.enabled(),
+            Some(serde_json::json!({ "paint_kind": kind.key() })),
+        );
+        let kind_changed = kind != previous_kind;
+        if kind_changed {
+            *value = kind.default_value();
+        }
+        let mut edit = match value {
+            Paint::Solid(color) => {
+                let picker = color_value_picker(ui, id.with("color"), color, Some(palette));
+                if let Some(intent) = picker.palette_intent {
+                    super::palette_intent::queue(ui.ctx(), intent);
+                }
+                let changed = picker.value.is_some();
+                if let Some(candidate) = picker.value {
+                    *color = candidate;
+                }
+                PaintValueEdit {
+                    response: picker.response,
+                    changed,
+                    finished: picker.finished,
+                }
+            }
+            Paint::Gradient(gradient) => {
+                gradient_value_editor(ui, id.with("gradient"), qa_id, gradient, palette)
+            }
+            Paint::Pattern(pattern) => {
+                pattern_value_editor(ui, id.with("pattern"), qa_id, pattern, palette)
+            }
+        };
+        crate::qa::register_component_with_metadata(
+            format!("{qa_id}.paint.value"),
+            "paint_value_control",
+            crate::qa::global_response_rect(ui.ctx(), &edit.response),
+            edit.response.enabled(),
+            Some(serde_json::json!({ "paint_kind": kind.key(), "paint": value })),
+        );
+        edit.response = edit.response.union(kind_edit.response);
+        edit.changed |= kind_changed;
+        edit.finished |= kind_changed;
+        edit
+    })
+    .inner
 }
 
 pub(crate) fn gradient_value_editor(
@@ -526,7 +644,73 @@ fn suggested_paint_name(palette: &ProjectPalette, base: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{gradient_preview_color, Color32, GradientValue};
+    use super::*;
+
+    #[test]
+    fn opening_each_shared_paint_control_is_lossless_and_does_not_finish_an_edit() {
+        use library::model::property::{ColorSpaceRef, ColorValue};
+
+        let hdr = ColorValue::new(
+            ColorSpaceRef::linear_srgb(),
+            [-0.25, 2.0, 0.37123456789, 0.6],
+        )
+        .unwrap();
+        let gradient = GradientValue::new(
+            GradientGeometry::Linear {
+                start: point(-0.3, 0.17),
+                end: point(1.2, 0.83),
+            },
+            GradientSpread::Reflect,
+            vec![
+                GradientStop::new(0.0, hdr.clone()).unwrap(),
+                GradientStop::new(
+                    1.0,
+                    ColorValue::from_straight_srgba8(&library::model::frame::color::Color::white()),
+                )
+                .unwrap(),
+            ],
+        )
+        .unwrap();
+        for paint in [
+            Paint::Solid(hdr),
+            Paint::Gradient(gradient),
+            Paint::Pattern(PatternValue::default()),
+        ] {
+            let context = egui::Context::default();
+            let palette = ProjectPalette::default();
+            let mut value = paint.clone();
+            for frame in 0..3 {
+                drop(context.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(500.0, 400.0),
+                        )),
+                        time: Some(f64::from(frame) / 60.0),
+                        ..Default::default()
+                    },
+                    |context| {
+                        egui::CentralPanel::default().show(context, |ui| {
+                            let edit = paint_value_editor(
+                                ui,
+                                Id::new("paint"),
+                                "test.paint",
+                                &mut value,
+                                &palette,
+                            );
+                            assert!(!edit.changed);
+                            assert!(!edit.finished);
+                            assert!(edit.response.rect.width() <= 450.0);
+                        });
+                    },
+                ));
+                assert_eq!(
+                    value, paint,
+                    "presentation may not quantize or replace authored Paint"
+                );
+            }
+        }
+    }
 
     #[test]
     fn default_gradient_preview_uses_the_managed_display_terminal() {

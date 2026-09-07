@@ -597,7 +597,8 @@ mod tests {
                 styles: vec![StyleConfig {
                     id: Uuid::new_v4(),
                     style: DrawStyle::Fill {
-                        color: Color::white(),
+                        paint: (Color::white()).into(),
+                        opacity: 1.0,
                         offset: 0.0,
                     },
                 }],
@@ -624,7 +625,8 @@ mod tests {
                     styles: vec![StyleConfig {
                         id: Uuid::new_v4(),
                         style: DrawStyle::Fill {
-                            color: Color::white(),
+                            paint: (Color::white()).into(),
+                            opacity: 1.0,
                             offset: 0.0,
                         },
                     }],

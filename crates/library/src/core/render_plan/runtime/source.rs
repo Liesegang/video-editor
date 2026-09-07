@@ -87,7 +87,7 @@ impl AuthoringFrameEvaluator<'_> {
                     item.id.as_uuid(),
                     timeline.width,
                     timeline.height,
-                    color,
+                    crate::model::property::ColorValue::from_straight_srgba8(&color),
                     BlendMode::Normal,
                 )))
             }

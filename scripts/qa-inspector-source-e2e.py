@@ -12,6 +12,7 @@ from qa_support import (
     seek_timeline_seconds,
     settled_preview_state,
 )
+from qa_appearance_support import paint_property
 
 TIMELINE_TAB_ID = "dock.tab:timeline"
 
@@ -165,9 +166,18 @@ def _color_control_and_value(state, item_id):
             _constant_value(item, "color"),
         )
     return (
-        "inspector.property:appearance:{}:{}:color".format(item_id, fill["id"]),
-        _appearance_constant(fill, "color"),
+        "inspector.property:appearance:{}:{}:paint.paint.value".format(
+            item_id, fill["id"]
+        ),
+        _solid_paint_value(fill),
     )
+
+
+def _solid_paint_value(operation):
+    paint = paint_property(operation)
+    if paint["kind"] != "solid":
+        raise QaFailure("Fill did not expose its canonical Solid Paint value")
+    return paint["value"]
 
 
 def _wait_preview(client, revision, frame, different_from=None, expected_hash=None):

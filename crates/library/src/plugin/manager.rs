@@ -19,7 +19,7 @@ use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use crate::cache::CacheManager;
 use crate::error::LibraryError;
 use crate::model::asset::AssetKind;
-use crate::model::property::{ColorValue, PropertyDefinition, PropertyUiType, PropertyValue};
+use crate::model::property::{PropertyDefinition, PropertyValue};
 use crate::plugin::EntityConverterPlugin;
 use crate::util::local_file::DirectRegularFile;
 
@@ -96,20 +96,16 @@ fn validated_operation_values(
             );
             return None;
         };
-        let value = if matches!(definition.ui_type(), PropertyUiType::ColorValue)
-            && let PropertyValue::Color(color) = value
-        {
-            PropertyValue::ColorValue(ColorValue::from_straight_srgba8(color))
-        } else {
-            value.clone()
+        let value = match definition.coerce_evaluated_value(value) {
+            Ok(value) => value,
+            Err(error) => {
+                log::warn!(
+                    "{operation_label} property {} has an invalid evaluated value: {error}",
+                    definition.name()
+                );
+                return None;
+            }
         };
-        if let Err(error) = definition.validate_value(&value) {
-            log::warn!(
-                "{operation_label} property {} has an invalid evaluated value: {error}",
-                definition.name()
-            );
-            return None;
-        }
         validated.insert(definition.name().to_string(), value);
     }
     Some(validated)

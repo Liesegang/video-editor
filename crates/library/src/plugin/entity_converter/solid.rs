@@ -65,14 +65,6 @@ impl EntityConverterPlugin for SolidEntityConverterPlugin {
         let eval_time = time;
         let color_value =
             evaluator.require_color_value(node.properties(), "color", eval_time, "solid")?;
-        let color = crate::color_management::to_renderer_srgba8(&color_value)
-            .inspect_err(|error| {
-                log::error!(
-                    "Solid Node {} cannot cross the legacy renderer color boundary: {error}",
-                    node.id
-                );
-            })
-            .ok()?;
         let (width, height) = evaluator.evaluation_resolution();
         let path = format!("M 0 0 H {width} V {height} H 0 Z");
 
@@ -87,7 +79,11 @@ impl EntityConverterPlugin for SolidEntityConverterPlugin {
                 parts: Vec::new(),
                 styles: vec![StyleConfig {
                     id: node.id,
-                    style: DrawStyle::Fill { color, offset: 0.0 },
+                    style: DrawStyle::Fill {
+                        paint: crate::model::property::Paint::Solid(color_value),
+                        opacity: 1.0,
+                        offset: 0.0,
+                    },
                 }],
                 path_effects: Vec::new(),
                 effects: Vec::new(),

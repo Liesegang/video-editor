@@ -566,22 +566,26 @@ fn editing_style_constants_keyframes_and_connected_scalars_changes_render_only()
         .context("Fill operation is missing")?;
     set_constant(
         fill,
-        "color",
-        PropertyValue::Color(Color {
-            r: 200,
-            g: 20,
-            b: 10,
-            a: 200,
-        }),
+        "paint",
+        PropertyValue::Paint(
+            Color {
+                r: 200,
+                g: 20,
+                b: 10,
+                a: 200,
+            }
+            .into(),
+        ),
     );
     set_constant(fill, "opacity", 0.5.into());
     let rendered = draw_styles(&project, &plugins, 0)?;
     assert!(matches!(
         rendered.as_slice(),
         [DrawStyle::Fill {
-            color: Color { r: 200, a: 100, .. },
+            paint: library::model::property::Paint::Solid(color),
+            opacity: 0.5,
             ..
-        }]
+        }] if color.rgba()[0] == 200.0 / 255.0 && color.rgba()[3] == 200.0 / 255.0
     ));
 
     project
@@ -600,16 +604,18 @@ fn editing_style_constants_keyframes_and_connected_scalars_changes_render_only()
     assert!(matches!(
         at_start.as_slice(),
         [DrawStyle::Fill {
-            color: Color { a: 40, .. },
+            paint: library::model::property::Paint::Solid(color),
+            opacity: 0.2,
             ..
-        }]
+        }] if color.rgba()[3] == 200.0 / 255.0
     ));
     assert!(matches!(
         at_one_second.as_slice(),
         [DrawStyle::Fill {
-            color: Color { a: 160, .. },
+            paint: library::model::property::Paint::Solid(color),
+            opacity: 0.8,
             ..
-        }]
+        }] if color.rgba()[3] == 200.0 / 255.0
     ));
 
     project
@@ -622,9 +628,10 @@ fn editing_style_constants_keyframes_and_connected_scalars_changes_render_only()
     assert!(matches!(
         connected.as_slice(),
         [DrawStyle::Fill {
-            color: Color { a: 100, .. },
+            paint: library::model::property::Paint::Solid(color),
+            opacity: 0.5,
             ..
-        }]
+        }] if color.rgba()[3] == 200.0 / 255.0
     ));
     assert_eq!(project.get_node(source.id), Some(&source));
     Ok(())
@@ -818,7 +825,8 @@ impl StylePlugin for CountingStylePlugin {
         Some(StyleConfig {
             id: source_id,
             style: DrawStyle::Fill {
-                color: Color::white(),
+                paint: (Color::white()).into(),
+                opacity: 1.0,
                 offset: 0.0,
             },
         })

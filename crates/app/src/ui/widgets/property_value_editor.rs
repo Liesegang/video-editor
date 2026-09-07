@@ -13,7 +13,7 @@ use library::model::property::{
 use ordered_float::OrderedFloat;
 
 use super::color_value_picker::color_value_picker;
-use super::paint_value_editor::{gradient_value_editor, pattern_value_editor};
+use super::paint_value_editor::{gradient_value_editor, paint_value_editor, pattern_value_editor};
 use super::property_drag_value::{
     numeric_edit_finished, FloatDragValueConfig, IntegerDragValueConfig,
 };
@@ -181,6 +181,14 @@ pub(crate) fn property_value_editor(
                 finished: picker.finished,
             }
         }
+        PropertyValue::Paint(paint) => {
+            let edited = paint_value_editor(ui, id.with("paint"), qa_id, paint, palette);
+            PropertyValueEdit {
+                response: edited.response,
+                changed: edited.changed,
+                finished: edited.finished,
+            }
+        }
         PropertyValue::Gradient(gradient) => {
             let edited = gradient_value_editor(ui, id.with("gradient"), qa_id, gradient, palette);
             PropertyValueEdit {
@@ -232,6 +240,12 @@ pub(crate) fn property_value_editor(
             "value": &*value,
             "has_definition": definition.is_some(),
             "editor_kind": definition.map(|definition| property_ui_kind(definition.ui_type())),
+            "paint_kind": match &*value {
+                PropertyValue::Paint(library::model::property::Paint::Solid(_)) => Some("solid"),
+                PropertyValue::Paint(library::model::property::Paint::Gradient(_)) => Some("gradient"),
+                PropertyValue::Paint(library::model::property::Paint::Pattern(_)) => Some("pattern"),
+                _ => None,
+            },
             "changed": edit.changed,
         })),
     );
@@ -243,6 +257,7 @@ pub(crate) fn property_ui_kind(ui_type: &PropertyUiType) -> &'static str {
         PropertyUiType::Float { .. } => "float",
         PropertyUiType::Integer { .. } => "integer",
         PropertyUiType::ColorValue => "managed_color",
+        PropertyUiType::Paint => "paint",
         PropertyUiType::Gradient => "gradient",
         PropertyUiType::Pattern => "pattern",
         PropertyUiType::Path => "path",

@@ -24,6 +24,21 @@ fn point_source_accepts_particle_system_in_only_the_safe_direction() {
 }
 
 #[test]
+fn paint_accepts_lossless_variant_injection_only() {
+    for source in [
+        PortDataType::Paint,
+        PortDataType::Color,
+        PortDataType::Gradient,
+        PortDataType::Pattern,
+    ] {
+        assert!(PortDataType::Paint.accepts(source));
+    }
+    assert!(!PortDataType::Color.accepts(PortDataType::Paint));
+    assert!(!PortDataType::Gradient.accepts(PortDataType::Paint));
+    assert!(!PortDataType::Pattern.accepts(PortDataType::Paint));
+}
+
+#[test]
 fn canonical_node_port_order_is_stable_and_does_not_mutate_graph_semantics()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut project = Project::new("port order");
@@ -73,7 +88,7 @@ fn canonical_node_port_order_is_stable_and_does_not_mutate_graph_semantics()
         vec![
             TIME_PORT,
             SHAPE_INPUT_PORT,
-            "property:color",
+            "property:paint",
             "property:opacity",
             "property:offset",
             IMAGE_OUTPUT_PORT,

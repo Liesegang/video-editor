@@ -1,8 +1,7 @@
 //! Stateless evaluation of one compiled Image Module invocation.
 
 use super::frame_values::{
-    neutralize_root_blend, required_color, required_number, required_string, solid_item,
-    transparent,
+    neutralize_root_blend, required_number, required_string, solid_item, transparent,
 };
 use super::*;
 use crate::core::render_plan::CompiledModuleOutput;
@@ -224,7 +223,14 @@ impl ModuleImageRuntime<'_> {
         let values = self.node_values(node)?;
         let item = match generator {
             GeneratorContent::Solid => {
-                let color = required_color(&values, "color", "Solid Generator")?;
+                let color = solid_generator_color(
+                    self.plugins,
+                    self.width,
+                    self.height,
+                    values.get("color").ok_or_else(|| {
+                        frame_values::type_error("Solid Generator color", "ColorValue")
+                    })?,
+                )?;
                 solid_item(node.id, self.width, self.height, color, node.blend_mode)
             }
             GeneratorContent::SkSL => {
@@ -914,5 +920,71 @@ impl ModuleImageRuntime<'_> {
                     .map(Some)
             })
             .unwrap_or(Ok(None))
+    }
+}
+
+fn solid_generator_color(
+    plugins: &crate::plugin::PluginManager,
+    width: u64,
+    height: u64,
+    value: &PropertyValue,
+) -> Result<crate::model::property::ColorValue, LibraryError> {
+    let converter = plugins.get_entity_converter("solid").ok_or_else(|| {
+        LibraryError::Plugin("solid entity converter plugin not found".to_string())
+    })?;
+    let definition = converter
+        .get_property_definitions(width, height, width, height)
+        .into_iter()
+        .find(|definition| definition.name() == "color")
+        .ok_or_else(|| {
+            LibraryError::Plugin("solid entity converter has no color definition".to_string())
+        })?;
+    let canonical = definition
+        .coerce_evaluated_value(value)
+        .map_err(LibraryError::Validation)?;
+    canonical
+        .get_as::<crate::model::property::ColorValue>()
+        .ok_or_else(|| frame_values::type_error("Solid Generator color", "ColorValue"))
+}
+
+#[cfg(test)]
+mod solid_generator_tests {
+    use super::*;
+    use crate::model::frame::color::Color;
+    use crate::model::property::{ColorSpaceRef, ColorValue};
+
+    #[test]
+    fn canonical_definition_injects_timeline_color_and_preserves_managed_precision() {
+        let plugins = crate::plugin::PluginManager::default();
+        let timeline_color = Color {
+            r: 19,
+            g: 87,
+            b: 203,
+            a: 149,
+        };
+        assert_eq!(
+            solid_generator_color(
+                &plugins,
+                1920,
+                1080,
+                &PropertyValue::Color(timeline_color.clone()),
+            )
+            .unwrap(),
+            ColorValue::from_straight_srgba8(&timeline_color)
+        );
+
+        let managed = ColorValue::new(ColorSpaceRef::srgb(), [-0.25, 1.75, 0.375, 0.625])
+            .expect("finite managed Solid color");
+        assert_eq!(
+            solid_generator_color(
+                &plugins,
+                1920,
+                1080,
+                &PropertyValue::ColorValue(managed.clone()),
+            )
+            .unwrap(),
+            managed,
+            "the typed runtime boundary must not quantize managed colors"
+        );
     }
 }

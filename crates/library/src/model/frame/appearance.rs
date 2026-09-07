@@ -82,7 +82,8 @@ mod tests {
             StyleConfig {
                 id: uuid::Uuid::new_v4(),
                 style: DrawStyle::Fill {
-                    color: Color::white(),
+                    paint: (Color::white()).into(),
+                    opacity: 1.0,
                     offset: 12.0,
                 },
             },
@@ -135,7 +136,8 @@ mod tests {
             StyleConfig {
                 id: uuid::Uuid::new_v4(),
                 style: DrawStyle::Fill {
-                    color: Color::white(),
+                    paint: (Color::white()).into(),
+                    opacity: 1.0,
                     offset: 0.0,
                 },
             },

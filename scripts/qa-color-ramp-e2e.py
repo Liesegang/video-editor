@@ -98,13 +98,23 @@ def run_suite(client):
     if len(output_routes) != 1:
         raise QaFailure("Color Ramp fixture has no unique starter Image route")
 
+    # Park the wide raster sink on the lower lane first. Newly-created nodes
+    # share one production spawn region; leaving Color Ramp on the upper-right
+    # before creating Solid makes that real spawn header land under Ramp.
+    _, solid_id = create_node_from_menu(
+        client,
+        "node_clip",
+        "Solid",
+        "node_editor.menu.create.solid",
+    )
+    place_created_node(client, solid_id, 0.82, vertical_offset=130.0)
     _, gradient_id = create_node_from_menu(
         client,
         "node_clip",
         "Gradient",
         "node_editor.menu.create.data:gradient",
     )
-    place_created_node(client, gradient_id, 0.64)
+    place_created_node(client, gradient_id, 0.58)
     _, ramp_id = create_node_from_menu(
         client,
         "node_clip",
@@ -112,13 +122,6 @@ def run_suite(client):
         "node_editor.menu.create.color:ramp",
     )
     place_created_node(client, ramp_id, 0.78)
-    _, solid_id = create_node_from_menu(
-        client,
-        "node_clip",
-        "Solid",
-        "node_editor.menu.create.solid",
-    )
-    place_created_node(client, solid_id, 0.92)
 
     current = active_definition(client.state(), "node_clip")[1]
     expected_catalogs = {

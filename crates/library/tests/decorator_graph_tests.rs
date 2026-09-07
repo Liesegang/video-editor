@@ -123,7 +123,7 @@ fn graph_fixture(plugins: &Arc<PluginManager>, with_background: bool) -> Result<
         b: 72,
         a: 255,
     };
-    set(&mut fill, "color", PropertyValue::Color(color))?;
+    set(&mut fill, "paint", PropertyValue::Paint(color.into()))?;
 
     text.ui_position = [0.0, 0.0];
     background.ui_position = [0.0, 180.0];
@@ -256,12 +256,14 @@ fn rasterize_geometry(path: &str) -> Result<Image> {
     let style = library::model::frame::entity::StyleConfig {
         id: Uuid::new_v4(),
         style: DrawStyle::Fill {
-            color: Color {
+            paint: (Color {
                 r: 255,
                 g: 255,
                 b: 255,
                 a: 255,
-            },
+            })
+            .into(),
+            opacity: 1.0,
             offset: 0.0,
         },
     };
@@ -678,12 +680,14 @@ fn legacy_v1_backplate_keeps_one_shape_paint_time_appearance() -> Result<()> {
     let style = library::model::frame::entity::StyleConfig {
         id: Uuid::new_v4(),
         style: DrawStyle::Fill {
-            color: Color {
+            paint: (Color {
                 r: 255,
                 g: 255,
                 b: 255,
                 a: 255,
-            },
+            })
+            .into(),
+            opacity: 1.0,
             offset: 0.0,
         },
     };
@@ -760,12 +764,14 @@ fn target_part_opacity_survives_until_style_rasterization() -> Result<()> {
         library::model::frame::entity::StyleConfig {
             id: Uuid::new_v4(),
             style: DrawStyle::Fill {
-                color: Color {
+                paint: (Color {
                     r: 20,
                     g: 40,
                     b: 60,
                     a: 200,
-                },
+                })
+                .into(),
+                opacity: 1.0,
                 offset: 0.0,
             },
         },
@@ -786,11 +792,12 @@ fn target_part_opacity_survives_until_style_rasterization() -> Result<()> {
         styles.as_slice(),
         [library::model::frame::entity::StyleConfig {
             style: DrawStyle::Fill {
-                color: Color { a: 200, .. },
+                paint: library::model::property::Paint::Solid(color),
+                opacity: 1.0,
                 ..
             },
             ..
-        }]
+        }] if color.rgba()[3] == 200.0 / 255.0
     ));
     assert_eq!(
         effects.len(),
@@ -825,16 +832,12 @@ fn graph_rasterizes_only_through_downstream_style_and_roundtrips() -> Result<()>
     assert!(styles.iter().any(|style| {
         style.id == fixture.fill_id
             && matches!(
-                style.style,
+                &style.style,
                 DrawStyle::Fill {
-                    color: Color {
-                        r: 12,
-                        g: 190,
-                        b: 72,
-                        a: 255
-                    },
+                    paint,
+                    opacity: 1.0,
                     ..
-                }
+                } if *paint == Color { r: 12, g: 190, b: 72, a: 255 }.into()
             )
     }));
 

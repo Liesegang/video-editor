@@ -39,7 +39,11 @@ fn transparent() -> Color {
 fn fill(color: Color, offset: f64) -> StyleConfig {
     StyleConfig {
         id: Uuid::new_v4(),
-        style: DrawStyle::Fill { color, offset },
+        style: DrawStyle::Fill {
+            paint: color.into(),
+            opacity: 1.0,
+            offset,
+        },
     }
 }
 
@@ -47,7 +51,8 @@ fn stroke(color: Color, width: f64, offset: f64) -> StyleConfig {
     StyleConfig {
         id: Uuid::new_v4(),
         style: DrawStyle::Stroke {
-            color,
+            paint: (color).into(),
+            opacity: 1.0,
             width,
             offset,
             cap: CapType::Round,

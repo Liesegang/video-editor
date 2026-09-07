@@ -211,7 +211,8 @@ mod tests {
     #[test]
     fn image_stages_keep_authored_order_and_raster_branches_merge_at_their_position() {
         let fill = style(DrawStyle::Fill {
-            color: crate::model::frame::color::Color::white(),
+            paint: (crate::model::frame::color::Color::white()).into(),
+            opacity: 1.0,
             offset: 0.0,
         });
         let alpha = style(DrawStyle::Opacity { opacity: 0.5 });
@@ -237,7 +238,8 @@ mod tests {
     fn leading_image_operation_is_not_evaluated_and_later_shape_starts_the_image() {
         let alpha = style(DrawStyle::Opacity { opacity: 0.5 });
         let fill = style(DrawStyle::Fill {
-            color: crate::model::frame::color::Color::white(),
+            paint: (crate::model::frame::color::Color::white()).into(),
+            opacity: 1.0,
             offset: 0.0,
         });
         let mut evaluated = Vec::new();
@@ -268,11 +270,13 @@ mod tests {
     #[test]
     fn failed_image_branch_is_empty_until_a_later_shape_restarts_it() {
         let first = style(DrawStyle::Fill {
-            color: crate::model::frame::color::Color::white(),
+            paint: (crate::model::frame::color::Color::white()).into(),
+            opacity: 1.0,
             offset: 0.0,
         });
         let later = style(DrawStyle::Fill {
-            color: crate::model::frame::color::Color::white(),
+            paint: (crate::model::frame::color::Color::white()).into(),
+            opacity: 1.0,
             offset: 1.0,
         });
         let output = lower(vec![
@@ -289,7 +293,8 @@ mod tests {
     #[test]
     fn failed_shape_branch_preserves_the_preceding_image() {
         let fill = style(DrawStyle::Fill {
-            color: crate::model::frame::color::Color::white(),
+            paint: (crate::model::frame::color::Color::white()).into(),
+            opacity: 1.0,
             offset: 0.0,
         });
         let alpha = style(DrawStyle::Opacity { opacity: 0.5 });
@@ -309,11 +314,13 @@ mod tests {
         // A malformed Image plugin returning Fill must not turn into a
         // geometry producer on the direct path while remaining Image in Nodes.
         let fill = style(DrawStyle::Fill {
-            color: crate::model::frame::color::Color::white(),
+            paint: (crate::model::frame::color::Color::white()).into(),
+            opacity: 1.0,
             offset: 0.0,
         });
         let malformed = style(DrawStyle::Fill {
-            color: crate::model::frame::color::Color::white(),
+            paint: (crate::model::frame::color::Color::white()).into(),
+            opacity: 1.0,
             offset: 0.0,
         });
         let mut raster_calls = 0;

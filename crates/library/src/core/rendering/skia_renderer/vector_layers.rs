@@ -108,7 +108,7 @@ impl SkiaRenderer {
             &mut self.blend_runtime,
             bounds,
             request.styles,
-            |canvas, style| body.draw_style(surface_contract, canvas, style),
+            |canvas, style| body.draw_style(surface_contract, canvas, bounds.geometry, style),
         )?;
         let mut layer = self.create_vector_surface(mode, bounds.visual, request.transform)?;
         let canvas: &Canvas = layer.surface.canvas();
@@ -156,7 +156,15 @@ impl SkiaRenderer {
             &mut self.blend_runtime,
             bounds,
             styles,
-            |canvas, style| body.draw_style(surface_contract, canvas, path_effects, style),
+            |canvas, style| {
+                body.draw_style(
+                    surface_contract,
+                    canvas,
+                    path_effects,
+                    bounds.geometry,
+                    style,
+                )
+            },
         )?;
         let mut layer = self.create_vector_surface(mode, bounds.visual, transform)?;
         {

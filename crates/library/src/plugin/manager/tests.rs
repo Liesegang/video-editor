@@ -512,7 +512,8 @@ impl StylePlugin for EvaluatedValueStylePlugin {
         Some(StyleConfig {
             id: source_id,
             style: DrawStyle::Fill {
-                color: Color::white(),
+                paint: (Color::white()).into(),
+                opacity: 1.0,
                 offset: context.number("value").unwrap_or(-1.0),
             },
         })

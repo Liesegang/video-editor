@@ -849,6 +849,7 @@ pub(crate) fn property_value_type(value: &PropertyValue) -> PortDataType {
         PropertyValue::Path(_) => PortDataType::Path,
         PropertyValue::Gradient(_) => PortDataType::Gradient,
         PropertyValue::Pattern(_) => PortDataType::Pattern,
+        PropertyValue::Paint(_) => PortDataType::Paint,
         PropertyValue::Array(_) => PortDataType::List,
         PropertyValue::Map(_) | PropertyValue::OpaqueJson(_) => PortDataType::Any,
     }
@@ -863,7 +864,9 @@ pub(crate) fn authored_parameter_value_is_compatible(
     value: &PropertyValue,
 ) -> bool {
     let source = property_value_type(value);
-    if source == PortDataType::Any {
+    if target == PortDataType::Paint {
+        source == PortDataType::Paint
+    } else if source == PortDataType::Any {
         target == PortDataType::Any
     } else {
         target.accepts(source)

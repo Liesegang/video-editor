@@ -179,7 +179,7 @@ pub(super) fn solid_item(
     source_id: uuid::Uuid,
     width: u64,
     height: u64,
-    color: crate::model::frame::color::Color,
+    color: crate::model::property::ColorValue,
     blend_mode: BlendMode,
 ) -> FrameItem {
     FrameItem::Group(FrameGroup {
@@ -202,10 +202,14 @@ pub(super) fn solid_item(
     })
 }
 
-fn fill_style(source_id: uuid::Uuid, color: crate::model::frame::color::Color) -> StyleConfig {
+fn fill_style(source_id: uuid::Uuid, color: crate::model::property::ColorValue) -> StyleConfig {
     StyleConfig {
         id: source_id,
-        style: DrawStyle::Fill { color, offset: 0.0 },
+        style: DrawStyle::Fill {
+            paint: crate::model::property::Paint::Solid(color),
+            opacity: 1.0,
+            offset: 0.0,
+        },
     }
 }
 
@@ -381,7 +385,9 @@ mod shape_bounds_tests {
             &shape,
             vec![fill_style(
                 source_id,
-                crate::model::frame::color::Color::white(),
+                crate::model::property::ColorValue::from_straight_srgba8(
+                    &crate::model::frame::color::Color::white(),
+                ),
             )],
         )
         .unwrap() else {
@@ -407,7 +413,9 @@ mod shape_bounds_tests {
             &shape,
             vec![fill_style(
                 source_id,
-                crate::model::frame::color::Color::white(),
+                crate::model::property::ColorValue::from_straight_srgba8(
+                    &crate::model::frame::color::Color::white(),
+                ),
             )],
         )
         .unwrap() else {

@@ -29,6 +29,7 @@ mod layer_styles;
 mod legacy_backplate;
 mod output_compositing;
 mod paint;
+mod paint_shader;
 mod point;
 mod terminal;
 #[cfg(feature = "gl")]

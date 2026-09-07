@@ -151,8 +151,12 @@ fn shape_fill_colors(items: &[FrameItem]) -> Vec<Color> {
                     continue;
                 };
                 for style in styles {
-                    if let DrawStyle::Fill { color, .. } = &style.style {
-                        colors.push(color.clone());
+                    if let DrawStyle::Fill {
+                        paint: crate::model::property::Paint::Solid(color),
+                        ..
+                    } = &style.style
+                    {
+                        colors.push(crate::color_management::to_renderer_srgba8(color).unwrap());
                     }
                 }
             }

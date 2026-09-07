@@ -17,7 +17,7 @@ use crate::model::authoring::{
     ShapeSource, TimeMap, TimelineInterval,
 };
 use crate::model::frame::color::Color;
-use crate::model::property::{ColorValue, Property, PropertyValue, Vec2};
+use crate::model::property::{ColorValue, Paint, Property, PropertyValue, Vec2};
 use crate::plugin::PluginManager;
 use crate::rendering::renderer::RenderOutput;
 use crate::rendering::skia_renderer::SkiaRenderer;
@@ -42,7 +42,12 @@ fn vec2(x: f64, y: f64) -> PropertyValue {
 }
 
 fn color(r: u8, g: u8, b: u8, a: u8) -> PropertyValue {
-    PropertyValue::ColorValue(ColorValue::from_straight_srgba8(&Color { r, g, b, a }))
+    PropertyValue::Paint(Paint::Solid(ColorValue::from_straight_srgba8(&Color {
+        r,
+        g,
+        b,
+        a,
+    })))
 }
 
 fn shape_fixture(name: &str) -> ShapeFixture {
@@ -68,7 +73,7 @@ fn shape_fixture(name: &str) -> ShapeFixture {
 
     let mut fill = AppearanceOperationFactory::create(plugins.as_ref(), "fill").unwrap();
     fill.properties.set(
-        "color".to_string(),
+        "paint".to_string(),
         Property::constant(color(235, 85, 40, 220)),
     );
     let fill_id = fill.id;
@@ -329,7 +334,7 @@ fn linked_instances_share_definition_edits_until_one_is_made_unique() {
             fixture.plugins.as_ref(),
             inner_id,
             fixture.fill_id,
-            "color",
+            "paint",
             MediaTime::zero(),
             color(40, 170, 235, 220),
         )
@@ -385,7 +390,7 @@ fn linked_instances_share_definition_edits_until_one_is_made_unique() {
             fixture.plugins.as_ref(),
             inner_id,
             fixture.fill_id,
-            "color",
+            "paint",
             MediaTime::zero(),
             color(120, 235, 70, 220),
         )

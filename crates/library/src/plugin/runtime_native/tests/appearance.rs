@@ -23,12 +23,14 @@ fn style_wire_conversion_covers_fill_and_stroke_and_rejects_invalid_output() {
     assert_eq!(
         fill.style,
         DrawStyle::Fill {
-            color: crate::model::frame::color::Color {
+            paint: (crate::model::frame::color::Color {
                 r: 1,
                 g: 2,
                 b: 3,
                 a: 4,
-            },
+            })
+            .into(),
+            opacity: 1.0,
             offset: 2.5,
         }
     );
@@ -56,12 +58,14 @@ fn style_wire_conversion_covers_fill_and_stroke_and_rejects_invalid_output() {
     assert_eq!(
         stroke.style,
         DrawStyle::Stroke {
-            color: crate::model::frame::color::Color {
+            paint: (crate::model::frame::color::Color {
                 r: 5,
                 g: 6,
                 b: 7,
                 a: 8,
-            },
+            })
+            .into(),
+            opacity: 1.0,
             width: 3.0,
             offset: -1.0,
             cap: CapType::Butt,

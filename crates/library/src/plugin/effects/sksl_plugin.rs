@@ -588,6 +588,7 @@ impl EffectPlugin for SkslEffectPlugin {
                         | PropertyUiType::Dropdown { .. }
                         | PropertyUiType::Gradient
                         | PropertyUiType::Pattern => PropertyValue::String(String::new()),
+                        PropertyUiType::Paint => PropertyValue::String(String::new()),
                     },
                 };
 

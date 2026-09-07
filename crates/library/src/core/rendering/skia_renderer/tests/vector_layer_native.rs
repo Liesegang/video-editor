@@ -36,12 +36,13 @@ fn backend_native_vector_draws_match_the_owned_output_boundary() {
     let styles = [StyleConfig {
         id: Uuid::new_v4(),
         style: DrawStyle::Fill {
-            color: Color {
+            paint: solid_paint(Color {
                 r: 48,
                 g: 210,
                 b: 96,
                 a: 220,
-            },
+            }),
+            opacity: 1.0,
             offset: 0.0,
         },
     }];
@@ -151,12 +152,13 @@ fn render_layered_gpu_vectors(native: bool) -> Option<Vec<[f32; 4]>> {
     let styles = [StyleConfig {
         id: Uuid::new_v4(),
         style: DrawStyle::Fill {
-            color: Color {
+            paint: solid_paint(Color {
                 r: 64,
                 g: 180,
                 b: 230,
                 a: 210,
-            },
+            }),
+            opacity: 1.0,
             offset: 0.0,
         },
     }];
@@ -298,7 +300,8 @@ fn layer_mask_white_fill() -> StyleConfig {
     StyleConfig {
         id: Uuid::new_v4(),
         style: DrawStyle::Fill {
-            color: Color::white(),
+            paint: solid_paint(Color::white()),
+            opacity: 1.0,
             offset: 0.0,
         },
     }
@@ -499,11 +502,83 @@ fn gpu_backend_native_vector_draws_preserve_layered_pixels() {
 #[cfg(all(feature = "gl", target_os = "windows"))]
 #[test]
 #[ignore = "requires an idle desktop OpenGL GPU"]
+fn gpu_gradient_and_pattern_paint_match_cpu_for_fill_and_stroke() {
+    use crate::model::property::{GradientValue, Paint, PatternValue};
+
+    for material in [
+        Paint::Gradient(GradientValue::default()),
+        Paint::Pattern(PatternValue::default()),
+    ] {
+        for is_stroke in [false, true] {
+            let body = if is_stroke {
+                DrawStyle::Stroke {
+                    paint: material.clone(),
+                    opacity: 0.5,
+                    width: 4.0,
+                    offset: 0.0,
+                    cap: Default::default(),
+                    join: Default::default(),
+                    miter: 4.0,
+                    dash_array: Vec::new(),
+                    dash_offset: 0.0,
+                }
+            } else {
+                DrawStyle::Fill {
+                    paint: material.clone(),
+                    opacity: 0.5,
+                    offset: 0.0,
+                }
+            };
+            let styles = [StyleConfig {
+                id: Uuid::new_v4(),
+                style: body,
+            }];
+            let cpu = render_layer_mask_case(&styles, Affine2D::IDENTITY, false);
+            let gpu = render_layer_mask_case(&styles, Affine2D::IDENTITY, true);
+            if is_stroke {
+                let mut baseline = styles.clone();
+                if let DrawStyle::Stroke { paint, opacity, .. } = &mut baseline[0].style {
+                    *paint = solid_paint(Color::white());
+                    *opacity = 1.0;
+                }
+                let baseline_cpu = render_layer_mask_case(&baseline, Affine2D::IDENTITY, false);
+                let baseline_gpu = render_layer_mask_case(&baseline, Affine2D::IDENTITY, true);
+                assert_gpu_layer_mask_near_outside_baseline_edges(
+                    &cpu,
+                    &gpu,
+                    &baseline_cpu,
+                    &baseline_gpu,
+                    None,
+                );
+            } else {
+                assert_gpu_layer_mask_near(&cpu, &gpu);
+            }
+            let y = if is_stroke { 19 } else { 32 };
+            for pixels in [&cpu, &gpu] {
+                let left = pixels[y * 72 + 22];
+                let right = pixels[y * 72 + 42];
+                assert!(
+                    (left[0] - right[0]).abs() > 0.25,
+                    "Paint must stay spatial on both devices: {material:?}, stroke={is_stroke}, left={left:?}, right={right:?}"
+                );
+                assert!(
+                    (left[3] - 0.5).abs() < 0.002 && (right[3] - 0.5).abs() < 0.002,
+                    "Paint opacity must apply once: left={left:?}, right={right:?}"
+                );
+            }
+        }
+    }
+}
+
+#[cfg(all(feature = "gl", target_os = "windows"))]
+#[test]
+#[ignore = "requires an idle desktop OpenGL GPU"]
 fn gpu_layer_mask_matches_cpu_for_stroke_hole_partial_alpha_and_transform() {
     let stroke = StyleConfig {
         id: Uuid::new_v4(),
         style: DrawStyle::Stroke {
-            color: Color::white(),
+            paint: solid_paint(Color::white()),
+            opacity: 1.0,
             width: 4.0,
             offset: 0.0,
             cap: Default::default(),
@@ -541,12 +616,13 @@ fn gpu_layer_mask_matches_cpu_for_stroke_hole_partial_alpha_and_transform() {
         StyleConfig {
             id: Uuid::new_v4(),
             style: DrawStyle::Fill {
-                color: Color {
+                paint: solid_paint(Color {
                     r: 255,
                     g: 255,
                     b: 255,
                     a: 128,
-                },
+                }),
+                opacity: 1.0,
                 offset: 0.0,
             },
         },
@@ -572,7 +648,8 @@ fn gpu_layer_mask_matches_cpu_for_stroke_hole_partial_alpha_and_transform() {
         StyleConfig {
             id: Uuid::new_v4(),
             style: DrawStyle::Fill {
-                color: Color::white(),
+                paint: solid_paint(Color::white()),
+                opacity: 1.0,
                 offset: 0.0,
             },
         },

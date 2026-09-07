@@ -173,14 +173,14 @@ def _edit_direct_text_size(client, item_id):
     controls = {
         "font": "inspector.property:item:{}:font_family".format(item_id),
         "size": "inspector.property:item:{}:size".format(item_id),
-        "fill": "inspector.property:appearance:{}:{}:color".format(item_id, fill_id),
+        "fill": "inspector.property:appearance:{}:{}:paint".format(item_id, fill_id),
         "content": "inspector.property:item:{}:text".format(item_id),
     }
     expected_kinds = {
         "content": "multiline_text",
         "font": "font",
         "size": "float",
-        "fill": "managed_color",
+        "fill": "paint",
     }
     metadata = {}
     for name, component_id in controls.items():
@@ -256,14 +256,14 @@ def _edit_converted_text_size(client, instance_id, definition, converted_state):
             )
         controls[name] = {"parameter": parameter, "metadata": metadata}
 
-    fill_parameter = _module_style_parameter(definition, "fill", "color")
+    fill_parameter = _module_style_parameter(definition, "fill", "paint")
     fill_control_id = "inspector.property:module_instance:{}:{}".format(
         instance_id, fill_parameter["id"]
     )
     fill_component = _bring_into_inspector(client, fill_control_id, -280.0)
     fill_metadata = fill_component.get("metadata") or {}
-    if fill_metadata.get("editor_kind") != "managed_color":
-        raise QaFailure("converted Text Fill did not use its managed_color editor")
+    if fill_metadata.get("editor_kind") != "paint":
+        raise QaFailure("converted Text Fill did not use its shared Paint editor")
     controls["Fill"] = {
         "parameter": fill_parameter,
         "metadata": fill_metadata,

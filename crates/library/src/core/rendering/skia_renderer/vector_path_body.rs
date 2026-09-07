@@ -2,7 +2,7 @@
 
 use skia_safe::{Canvas, Path, Rect};
 
-use super::paint::{PaintFactory, StrokeRenderConfig};
+use super::paint::{FillRenderConfig, PaintFactory, StrokeRenderConfig};
 use crate::error::LibraryError;
 use crate::model::frame::appearance::path_effect_outset;
 use crate::model::frame::draw_type::{DrawStyle, PathEffect};
@@ -74,6 +74,7 @@ impl PathBody {
         contract: &SkiaSurfaceContract,
         canvas: &Canvas,
         path_effects: &[PathEffect],
+        geometry: Rect,
         config: &StyleConfig,
     ) -> Result<(), LibraryError> {
         if config.style.composite_phase() != super::layer_styles::CompositePhase::Body {
@@ -85,15 +86,24 @@ impl PathBody {
             canvas,
             config.style.visual_outset() + path_effect_outset(path_effects) + 1.0,
             |canvas, path| match &config.style {
-                DrawStyle::Fill { color, offset } => PaintFactory::new(contract).draw_shape_fill(
+                DrawStyle::Fill {
+                    paint,
+                    opacity,
+                    offset,
+                } => PaintFactory::new(contract).draw_shape_fill(
                     canvas,
                     path,
-                    color,
-                    path_effects,
-                    *offset,
+                    FillRenderConfig {
+                        material: paint,
+                        opacity: *opacity as f32,
+                        geometry,
+                        path_effects,
+                        offset: *offset,
+                    },
                 ),
                 DrawStyle::Stroke {
-                    color,
+                    paint,
+                    opacity,
                     width,
                     offset,
                     cap,
@@ -106,7 +116,9 @@ impl PathBody {
                     path,
                     path_effects,
                     StrokeRenderConfig {
-                        color,
+                        paint,
+                        opacity: *opacity as f32,
+                        geometry,
                         width: *width,
                         offset: *offset,
                         cap,

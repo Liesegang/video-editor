@@ -25,9 +25,9 @@ fn set_number(operation: &mut AppearanceOperation, key: &str, value: f64) {
 fn fill(plugins: &PluginManager) -> AppearanceOperation {
     let mut operation = style(plugins, "fill");
     operation.properties.set(
-        "color".to_string(),
-        Property::constant(PropertyValue::ColorValue(ColorValue::from_straight_srgba8(
-            &color(30, 80, 220, 255),
+        "paint".to_string(),
+        Property::constant(PropertyValue::Paint(crate::model::property::Paint::Solid(
+            ColorValue::from_straight_srgba8(&color(30, 80, 220, 255)),
         ))),
     );
     operation
@@ -146,4 +146,45 @@ fn converted_image_style_order_is_distinct_and_each_preview_matches_png() {
         first, second,
         "authored Shadow/GradientOverlay/ColorOverlay order must change the rendered image"
     );
+}
+
+#[test]
+fn converted_fill_and_stroke_paints_match_png_export_without_flattening() {
+    use crate::model::property::{Paint, PatternValue};
+
+    let plugins = Arc::new(PluginManager::default());
+    for component in ["fill", "stroke"] {
+        let mut rendered = Vec::new();
+        for paint in [
+            Paint::Gradient(GradientValue::default()),
+            Paint::Pattern(PatternValue::default()),
+        ] {
+            let mut operation = style(&plugins, component);
+            operation.properties.set(
+                "paint".to_string(),
+                Property::constant(PropertyValue::Paint(paint)),
+            );
+            set_number(&mut operation, "opacity", 0.65);
+            if component == "stroke" {
+                set_number(&mut operation, "width", 8.0);
+            }
+            let project = converted_style_project(
+                &plugins,
+                "Spatial Paint export",
+                vec![operation, shadow(&plugins)],
+            );
+            rendered.push(assert_authoring_png_matches_preview(
+                RenderServer::new_with_cpu_preview(
+                    Arc::clone(&plugins),
+                    Arc::new(CacheManager::new()),
+                ),
+                project,
+                0,
+            ));
+        }
+        assert_ne!(
+            rendered[0], rendered[1],
+            "{component} Gradient and Pattern must remain distinct through Image styles and export"
+        );
+    }
 }

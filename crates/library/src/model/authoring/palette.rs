@@ -2,25 +2,10 @@ use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::model::property::{ColorValue, GradientValue, PatternValue};
+use crate::model::property::ColorValue;
+pub use crate::model::property::Paint;
 
 use super::{PaintDefinitionId, PaletteGroupId};
-
-/// A reusable authored paint. Every variant retains managed colors and exact
-/// typed geometry; Palette selection never flattens a Gradient or Pattern to
-/// a representative Solid swatch.
-#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
-#[serde(
-    tag = "kind",
-    content = "value",
-    rename_all = "snake_case",
-    deny_unknown_fields
-)]
-pub enum Paint {
-    Solid(ColorValue),
-    Gradient(GradientValue),
-    Pattern(PatternValue),
-}
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
 #[serde(deny_unknown_fields)]

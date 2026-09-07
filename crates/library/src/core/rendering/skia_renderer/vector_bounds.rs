@@ -165,7 +165,10 @@ mod tests {
             StyleConfig {
                 id: Uuid::new_v4(),
                 style: DrawStyle::Fill {
-                    color: Color::white(),
+                    paint: crate::model::property::Paint::Solid(
+                        crate::model::property::ColorValue::from_straight_srgba8(&Color::white()),
+                    ),
+                    opacity: 1.0,
                     offset: 4.0,
                 },
             },

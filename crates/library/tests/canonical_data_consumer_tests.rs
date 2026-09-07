@@ -14,7 +14,7 @@ use library::model::project::{
     Composition, NodeContainer, NodeGraphBundle, PortAddress, PortOwner, Project,
     ProjectConnection, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT,
 };
-use library::model::property::{ColorSpaceRef, ColorValue, Property, PropertyValue};
+use library::model::property::{ColorSpaceRef, ColorValue, Paint, Property, PropertyValue};
 use library::model::{Clip, DataContent, GeneratorContent, Node, NodeContent};
 use library::plugin::{PluginManager, property_port_key};
 use library::rendering::renderer::RenderOutput;
@@ -55,6 +55,28 @@ fn frame(project: &Project, plugins: &Arc<PluginManager>) -> Result<FrameInfo> {
         plugins,
     )
     .context("evaluate canonical consumer graph")
+}
+
+fn render_image(frame: &FrameInfo, plugins: &Arc<PluginManager>) -> Result<Vec<u8>> {
+    let renderer = SkiaRenderer::new(
+        frame.width as u32,
+        frame.height as u32,
+        frame.background_color.clone(),
+        false,
+        None,
+        None,
+    )?;
+    let mut render_service =
+        RenderService::new(renderer, Arc::clone(plugins), Arc::new(CacheManager::new()));
+    let RenderOutput::Image(image) = render_service.render_from_frame_info(frame)? else {
+        anyhow::bail!("CPU canonical render unexpectedly returned a texture");
+    };
+    Ok(image.data)
+}
+
+fn center_pixel(image: &[u8]) -> &[u8] {
+    let offset = ((HEIGHT as usize / 2) * WIDTH as usize + WIDTH as usize / 2) * 4;
+    &image[offset..offset + 4]
 }
 
 fn objects(items: &[FrameItem]) -> Vec<&FrameObject> {
@@ -174,14 +196,16 @@ fn color_value_drives_solid_through_the_project_graph() -> Result<()> {
     assert_eq!(
         styles.first().map(|style| &style.style),
         Some(&DrawStyle::Fill {
-            color: Color {
-                r: 128,
-                g: 64,
-                b: 255,
-                a: 128,
-            },
+            paint: Paint::Solid(color.clone()),
+            opacity: 1.0,
             offset: 0.0,
         })
+    );
+    assert_eq!(
+        center_pixel(&render_image(&rendered, &plugins)?),
+        // The terminal image is composited over the composition's opaque
+        // black background, so straight alpha is already resolved here.
+        [64, 32, 128, 255]
     );
     let stored = project
         .nodes
@@ -194,11 +218,11 @@ fn color_value_drives_solid_through_the_project_graph() -> Result<()> {
 }
 
 #[test]
-fn display_p3_color_reaches_solid_through_an_explicit_terminal_transform() -> Result<()> {
+fn display_p3_color_stays_managed_until_the_renderer_transform() -> Result<()> {
     let plugins = Arc::new(PluginManager::default());
     let factory = manager(plugins.clone());
     let color = ColorValue::new(ColorSpaceRef::new("display-p3")?, [0.8, 0.4, 0.2, 0.5])?;
-    let project = project_with_graph(solid_graph(&factory, color)?)?;
+    let project = project_with_graph(solid_graph(&factory, color.clone())?)?;
     let rendered = frame(&project, &plugins)?;
     let object = objects(&rendered.items)
         .into_iter()
@@ -210,24 +234,26 @@ fn display_p3_color_reaches_solid_through_an_explicit_terminal_transform() -> Re
     assert_eq!(
         styles.first().map(|style| &style.style),
         Some(&DrawStyle::Fill {
-            color: Color {
-                r: 219,
-                g: 94,
-                b: 31,
-                a: 128,
-            },
+            paint: Paint::Solid(color),
+            opacity: 1.0,
             offset: 0.0,
         })
+    );
+    assert_eq!(
+        center_pixel(&render_image(&rendered, &plugins)?),
+        // Managed P3 conversion happens before the same opaque-background
+        // composition; the Frame assertion above proves the unflattened input.
+        [110, 47, 16, 255]
     );
     Ok(())
 }
 
 #[test]
-fn extended_srgb_is_clipped_only_at_the_legacy_terminal_boundary() -> Result<()> {
+fn extended_srgb_stays_hdr_until_the_renderer_boundary() -> Result<()> {
     let plugins = Arc::new(PluginManager::default());
     let factory = manager(plugins.clone());
     let color = ColorValue::new(ColorSpaceRef::srgb(), [-0.25, 2.0, 0.5, 1.0])?;
-    let project = project_with_graph(solid_graph(&factory, color)?)?;
+    let project = project_with_graph(solid_graph(&factory, color.clone())?)?;
     let rendered = frame(&project, &plugins)?;
     let FrameContent::Shape { styles, .. } = &objects(&rendered.items)
         .into_iter()
@@ -240,31 +266,45 @@ fn extended_srgb_is_clipped_only_at_the_legacy_terminal_boundary() -> Result<()>
     assert_eq!(
         styles.first().map(|style| &style.style),
         Some(&DrawStyle::Fill {
-            color: Color {
-                r: 0,
-                g: 255,
-                b: 128,
-                a: 255,
-            },
+            paint: Paint::Solid(color),
+            opacity: 1.0,
             offset: 0.0,
         })
+    );
+    assert_eq!(
+        center_pixel(&render_image(&rendered, &plugins)?),
+        [0, 255, 128, 255]
     );
     Ok(())
 }
 
 #[test]
-fn unknown_renderer_color_produces_no_output_without_white_fallback() -> Result<()> {
+fn unknown_renderer_color_is_retained_then_fails_without_white_fallback() -> Result<()> {
     let plugins = Arc::new(PluginManager::default());
     let factory = manager(plugins.clone());
     let color = ColorValue::new(
         ColorSpaceRef::new("scene_linear_ap1")?,
         [0.5, 0.5, 0.5, 1.0],
     )?;
-    let project = project_with_graph(solid_graph(&factory, color)?)?;
+    let project = project_with_graph(solid_graph(&factory, color.clone())?)?;
     let rendered = frame(&project, &plugins)?;
+    let FrameContent::Shape { styles, .. } = &objects(&rendered.items)
+        .first()
+        .context("unsupported managed color disappeared before the renderer boundary")?
+        .content
+    else {
+        anyhow::bail!("Solid changed output type");
+    };
     assert!(
-        objects(&rendered.items).is_empty(),
-        "unsupported color crossed the u8 renderer boundary"
+        matches!(
+            styles.first().map(|style| &style.style),
+            Some(DrawStyle::Fill { paint: Paint::Solid(actual), .. }) if actual == &color
+        ),
+        "unsupported managed Paint changed before the renderer boundary"
+    );
+    assert!(
+        render_image(&rendered, &plugins).is_err(),
+        "unsupported color did not fail closed at the renderer boundary"
     );
     Ok(())
 }
@@ -300,7 +340,8 @@ fn explicit_pre_v1_color_and_svg_read_adapters_remain_lossless() -> Result<()> {
     };
     assert!(matches!(
         styles.first().map(|style| &style.style),
-        Some(DrawStyle::Fill { color, .. }) if color == &legacy_color
+        Some(DrawStyle::Fill { paint: Paint::Solid(color), .. })
+            if color == &ColorValue::from_straight_srgba8(&legacy_color)
     ));
 
     let shape = factory.create_shape_node("M 0 0 H 40 V 20 H 0 Z", WIDTH, HEIGHT, 40, 20)?;
@@ -318,7 +359,7 @@ fn explicit_pre_v1_color_and_svg_read_adapters_remain_lossless() -> Result<()> {
     let legacy_style = with_legacy_property(
         &canonical_project,
         fill.id,
-        "color",
+        "paint",
         PropertyValue::Color(legacy_color.clone()),
     )?;
     let legacy_style = with_legacy_property(
@@ -343,7 +384,8 @@ fn explicit_pre_v1_color_and_svg_read_adapters_remain_lossless() -> Result<()> {
     assert!(!path.contours().is_empty());
     assert!(matches!(
         styles.first().map(|style| &style.style),
-        Some(DrawStyle::Fill { color, .. }) if color == &legacy_color
+        Some(DrawStyle::Fill { paint: Paint::Solid(color), .. })
+            if color == &ColorValue::from_straight_srgba8(&legacy_color)
     ));
     Ok(())
 }
@@ -372,7 +414,7 @@ fn canonical_colors_use_the_explicit_renderer_transform_or_fail_closed() -> Resu
                     ),
                     ProjectConnection::new(
                         PortAddress::new(PortOwner::Node(color_node.id), DATA_VALUE_OUTPUT_PORT),
-                        PortAddress::new(PortOwner::Node(style.id), property_port_key("color")),
+                        PortAddress::new(PortOwner::Node(style.id), property_port_key("paint")),
                         0,
                     ),
                 ],
@@ -381,13 +423,6 @@ fn canonical_colors_use_the_explicit_renderer_transform_or_fail_closed() -> Resu
             let project = project_with_graph(graph)?;
             let rendered = frame(&project, &plugins)?;
             let objects = objects(&rendered.items);
-            let Ok(expected) = library::color_management::to_renderer_srgba8(color) else {
-                assert!(
-                    objects.is_empty(),
-                    "{component} substituted a fallback for unsupported color {color:?}"
-                );
-                continue;
-            };
             let content = &objects
                 .first()
                 .with_context(|| format!("{component} produced no styled shape"))?
@@ -400,13 +435,26 @@ fn canonical_colors_use_the_explicit_renderer_transform_or_fail_closed() -> Resu
                 .with_context(|| format!("{component} produced no style"))?
                 .style;
             let actual = match style {
-                DrawStyle::Fill { color, .. } | DrawStyle::Stroke { color, .. } => color,
+                DrawStyle::Fill { paint, .. } | DrawStyle::Stroke { paint, .. } => paint,
                 unexpected => anyhow::bail!("Solid-color style fixture produced {unexpected:?}"),
             };
             assert_eq!(
-                *actual, expected,
-                "{component} substituted a fallback instead of the explicit renderer transform"
+                actual,
+                &Paint::Solid(color.clone()),
+                "{component} altered managed Paint before the renderer boundary"
             );
+            let raster = render_image(&rendered, &plugins);
+            if library::color_management::to_renderer_srgba8(color).is_ok() {
+                assert!(
+                    raster?.chunks_exact(4).any(|pixel| pixel[3] != 0),
+                    "{component} produced no pixels for supported managed Paint"
+                );
+            } else {
+                assert!(
+                    raster.is_err(),
+                    "{component} substituted a fallback for unsupported Paint {color:?}"
+                );
+            }
         }
     }
     Ok(())
@@ -429,7 +477,7 @@ fn path_and_color_values_drive_shape_fill_and_stroke_consumers() -> Result<()> {
     )?;
     let color = ColorValue::new(ColorSpaceRef::srgb(), [0.5, 0.25, 1.0, 1.0])?;
     let path_node = path_data(path.clone())?;
-    let color_node = color_data(color)?;
+    let color_node = color_data(color.clone())?;
     let mut graph = factory.create_shape_graph(DEFAULT_SHAPE_PATH, WIDTH, HEIGHT, 80, 80)?;
     let shape_id = graph
         .nodes
@@ -472,12 +520,12 @@ fn path_and_color_values_drive_shape_fill_and_stroke_consumers() -> Result<()> {
         ),
         ProjectConnection::new(
             PortAddress::new(PortOwner::Node(color_node.id), DATA_VALUE_OUTPUT_PORT),
-            PortAddress::new(PortOwner::Node(fill_id), property_port_key("color")),
+            PortAddress::new(PortOwner::Node(fill_id), property_port_key("paint")),
             0,
         ),
         ProjectConnection::new(
             PortAddress::new(PortOwner::Node(color_node.id), DATA_VALUE_OUTPUT_PORT),
-            PortAddress::new(PortOwner::Node(stroke_id), property_port_key("color")),
+            PortAddress::new(PortOwner::Node(stroke_id), property_port_key("paint")),
             0,
         ),
     ]);
@@ -501,29 +549,13 @@ fn path_and_color_values_drive_shape_fill_and_stroke_consumers() -> Result<()> {
         };
         assert_eq!(rendered_path, &path);
         match styles.first().map(|style| &style.style) {
-            Some(DrawStyle::Fill { color, .. }) => {
+            Some(DrawStyle::Fill { paint, .. }) => {
                 saw_fill = true;
-                assert_eq!(
-                    *color,
-                    Color {
-                        r: 128,
-                        g: 64,
-                        b: 255,
-                        a: 255
-                    }
-                );
+                assert_eq!(paint, &Paint::Solid(color.clone()));
             }
-            Some(DrawStyle::Stroke { color, .. }) => {
+            Some(DrawStyle::Stroke { paint, .. }) => {
                 saw_stroke = true;
-                assert_eq!(
-                    *color,
-                    Color {
-                        r: 128,
-                        g: 64,
-                        b: 255,
-                        a: 255
-                    }
-                );
+                assert_eq!(paint, &Paint::Solid(color.clone()));
             }
             _ => anyhow::bail!("Style branch has no Fill or Stroke"),
         }

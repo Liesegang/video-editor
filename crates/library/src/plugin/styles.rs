@@ -133,14 +133,6 @@ impl StylePlugin for ImageOpacityStylePlugin {
 
 pub struct FillStylePlugin;
 
-fn apply_opacity(mut color: Color, opacity: f64) -> Color {
-    // DrawStyle is the legacy u8 renderer boundary. Opacity is an explicit
-    // Style operation at that boundary, not a conversion of Project color
-    // data, so its result is intentionally quantized exactly once here.
-    color.a = (f64::from(color.a) * opacity).round().clamp(0.0, 255.0) as u8;
-    color
-}
-
 /// Evaluates the built-in Shape appearance boundary from values already
 /// sampled by an authoring runtime. The legacy graph context and Module graph
 /// therefore share the same Fill/Stroke materialization policy.
@@ -165,21 +157,17 @@ pub(crate) fn builtin_style_from_values(
             _ => None,
         }
     }
-    fn color(values: &std::collections::HashMap<String, PropertyValue>) -> Option<Color> {
-        match values.get("color")? {
-            PropertyValue::Color(value) => Some(value.clone()),
-            PropertyValue::ColorValue(value) => {
-                crate::color_management::to_renderer_srgba8(value).ok()
-            }
-            _ => None,
-        }
+    fn paint(
+        values: &std::collections::HashMap<String, PropertyValue>,
+    ) -> Option<crate::model::property::Paint> {
+        crate::model::property::Paint::from_property_value(values.get("paint")?)
     }
 
     let opacity = number(values, "opacity")?;
     if !opacity.is_finite() || !(0.0..=1.0).contains(&opacity) {
         return None;
     }
-    let final_color = apply_opacity(color(values)?, opacity);
+    let paint = paint(values)?;
     let style = match component_id {
         "fill" => {
             let offset = number(values, "offset")?;
@@ -187,7 +175,8 @@ pub(crate) fn builtin_style_from_values(
                 return None;
             }
             DrawStyle::Fill {
-                color: final_color,
+                paint,
+                opacity,
                 offset,
             }
         }
@@ -213,7 +202,8 @@ pub(crate) fn builtin_style_from_values(
                 return None;
             }
             DrawStyle::Stroke {
-                color: final_color,
+                paint,
+                opacity,
                 width,
                 offset,
                 join: match string(values, "join")? {
@@ -260,12 +250,12 @@ impl StylePlugin for FillStylePlugin {
             self.name(),
             vec![
                 PropertyDefinition::new(
-                    "color",
-                    PropertyUiType::ColorValue,
-                    "Color",
-                    PropertyValue::ColorValue(
+                    "paint",
+                    PropertyUiType::Paint,
+                    "Paint",
+                    PropertyValue::Paint(crate::model::property::Paint::Solid(
                         crate::model::property::ColorValue::from_straight_srgba8(&Color::white()),
-                    ),
+                    )),
                 ),
                 PropertyDefinition::new(
                     "opacity",
@@ -328,12 +318,12 @@ impl StylePlugin for StrokeStylePlugin {
             self.name(),
             vec![
                 PropertyDefinition::new(
-                    "color",
-                    PropertyUiType::ColorValue,
-                    "Color",
-                    PropertyValue::ColorValue(
+                    "paint",
+                    PropertyUiType::Paint,
+                    "Paint",
+                    PropertyValue::Paint(crate::model::property::Paint::Solid(
                         crate::model::property::ColorValue::from_straight_srgba8(&Color::white()),
-                    ),
+                    )),
                 ),
                 PropertyDefinition::new(
                     "width",
