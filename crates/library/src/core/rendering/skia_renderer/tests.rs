@@ -98,6 +98,16 @@ mod point_connection_gl_state;
 #[path = "tests/point_connection_gpu.rs"]
 mod point_connection_gpu;
 #[cfg(all(feature = "gl", target_os = "windows"))]
+#[path = "tests/point_connection_performance.rs"]
+mod point_connection_performance;
+#[cfg(all(feature = "gl", target_os = "windows"))]
+#[path = "tests/point_connection_topology.rs"]
+mod point_connection_topology;
+
+#[cfg(all(feature = "gl", target_os = "windows"))]
+#[path = "tests/point_connection_budget.rs"]
+mod point_connection_budget;
+#[cfg(all(feature = "gl", target_os = "windows"))]
 #[path = "tests/point_grid_gpu.rs"]
 mod point_grid_gpu;
 #[cfg(all(feature = "gl", target_os = "windows"))]

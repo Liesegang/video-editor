@@ -170,6 +170,12 @@ pub fn run(
             },
         )?);
     }
+    metrics.extend(crate::point_connections::run(
+        &fixtures.point_lines,
+        &plugins,
+        configuration,
+        &mut driver,
+    )?);
     Ok(GpuPreviewMeasurements {
         metrics,
         driver: driver.ok_or("no GPU workload ran")?,
@@ -193,10 +199,13 @@ pub fn unavailable_metrics() -> Vec<MetricResult> {
             GPU_UNAVAILABLE_REASON,
         )
     }));
+    metrics.extend(crate::point_connections::unavailable_metrics(
+        GPU_UNAVAILABLE_REASON,
+    ));
     metrics
 }
 
-fn warmed_gpu_service(
+pub(super) fn warmed_gpu_service(
     project: &library::model::authoring::AuthoringProject,
     frame: &library::model::frame::frame::FrameInfo,
     plugins: &Arc<PluginManager>,
@@ -236,7 +245,10 @@ fn warmed_gpu_service(
     Ok((service, driver))
 }
 
-fn validate_driver(expected: &mut Option<GpuDriverInfo>, actual: GpuDriverInfo) -> BenchResult<()> {
+pub(super) fn validate_driver(
+    expected: &mut Option<GpuDriverInfo>,
+    actual: GpuDriverInfo,
+) -> BenchResult<()> {
     if expected
         .as_ref()
         .is_some_and(|previous| previous != &actual)

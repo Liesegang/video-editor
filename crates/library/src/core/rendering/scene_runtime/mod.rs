@@ -12,6 +12,8 @@ mod point_field_data;
 mod point_field_dependencies;
 mod point_fields;
 mod prefix_scan;
+#[cfg(test)]
+pub(crate) mod profiling;
 mod proximity;
 #[cfg(test)]
 pub(crate) use diagnostics::PointInvocationStats;
@@ -114,6 +116,8 @@ pub(crate) struct SceneRuntime {
     limits: SceneRuntimeLimits,
     #[cfg(test)]
     fail_next_field_evaluation: bool,
+    #[cfg(test)]
+    point_profiler: Option<profiling::PointGpuProfiler>,
 }
 
 impl SceneRuntime {
@@ -134,6 +138,8 @@ impl SceneRuntime {
             limits,
             #[cfg(test)]
             fail_next_field_evaluation: false,
+            #[cfg(test)]
+            point_profiler: None,
         }
     }
 
@@ -145,6 +151,10 @@ impl SceneRuntime {
         format: SceneTextureFormat,
         premultiplied_color: [f32; 4],
     ) -> Result<SceneTexture, LibraryError> {
+        #[cfg(test)]
+        if let Some(profiler) = self.point_profiler.as_mut() {
+            profiler.clear_report();
+        }
         request.scene.validate().map_err(LibraryError::Validation)?;
         validate_transform(request.transform)?;
         validate_color(premultiplied_color)?;
@@ -158,7 +168,13 @@ impl SceneRuntime {
             format,
             self.limits.max_target_bytes,
         )?;
-        self.with_isolated_gl(|runtime| {
+        #[cfg(test)]
+        let profile_lines = matches!(request.scene.render_style, PointRenderStyle::Lines { .. });
+        #[cfg(test)]
+        if profile_lines && let Some(profiler) = self.point_profiler.as_mut() {
+            profiler.begin_frame();
+        }
+        let result = self.with_isolated_gl(|runtime| {
             runtime.render_point_isolated(
                 request,
                 target_width,
@@ -166,7 +182,12 @@ impl SceneRuntime {
                 format,
                 premultiplied_color,
             )
-        })
+        });
+        #[cfg(test)]
+        if profile_lines {
+            return self.finish_point_profile(result);
+        }
+        result
     }
 
     pub(crate) fn preflight_sprites(
@@ -378,7 +399,15 @@ impl SceneRuntime {
                 .ok_or_else(|| {
                     LibraryError::Render("Point Line preflight lost proximity pipeline".into())
                 })?
-                .evaluate(&self.gl, &parameters, &buffers, None, &source)?;
+                .evaluate(
+                    &self.gl,
+                    &parameters,
+                    &buffers,
+                    None,
+                    &source,
+                    #[cfg(test)]
+                    None,
+                )?;
             grid_pipeline
                 .lines
                 .as_ref()
@@ -401,6 +430,8 @@ impl SceneRuntime {
                     1.0,
                     0.0,
                     &buffers.scan,
+                    #[cfg(test)]
+                    None,
                 )
         })();
         buffers.destroy(&self.gl);
@@ -561,6 +592,8 @@ impl SceneRuntime {
                         buffers,
                         invocation.point_fields.as_ref(),
                         &point_source,
+                        #[cfg(test)]
+                        self.point_profiler.as_mut(),
                     )
             })();
             if let Err(error) = connection_evaluation {
@@ -617,6 +650,8 @@ impl SceneRuntime {
                             width.0,
                             fade.0,
                             &connection_buffers.scan,
+                            #[cfg(test)]
+                            self.point_profiler.as_mut(),
                         )?;
                 }
             }
@@ -710,6 +745,10 @@ impl Drop for SceneRuntime {
         }
         if let Some(target) = self.target.take() {
             target.destroy(&self.gl);
+        }
+        #[cfg(test)]
+        if let Some(profiler) = self.point_profiler.take() {
+            profiler.destroy(&self.gl);
         }
     }
 }

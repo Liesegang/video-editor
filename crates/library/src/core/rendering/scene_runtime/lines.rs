@@ -116,6 +116,13 @@ vec4 endpoint_color(uint slot) {
         uniforms
     }
 
+    #[cfg_attr(
+        test,
+        allow(
+            clippy::too_many_arguments,
+            reason = "Test-only timing adds one argument to the unchanged production draw boundary"
+        )
+    )]
     pub fn draw(
         &self,
         gl: &glow::Context,
@@ -124,8 +131,13 @@ vec4 endpoint_color(uint slot) {
         width: f32,
         fade: f32,
         scan: &PrefixScanBuffers,
+        #[cfg(test)] mut profiler: Option<&mut super::profiling::PointGpuProfiler>,
     ) -> Result<(), LibraryError> {
         let fields = request.point_fields;
+        #[cfg(test)]
+        if let Some(profiler) = profiler.as_deref_mut() {
+            profiler.begin_stage(gl, super::profiling::PointProfileStage::Draw)?;
+        }
         // SAFETY: every resource belongs to this current context. The compact
         // edge count was generated from buffers sized for this invocation.
         unsafe {
@@ -134,6 +146,10 @@ vec4 endpoint_color(uint slot) {
                 - request.transform.skew_x * request.transform.skew_y;
             if determinant.abs() <= f64::EPSILON {
                 gl.memory_barrier(glow::FRAMEBUFFER_BARRIER_BIT | glow::TEXTURE_FETCH_BARRIER_BIT);
+                #[cfg(test)]
+                if let Some(profiler) = profiler.as_deref_mut() {
+                    profiler.end_stage(gl, super::profiling::PointProfileStage::Draw)?;
+                }
                 return gl_operation_result(gl, "singular Point Line clear");
             }
             gl.use_program(Some(self.program));
@@ -191,6 +207,10 @@ vec4 endpoint_color(uint slot) {
             gl.bind_buffer(glow::DRAW_INDIRECT_BUFFER, Some(scan.indirect));
             gl.draw_arrays_indirect_offset(glow::TRIANGLES, 0);
             gl.memory_barrier(glow::FRAMEBUFFER_BARRIER_BIT | glow::TEXTURE_FETCH_BARRIER_BIT);
+        }
+        #[cfg(test)]
+        if let Some(profiler) = profiler {
+            profiler.end_stage(gl, super::profiling::PointProfileStage::Draw)?;
         }
         gl_operation_result(gl, "Line render")
     }

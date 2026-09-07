@@ -4,6 +4,8 @@ mod fixtures;
 mod gpu_preview;
 #[path = "production_baseline/measurements.rs"]
 mod measurements;
+#[path = "production_baseline/point_connections.rs"]
+mod point_connections;
 #[path = "production_baseline/report.rs"]
 mod report;
 #[path = "production_baseline/system.rs"]
@@ -34,6 +36,7 @@ fn main() -> BenchResult<()> {
     // report contract; only `cargo bench` receives the explicit workload.
     if raw_arguments.is_empty() {
         report::contract_self_check()?;
+        point_connections::contract_self_check()?;
         println!("production baseline contract self-test passed");
         return Ok(());
     }

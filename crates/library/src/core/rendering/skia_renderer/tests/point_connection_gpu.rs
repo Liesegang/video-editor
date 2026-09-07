@@ -11,7 +11,7 @@ use crate::rendering::scene_runtime::{PointConnectionReadback, PointInvocationSt
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
-fn transparent() -> Color {
+pub(super) fn transparent() -> Color {
     Color {
         r: 0,
         g: 0,
@@ -20,7 +20,12 @@ fn transparent() -> Color {
     }
 }
 
-fn line_style(maximum: f32, max_neighbors: u32, width: f32, fade: f32) -> PointRenderStyle {
+pub(super) fn line_style(
+    maximum: f32,
+    max_neighbors: u32,
+    width: f32,
+    fade: f32,
+) -> PointRenderStyle {
     PointRenderStyle::Lines {
         connections: PointConnectionParameters {
             min_distance: 0.0.into(),
@@ -32,7 +37,7 @@ fn line_style(maximum: f32, max_neighbors: u32, width: f32, fade: f32) -> PointR
     }
 }
 
-fn grid_scene(counts: [u32; 3], spacing: [f64; 3]) -> PointSceneFrame {
+pub(super) fn grid_scene(counts: [u32; 3], spacing: [f64; 3]) -> PointSceneFrame {
     let mut scene = particle_scene(0);
     scene.source = PointSceneSource::Grid(PointGridParameters {
         counts,
@@ -47,11 +52,14 @@ fn grid_scene(counts: [u32; 3], spacing: [f64; 3]) -> PointSceneFrame {
     scene
 }
 
-fn render(renderer: &mut SkiaRenderer, scene: &PointSceneFrame) -> Image {
+pub(super) fn render(renderer: &mut SkiaRenderer, scene: &PointSceneFrame) -> Image {
     render_point_test_scene(renderer, scene).unwrap()
 }
 
-fn connections(renderer: &SkiaRenderer, scene: &PointSceneFrame) -> Vec<PointConnectionReadback> {
+pub(super) fn connections(
+    renderer: &SkiaRenderer,
+    scene: &PointSceneFrame,
+) -> Vec<PointConnectionReadback> {
     let mut connections = renderer
         .scene_runtime
         .as_ref()
@@ -62,7 +70,7 @@ fn connections(renderer: &SkiaRenderer, scene: &PointSceneFrame) -> Vec<PointCon
     connections
 }
 
-fn edge_pairs(edges: &[PointConnectionReadback]) -> Vec<(u32, u32)> {
+pub(super) fn edge_pairs(edges: &[PointConnectionReadback]) -> Vec<(u32, u32)> {
     edges
         .iter()
         .map(|edge| {
@@ -72,7 +80,7 @@ fn edge_pairs(edges: &[PointConnectionReadback]) -> Vec<(u32, u32)> {
         .collect()
 }
 
-fn stats(renderer: &SkiaRenderer, scene: &PointSceneFrame) -> PointInvocationStats {
+pub(super) fn stats(renderer: &SkiaRenderer, scene: &PointSceneFrame) -> PointInvocationStats {
     renderer
         .scene_runtime
         .as_ref()
@@ -169,7 +177,7 @@ fn grid_connections_are_exact_mutual_nearest_with_stable_ties_and_3d_distance() 
     assert!(degree(&cube_edges).values().all(|value| *value == 3));
 }
 
-fn scaled_position_program(scale_x: f64) -> PointRenderProgram {
+pub(super) fn scaled_position_program(scale_x: f64) -> PointRenderProgram {
     PointRenderProgram {
         schema: PointAttributeSchema::new(Vec::new()).unwrap(),
         instructions: vec![

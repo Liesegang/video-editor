@@ -11,13 +11,19 @@ use super::source::{
     PointSourceBinding, PointSourceKind, PointSourceRequirements, PointSourceUniforms,
 };
 use crate::error::LibraryError;
+use crate::model::frame::particle::PARTICLE_MAX_CAPACITY;
 use crate::model::frame::point::PointConnectionParameters;
+use crate::model::point::POINT_MAX_CAPACITY;
 use crate::rendering::gl_resources::link_program;
 
 pub(super) const MAX_CANDIDATES_PER_POINT: u32 = 4_096;
 pub(super) const MAX_CANDIDATE_TESTS: u32 = 32_000_000;
 
 const STATUS_BYTES: u64 = 4 * size_of::<u32>() as u64;
+const _: () = {
+    assert!((PARTICLE_WORKGROUP_SIZE as u64) * (POINT_MAX_CAPACITY as u64) <= u32::MAX as u64);
+    assert!((PARTICLE_WORKGROUP_SIZE as u64) * (PARTICLE_MAX_CAPACITY as u64) <= u32::MAX as u64);
+};
 pub(super) struct PointConnectionBuffers {
     pub buckets: glow::Buffer,
     pub records: glow::Buffer,
@@ -281,6 +287,7 @@ impl PointConnectionPipeline {
         buffers: &PointConnectionBuffers,
         fields: Option<&PointFieldBuffers>,
         source: &PointSourceBinding<'_>,
+        #[cfg(test)] mut profiler: Option<&mut super::profiling::PointGpuProfiler>,
     ) -> Result<(), LibraryError> {
         if source.kind() != self.source_kind
             || fields.and_then(|fields| fields.geometry).is_some() != self.geometry
@@ -292,7 +299,30 @@ impl PointConnectionPipeline {
             ));
         }
         if parameters.max_distance.0 == 0.0 {
+            #[cfg(test)]
+            profile_begin(
+                gl,
+                &mut profiler,
+                super::profiling::PointProfileStage::HashClearBuild,
+            )?;
             let result = clear_indirect(gl, buffers.scan.indirect);
+            #[cfg(test)]
+            {
+                profile_end(
+                    gl,
+                    &mut profiler,
+                    super::profiling::PointProfileStage::HashClearBuild,
+                )?;
+                for stage in [
+                    super::profiling::PointProfileStage::BudgetGpu,
+                    super::profiling::PointProfileStage::Search,
+                    super::profiling::PointProfileStage::Mutual,
+                    super::profiling::PointProfileStage::ScanCompact,
+                ] {
+                    profile_begin(gl, &mut profiler, stage)?;
+                    profile_end(gl, &mut profiler, stage)?;
+                }
+            }
             #[cfg(test)]
             if result.is_ok() {
                 buffers.candidate_tests.set(0);
@@ -303,6 +333,12 @@ impl PointConnectionPipeline {
         }
         reset_status(gl, buffers.status)?;
         let groups = buffers.capacity.div_ceil(PARTICLE_WORKGROUP_SIZE);
+        #[cfg(test)]
+        profile_begin(
+            gl,
+            &mut profiler,
+            super::profiling::PointProfileStage::HashClearBuild,
+        )?;
         // SAFETY: all resources belong to the current context; model and
         // allocation validation bound every dispatch and indexed access.
         unsafe {
@@ -333,6 +369,19 @@ impl PointConnectionPipeline {
             gl.dispatch_compute(groups, 1, 1);
             gl.memory_barrier(glow::SHADER_STORAGE_BARRIER_BIT);
 
+            #[cfg(test)]
+            profile_end(
+                gl,
+                &mut profiler,
+                super::profiling::PointProfileStage::HashClearBuild,
+            )?;
+            #[cfg(test)]
+            profile_begin(
+                gl,
+                &mut profiler,
+                super::profiling::PointProfileStage::BudgetGpu,
+            )?;
+
             gl.use_program(Some(self.budget));
             gl.bind_buffer_base(glow::SHADER_STORAGE_BUFFER, 0, Some(buffers.buckets));
             gl.bind_buffer_base(glow::SHADER_STORAGE_BUFFER, 1, Some(buffers.records));
@@ -342,7 +391,20 @@ impl PointConnectionPipeline {
             gl.dispatch_compute(groups, 1, 1);
             gl.memory_barrier(glow::SHADER_STORAGE_BARRIER_BIT | glow::BUFFER_UPDATE_BARRIER_BIT);
         }
-        let status = read_status(gl, buffers.status)?;
+        #[cfg(test)]
+        profile_end(
+            gl,
+            &mut profiler,
+            super::profiling::PointProfileStage::BudgetGpu,
+        )?;
+        #[cfg(test)]
+        let wait_started = std::time::Instant::now();
+        let status = read_status(gl, buffers.status);
+        #[cfg(test)]
+        if let Some(profiler) = profiler.as_deref_mut() {
+            profiler.set_budget_readback_wait(wait_started.elapsed());
+        }
+        let status = status?;
         #[cfg(test)]
         {
             buffers.candidate_tests.set(status[0]);
@@ -360,6 +422,12 @@ impl PointConnectionPipeline {
                 status[0], MAX_CANDIDATE_TESTS, status[1], MAX_CANDIDATES_PER_POINT
             )));
         }
+        #[cfg(test)]
+        profile_begin(
+            gl,
+            &mut profiler,
+            super::profiling::PointProfileStage::Search,
+        )?;
         // SAFETY: the programs and buffers belong to this current context;
         // the fixed work budget was checked before these bounded dispatches.
         unsafe {
@@ -377,6 +445,19 @@ impl PointConnectionPipeline {
             gl.dispatch_compute(groups, 1, 1);
             gl.memory_barrier(glow::SHADER_STORAGE_BARRIER_BIT);
 
+            #[cfg(test)]
+            profile_end(
+                gl,
+                &mut profiler,
+                super::profiling::PointProfileStage::Search,
+            )?;
+            #[cfg(test)]
+            profile_begin(
+                gl,
+                &mut profiler,
+                super::profiling::PointProfileStage::Mutual,
+            )?;
+
             gl.use_program(Some(self.mutual));
             source.bind(gl, &self.mutual_source)?;
             gl.bind_buffer_base(glow::SHADER_STORAGE_BUFFER, 1, Some(buffers.neighbors));
@@ -387,12 +468,30 @@ impl PointConnectionPipeline {
             gl.dispatch_compute(groups, 1, 1);
             gl.memory_barrier(glow::SHADER_STORAGE_BARRIER_BIT);
         }
+        #[cfg(test)]
+        profile_end(
+            gl,
+            &mut profiler,
+            super::profiling::PointProfileStage::Mutual,
+        )?;
+        #[cfg(test)]
+        profile_begin(
+            gl,
+            &mut profiler,
+            super::profiling::PointProfileStage::ScanCompact,
+        )?;
         self.scan.compact(
             gl,
             buffers.edge_counts,
             buffers.candidates,
             parameters.max_neighbors,
             &buffers.scan,
+        )?;
+        #[cfg(test)]
+        profile_end(
+            gl,
+            &mut profiler,
+            super::profiling::PointProfileStage::ScanCompact,
         )?;
         #[cfg(test)]
         buffers
@@ -416,6 +515,30 @@ impl PointConnectionPipeline {
             }
         }
     }
+}
+
+#[cfg(test)]
+fn profile_begin(
+    gl: &glow::Context,
+    profiler: &mut Option<&mut super::profiling::PointGpuProfiler>,
+    stage: super::profiling::PointProfileStage,
+) -> Result<(), LibraryError> {
+    if let Some(profiler) = profiler.as_deref_mut() {
+        profiler.begin_stage(gl, stage)?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+fn profile_end(
+    gl: &glow::Context,
+    profiler: &mut Option<&mut super::profiling::PointGpuProfiler>,
+    stage: super::profiling::PointProfileStage,
+) -> Result<(), LibraryError> {
+    if let Some(profiler) = profiler.as_deref_mut() {
+        profiler.end_stage(gl, stage)?;
+    }
+    Ok(())
 }
 
 fn bind_derived(gl: &glow::Context, fields: Option<&PointFieldBuffers>) {
@@ -602,6 +725,10 @@ layout(std430, binding = 2) buffer Status {
 uniform uint uCapacity;
 uniform uint uBucketMask;
 HASH_SOURCE
+// Each lane visits distinct buckets, so its work is at most uCapacity. The
+// Rust-side capacity/workgroup assertion keeps this shared sum within uint.
+shared uint groupWork[64];
+shared uint groupMax[64];
 
 void saturated_add(uint amount) {
     uint old = status[0];
@@ -617,33 +744,47 @@ void saturated_add(uint amount) {
 
 void main() {
     uint slot = gl_GlobalInvocationID.x;
-    if (slot >= uCapacity || records[slot].x == (-2147483647 - 1)) {
-        return;
-    }
-    ivec3 cell = records[slot].xyz;
-    uint unique[27];
-    uint count = 0u;
+    uint lane = gl_LocalInvocationID.x;
     uint work = 0u;
-    for (int z = -1; z <= 1; z++) {
-        for (int y = -1; y <= 1; y++) {
-            for (int x = -1; x <= 1; x++) {
-                uint bucket = hash_cell(cell + ivec3(x, y, z), uBucketMask);
-                bool seen = false;
-                for (uint index = 0u; index < count; index++) {
-                    seen = seen || unique[index] == bucket;
-                }
-                if (!seen) {
-                    unique[count++] = bucket;
-                    work += buckets[bucket].y;
+    // Inactive lanes contribute zero but still reach every reduction barrier.
+    if (slot < uCapacity && records[slot].x != (-2147483647 - 1)) {
+        ivec3 cell = records[slot].xyz;
+        uint unique[27];
+        uint count = 0u;
+        for (int z = -1; z <= 1; z++) {
+            for (int y = -1; y <= 1; y++) {
+                for (int x = -1; x <= 1; x++) {
+                    uint bucket = hash_cell(cell + ivec3(x, y, z), uBucketMask);
+                    bool seen = false;
+                    for (uint index = 0u; index < count; index++) {
+                        seen = seen || unique[index] == bucket;
+                    }
+                    if (!seen) {
+                        unique[count++] = bucket;
+                        work += buckets[bucket].y;
+                    }
                 }
             }
         }
     }
-    atomicMax(status[1], work);
-    if (work > 4096u) {
-        atomicOr(status[2], 1u);
+
+    groupWork[lane] = work;
+    groupMax[lane] = work;
+    barrier();
+    for (uint offset = 32u; offset > 0u; offset >>= 1u) {
+        if (lane < offset) {
+            groupWork[lane] += groupWork[lane + offset];
+            groupMax[lane] = max(groupMax[lane], groupMax[lane + offset]);
+        }
+        barrier();
     }
-    saturated_add(work);
+    if (lane == 0u) {
+        saturated_add(groupWork[0]);
+        atomicMax(status[1], groupMax[0]);
+        if (groupMax[0] > 4096u) {
+            atomicOr(status[2], 1u);
+        }
+    }
 }
 "#;
 

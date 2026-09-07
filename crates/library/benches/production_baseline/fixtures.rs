@@ -22,7 +22,7 @@ use uuid::Uuid;
 use crate::BenchResult;
 
 const FIXTURE_SPEC: &str = concat!(
-    "ruvie-production-baseline-v2\n",
+    "ruvie-production-baseline-v3\n",
     "canvas=320x180@30fps,duration=600s\n",
     "timeline-item-workloads=100,1000,10000\n",
     "project-load-items=1000\n",
@@ -36,6 +36,10 @@ const FIXTURE_SPEC: &str = concat!(
     "gpu-vector-kinds=text,rectangle\n",
     "gpu-vector-layers=1,16\n",
     "gpu-vector-object=text-72px,rectangle-128x72,fill+drop-shadow\n",
+    "gpu-point-lines=grid:10x10x10,25x20x20,50x50x40\n",
+    "gpu-point-lines-canvas=1920x1080\n",
+    "gpu-point-lines-common=spacing:24,max-distance:25,max-neighbors:6\n",
+    "gpu-point-lines-100000-neighbor-variants=1,32\n",
 );
 
 #[derive(Clone, Debug, Serialize)]
@@ -65,6 +69,7 @@ pub struct FixtureSet {
     pub shared_module_1_000: AuthoringProject,
     pub styled_text_4k: [AuthoringProject; 2],
     pub styled_shape_4k: [AuthoringProject; 2],
+    pub point_lines: Vec<crate::point_connections::PointLineFixture>,
     pub load_project_path: PathBuf,
     pub audio_media_directory: PathBuf,
     metadata: FixtureMetadata,
@@ -87,6 +92,7 @@ impl FixtureSet {
             styled_vector_project(StyledVectorKind::Shape, 1, 8, &plugins)?,
             styled_vector_project(StyledVectorKind::Shape, 16, 9, &plugins)?,
         ];
+        let point_lines = crate::point_connections::build_fixtures()?;
 
         let load_document = canonical_project_json(&items_1_000)?;
         let load_document_sha256 = sha256_hex(load_document.as_bytes());
@@ -101,27 +107,38 @@ impl FixtureSet {
                 sha256_hex(canonical_project_json(project)?.as_bytes()).as_bytes(),
             );
         }
+        for fixture in &point_lines {
+            fixture_identity.extend_from_slice(
+                sha256_hex(canonical_project_json(&fixture.project)?.as_bytes()).as_bytes(),
+            );
+        }
 
         let temporary_directory = tempfile::tempdir()?;
         let load_project_path = temporary_directory.path().join("load-project.ruvie");
         fs::write(&load_project_path, load_document)?;
+        let mut workloads = vec![
+            workload("timeline-items-100", 100, 0, 0),
+            workload("timeline-items-1000", 1_000, 0, 0),
+            workload("timeline-items-10000", 10_000, 0, 0),
+            workload("shared-module-1000", 1_000, 1, 1_000),
+            workload("preview", 4, 0, 0),
+            workload("styled-text-4k-1", 1, 0, 0),
+            workload("styled-text-4k-16", 16, 0, 0),
+            workload("styled-shape-4k-1", 1, 0, 0),
+            workload("styled-shape-4k-16", 16, 0, 0),
+        ];
+        workloads.extend(
+            point_lines
+                .iter()
+                .map(|fixture| workload(fixture.spec.fixture, 1, 1, 1)),
+        );
         let metadata = FixtureMetadata {
-            name: "production-baseline-v2",
-            generator_version: 2,
+            name: "production-baseline-v3",
+            generator_version: 3,
             sha256: sha256_hex(&fixture_identity),
             load_document_sha256,
             audio_media_sha256,
-            workloads: vec![
-                workload("timeline-items-100", 100, 0, 0),
-                workload("timeline-items-1000", 1_000, 0, 0),
-                workload("timeline-items-10000", 10_000, 0, 0),
-                workload("shared-module-1000", 1_000, 1, 1_000),
-                workload("preview", 4, 0, 0),
-                workload("styled-text-4k-1", 1, 0, 0),
-                workload("styled-text-4k-16", 16, 0, 0),
-                workload("styled-shape-4k-1", 1, 0, 0),
-                workload("styled-shape-4k-16", 16, 0, 0),
-            ],
+            workloads,
         };
         Ok(Self {
             preview_project,
@@ -132,6 +149,7 @@ impl FixtureSet {
             shared_module_1_000,
             styled_text_4k,
             styled_shape_4k,
+            point_lines,
             load_project_path,
             audio_media_directory,
             metadata,
@@ -340,7 +358,7 @@ fn shared_module_project(instance_count: usize, namespace: u16) -> BenchResult<A
     Ok(project)
 }
 
-fn stabilize_root_ids(
+pub(super) fn stabilize_root_ids(
     project: &mut AuthoringProject,
     namespace: u16,
 ) -> BenchResult<TimelineTrackId> {
@@ -369,7 +387,7 @@ fn stabilize_root_ids(
     Ok(track_id)
 }
 
-fn stable_uuid(namespace: u16, value: u64) -> Uuid {
+pub(super) fn stable_uuid(namespace: u16, value: u64) -> Uuid {
     Uuid::from_u128(
         0x5255_5649_4500_0000_0000_0000_0000_0000_u128
             | (u128::from(namespace) << 64)
@@ -377,7 +395,7 @@ fn stable_uuid(namespace: u16, value: u64) -> Uuid {
     )
 }
 
-fn canonical_project_json(project: &AuthoringProject) -> BenchResult<String> {
+pub(super) fn canonical_project_json(project: &AuthoringProject) -> BenchResult<String> {
     let value = serde_json::to_value(ProjectDocument::new(project.clone()))?;
     Ok(serde_json::to_string_pretty(&value)?)
 }
