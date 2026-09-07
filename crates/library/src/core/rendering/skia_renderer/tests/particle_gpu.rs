@@ -216,6 +216,7 @@ fn gpu_point_fields_store_math_random_ramp_and_checkpoint_exactly() {
         ramps: vec![ramp.clone()],
         color_register: 7,
         position_register: None,
+        size_register: None,
     };
     let mut scene = particle_scene(180);
     scene.point_program = Some(program);

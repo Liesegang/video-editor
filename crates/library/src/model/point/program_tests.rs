@@ -37,6 +37,7 @@ fn heat_program() -> PointRenderProgram {
         ramps: vec![GradientValue::default()],
         color_register: 5,
         position_register: None,
+        size_register: None,
     }
 }
 
@@ -141,6 +142,7 @@ fn typed_program(kind: PointAttributeElementType, value: PropertyValue) -> Point
             5
         },
         position_register: None,
+        size_register: None,
     }
 }
 
@@ -444,6 +446,7 @@ fn value_program(instructions: Vec<PointInstruction>, color_register: u16) -> Po
         ramps: Vec::new(),
         color_register,
         position_register: None,
+        size_register: None,
     }
 }
 
@@ -463,6 +466,45 @@ fn point_program_position_register_is_optional_and_requires_vec3() {
 
     program.position_register = Some(1);
     assert!(program.validate().unwrap_err().contains("requires Vec3"));
+}
+
+#[test]
+fn point_program_size_register_is_optional_and_requires_number() {
+    let mut program = value_program(
+        vec![
+            PointInstruction::Size,
+            PointInstruction::Constant {
+                value: PointAttributeElementType::Color.default_value(),
+            },
+        ],
+        1,
+    );
+    assert!(!program.has_geometry_output());
+    program.size_register = Some(0);
+    assert!(program.has_geometry_output());
+    program.validate().unwrap();
+    let decoded: PointRenderProgram =
+        serde_json::from_str(&serde_json::to_string(&program).unwrap()).unwrap();
+    assert_eq!(decoded, program);
+
+    program.size_register = Some(1);
+    assert!(program.validate().unwrap_err().contains("requires Number"));
+
+    for size in [0.0, -1.0] {
+        let mut derived = value_program(
+            vec![
+                PointInstruction::Constant {
+                    value: PropertyValue::Number(size.into()),
+                },
+                PointInstruction::Constant {
+                    value: PointAttributeElementType::Color.default_value(),
+                },
+            ],
+            1,
+        );
+        derived.size_register = Some(0);
+        derived.validate().unwrap();
+    }
 }
 
 #[test]

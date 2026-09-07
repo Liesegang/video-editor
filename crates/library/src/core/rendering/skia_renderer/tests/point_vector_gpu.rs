@@ -61,6 +61,7 @@ fn result_program(
         ramps: Vec::new(),
         color_register,
         position_register: None,
+        size_register: None,
     }
 }
 

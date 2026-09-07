@@ -156,8 +156,8 @@ pub(super) fn draw_points(
         request.point_source.bind(gl, &pipeline.source)?;
         if let Some(point_fields) = request.point_fields {
             gl.bind_buffer_base(glow::SHADER_STORAGE_BUFFER, 2, Some(point_fields.colors));
-            if let Some(positions) = point_fields.positions {
-                gl.bind_buffer_base(glow::SHADER_STORAGE_BUFFER, 4, Some(positions));
+            if let Some(geometry) = point_fields.geometry {
+                gl.bind_buffer_base(glow::SHADER_STORAGE_BUFFER, 4, Some(geometry));
             }
         }
         gl.uniform_2_f32(

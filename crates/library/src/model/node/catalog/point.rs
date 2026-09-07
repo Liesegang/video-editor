@@ -15,6 +15,8 @@ pub(crate) const POINT_ATTRIBUTE_VALUE_PORT: &str = "value";
 pub(crate) const POINT_ATTRIBUTE_OUTPUT_PORT: &str = "attribute";
 pub(crate) const POINT_POSITION_INPUT_PORT: &str = "position";
 pub(crate) const POINT_OFFSET_INPUT_PORT: &str = "offset";
+pub(crate) const POINT_SIZE_PORT: &str = "size";
+pub(crate) const POINT_SCALE_INPUT_PORT: &str = "scale";
 pub(crate) const POINT_SELECTION_INPUT_PORT: &str = "selection";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -22,6 +24,7 @@ pub(crate) enum PointNodeRole {
     Grid,
     Info,
     SetPosition,
+    SetSize,
     StoreAttribute(PointAttributeElementType),
 }
 
@@ -31,6 +34,7 @@ impl PointNodeRole {
             Self::Grid => "native.point.grid",
             Self::Info => "native.point.info",
             Self::SetPosition => "native.point.set-position",
+            Self::SetSize => "native.point.set-size",
             Self::StoreAttribute(PointAttributeElementType::Number) => {
                 "native.point.store-number-attribute"
             }
@@ -56,7 +60,7 @@ impl PointNodeRole {
     }
 
     pub(crate) fn from_catalog_id(catalog_id: &str) -> Option<Self> {
-        [Self::Grid, Self::Info, Self::SetPosition]
+        [Self::Grid, Self::Info, Self::SetPosition, Self::SetSize]
             .into_iter()
             .chain(STORE_ATTRIBUTE_TYPES.into_iter().map(Self::StoreAttribute))
             .find(|role| role.catalog_id() == catalog_id)
@@ -65,7 +69,7 @@ impl PointNodeRole {
     pub(crate) const fn attribute_type(self) -> Option<PointAttributeElementType> {
         match self {
             Self::StoreAttribute(element_type) => Some(element_type),
-            Self::Grid | Self::Info | Self::SetPosition => None,
+            Self::Grid | Self::Info | Self::SetPosition | Self::SetSize => None,
         }
     }
 }
@@ -89,11 +93,12 @@ const POINT_GRID_INPUTS: &[PortSpec] = &[
     PortSpec::single("count_z", "Count Z", PortDataType::Integer),
     PortSpec::single("spacing", "Spacing", PortDataType::Vec3),
     PortSpec::single("center", "Center", PortDataType::Vec3),
-    PortSpec::single("size", "Size", PortDataType::Number),
+    PortSpec::single(POINT_SIZE_PORT, "Size", PortDataType::Number),
     PortSpec::single("seed", "Seed", PortDataType::Integer),
 ];
 const POINT_INFO_OUTPUTS: &[PortSpec] = &[
     PortSpec::single("position", "Position", PortDataType::Vec3),
+    PortSpec::single(POINT_SIZE_PORT, "Size", PortDataType::Number),
     PortSpec::single("age", "Age", PortDataType::Number),
     PortSpec::single("normalized_age", "Normalized Age", PortDataType::Number),
     PortSpec::single("random", "Random", PortDataType::Number),
@@ -102,6 +107,16 @@ const POINT_SET_POSITION_INPUTS: &[PortSpec] = &[
     POINT_SOURCE,
     PortSpec::single(POINT_POSITION_INPUT_PORT, "Position", PortDataType::Vec3),
     PortSpec::single(POINT_OFFSET_INPUT_PORT, "Offset", PortDataType::Vec3),
+    PortSpec::single(
+        POINT_SELECTION_INPUT_PORT,
+        "Selection",
+        PortDataType::Boolean,
+    ),
+];
+const POINT_SET_SIZE_INPUTS: &[PortSpec] = &[
+    POINT_SOURCE,
+    PortSpec::single(POINT_SIZE_PORT, "Size", PortDataType::Number),
+    PortSpec::single(POINT_SCALE_INPUT_PORT, "Scale", PortDataType::Number),
     PortSpec::single(
         POINT_SELECTION_INPUT_PORT,
         "Selection",
@@ -181,6 +196,7 @@ const SPECS: &[DescriptorSpec] = &[
                 "point",
                 "attribute",
                 "position",
+                "size",
                 "age",
                 "normalized age",
                 "random",
@@ -208,6 +224,18 @@ const SPECS: &[DescriptorSpec] = &[
         POINT_SET_POSITION_INPUTS,
         &[POINT_SOURCE],
         set_position_properties,
+    ),
+    DescriptorSpec::implemented_native(
+        DescriptorIdentity::new(
+            PointNodeRole::SetSize.catalog_id(),
+            "Set Point Size",
+            "Points",
+            "node_editor.menu.create.point_set_size",
+            &["point", "set", "size", "scale", "geometry"],
+        ),
+        POINT_SET_SIZE_INPUTS,
+        &[POINT_SOURCE],
+        set_size_properties,
     ),
     store_attribute_spec!(
         0,
@@ -316,7 +344,7 @@ fn point_grid_properties() -> Vec<PropertyDefinition> {
         vector("spacing", "Spacing", [24.0, 24.0, 24.0]),
         vector("center", "Center", [0.0, 0.0, 0.0]),
         PropertyDefinition::new(
-            "size",
+            POINT_SIZE_PORT,
             PropertyUiType::Float {
                 min: 0.000_001,
                 max: f64::from(POINT_GRID_MAX_SIZE),
@@ -392,13 +420,36 @@ fn set_position_properties() -> Vec<PropertyDefinition> {
                 z: OrderedFloat(0.0),
             }),
         ),
-        PropertyDefinition::new(
-            POINT_SELECTION_INPUT_PORT,
-            PropertyUiType::Bool,
-            "Selection",
-            PropertyValue::Boolean(true),
-        ),
+        selection_property(),
     ]
+}
+
+fn set_size_properties() -> Vec<PropertyDefinition> {
+    vec![
+        PropertyDefinition::new(
+            POINT_SCALE_INPUT_PORT,
+            PropertyUiType::Float {
+                min: 0.0,
+                max: 1_000_000.0,
+                step: 0.01,
+                suffix: String::new(),
+                min_hard_limit: true,
+                max_hard_limit: true,
+            },
+            "Scale",
+            PropertyValue::Number(OrderedFloat(1.0)),
+        ),
+        selection_property(),
+    ]
+}
+
+fn selection_property() -> PropertyDefinition {
+    PropertyDefinition::new(
+        POINT_SELECTION_INPUT_PORT,
+        PropertyUiType::Bool,
+        "Selection",
+        PropertyValue::Boolean(true),
+    )
 }
 
 macro_rules! store_property_factory {

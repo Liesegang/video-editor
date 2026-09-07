@@ -21,6 +21,7 @@ fn color_program(color: Color) -> PointRenderProgram {
         ramps: Vec::new(),
         color_register: 0,
         position_register: None,
+        size_register: None,
     }
 }
 
@@ -38,6 +39,7 @@ fn shaped_color_program(color: Color) -> PointRenderProgram {
         ramps: Vec::new(),
         color_register: 1,
         position_register: None,
+        size_register: None,
     }
 }
 
@@ -68,6 +70,7 @@ fn stored_color_program(color: Color) -> PointRenderProgram {
         ramps: Vec::new(),
         color_register: 2,
         position_register: None,
+        size_register: None,
     }
 }
 
@@ -91,6 +94,7 @@ fn positioned_color_program(color: Color, offset: f64) -> PointRenderProgram {
         ramps: Vec::new(),
         color_register: 3,
         position_register: Some(2),
+        size_register: None,
     }
 }
 
@@ -112,6 +116,7 @@ fn ramp_program(end: Color) -> PointRenderProgram {
         )],
         color_register: 1,
         position_register: None,
+        size_register: None,
     }
 }
 

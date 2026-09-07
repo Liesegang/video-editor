@@ -624,7 +624,9 @@ def rendered_preview_state(client: QaClient, revision: int):
     return None
 
 
-def settled_preview_state(client: QaClient, revision: int, frame: int):
+def settled_preview_state(
+    client: QaClient, revision: int, frame: int, require_visible: bool = True
+):
     """Return matching Project/UI Preview state after the render queue is idle."""
     component = next(
         (
@@ -638,7 +640,10 @@ def settled_preview_state(client: QaClient, revision: int, frame: int):
     if (
         preview.get("rendered_revision") != revision
         or preview.get("rendered_frame") != frame
-        or preview.get("nontransparent_pixels", 0) <= 0
+        or (
+            require_visible
+            and preview.get("nontransparent_pixels", 0) <= 0
+        )
         or preview.get("pixel_hash") is None
         or preview.get("render_in_flight_request") is not None
         or preview.get("render_desired_pending") is not False

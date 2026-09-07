@@ -165,6 +165,7 @@ impl ModuleImageRuntime<'_> {
                     CompiledPointInstruction::Age => PointInstruction::Age,
                     CompiledPointInstruction::NormalizedAge => PointInstruction::NormalizedAge,
                     CompiledPointInstruction::Position => PointInstruction::Position,
+                    CompiledPointInstruction::Size => PointInstruction::Size,
                     CompiledPointInstruction::Random { channel } => {
                         PointInstruction::Random { channel: *channel }
                     }
@@ -245,6 +246,7 @@ impl ModuleImageRuntime<'_> {
             ramps,
             color_register: compiled.color_register,
             position_register: compiled.position_register,
+            size_register: compiled.size_register,
         };
         program.validate().map_err(LibraryError::Validation)?;
         Ok(program)

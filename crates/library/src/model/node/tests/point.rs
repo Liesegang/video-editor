@@ -37,6 +37,75 @@ fn set_position_catalog_keeps_position_field_only_and_supports_point_bypass() {
 }
 
 #[test]
+fn set_size_catalog_keeps_size_field_only_and_reuses_point_bypass() {
+    let descriptor = native_node_descriptor(PointNodeRole::SetSize.catalog_id()).unwrap();
+    assert_eq!(descriptor.qa_id(), "node_editor.menu.create.point_set_size");
+    assert!(descriptor.supports_general_module_creation());
+    for (key, data_type, has_property) in [
+        (POINT_SOURCE_PORT, PortDataType::PointSource, false),
+        (POINT_SIZE_PORT, PortDataType::Number, false),
+        (POINT_SCALE_INPUT_PORT, PortDataType::Number, true),
+        (POINT_SELECTION_INPUT_PORT, PortDataType::Boolean, true),
+    ] {
+        assert!(descriptor.ports().iter().any(|port| {
+            port.direction == PortDirection::Input && port.key == key && port.data_type == data_type
+        }));
+        assert_eq!(
+            descriptor.property_definition_for_input(key).is_some(),
+            has_property
+        );
+    }
+    let node = Node::new_catalog_node(descriptor.catalog_id()).unwrap();
+    assert!(node.supports_bypass());
+    assert_eq!(
+        node.bypass_input_for_output(POINT_SOURCE_PORT),
+        Some(POINT_SOURCE_PORT)
+    );
+    assert_eq!(
+        node.properties()
+            .get(POINT_SCALE_INPUT_PORT)
+            .unwrap()
+            .get_static_value(),
+        Some(&PropertyValue::Number(OrderedFloat(1.0)))
+    );
+    assert_eq!(
+        node.properties()
+            .get(POINT_SELECTION_INPUT_PORT)
+            .unwrap()
+            .get_static_value(),
+        Some(&PropertyValue::Boolean(true))
+    );
+    assert_eq!(PointNodeRole::SetSize.attribute_type(), None);
+    assert_eq!(
+        PointNodeRole::from_catalog_id("native.point.set-size"),
+        Some(PointNodeRole::SetSize)
+    );
+    let definitions = descriptor.property_definitions();
+    let scale = definitions
+        .iter()
+        .find(|definition| definition.name() == POINT_SCALE_INPUT_PORT)
+        .unwrap();
+    assert!(matches!(
+        scale.ui_type(),
+        PropertyUiType::Float {
+            min,
+            max,
+            step,
+            min_hard_limit: true,
+            max_hard_limit: true,
+            ..
+        } if *min == 0.0 && *max == 1_000_000.0 && *step == 0.01
+    ));
+
+    let info = native_node_descriptor(PointNodeRole::Info.catalog_id()).unwrap();
+    assert!(info.ports().iter().any(|port| {
+        port.direction == PortDirection::Output
+            && port.key == POINT_SIZE_PORT
+            && port.data_type == PortDataType::Number
+    }));
+}
+
+#[test]
 fn point_catalog_uses_node_identity_and_one_typed_store_contract() {
     use crate::model::point::{PointAttributeElementType, PointAttributeId};
 

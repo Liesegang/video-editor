@@ -50,6 +50,7 @@ fn position_program(offset: [f64; 3]) -> PointRenderProgram {
         ramps: Vec::new(),
         color_register: 3,
         position_register: Some(2),
+        size_register: None,
     }
 }
 
@@ -232,6 +233,7 @@ fn gpu_invalid_position_is_zeroed_and_makes_the_point_transparent() {
         ramps: Vec::new(),
         color_register: 3,
         position_register: Some(2),
+        size_register: None,
     });
     let transparent = Color {
         r: 0,

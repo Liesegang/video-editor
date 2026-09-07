@@ -61,6 +61,9 @@ mod point_invalidation_gpu;
 #[path = "tests/point_position_gpu.rs"]
 mod point_position_gpu;
 #[cfg(all(feature = "gl", target_os = "windows"))]
+#[path = "tests/point_size_gpu.rs"]
+mod point_size_gpu;
+#[cfg(all(feature = "gl", target_os = "windows"))]
 #[path = "tests/point_support.rs"]
 mod point_support;
 #[cfg(all(feature = "gl", target_os = "windows"))]

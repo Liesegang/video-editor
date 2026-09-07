@@ -7,7 +7,8 @@ use crate::model::node::{
     COLOR_RAMP_FACTOR_PORT, ColorContent, ConditionalNodeRole, NUMERIC_LENGTH_CATALOG_ID,
     NUMERIC_LENGTH_INPUT_PORT, NodeContent, POINT_ATTRIBUTE_OUTPUT_PORT,
     POINT_ATTRIBUTE_VALUE_PORT, POINT_OFFSET_INPUT_PORT, POINT_POSITION_INPUT_PORT,
-    POINT_SELECTION_INPUT_PORT, PointNodeRole, SELECT_FALSE_INPUT_PORT, SELECT_TRUE_INPUT_PORT,
+    POINT_SCALE_INPUT_PORT, POINT_SELECTION_INPUT_PORT, POINT_SIZE_PORT, PointNodeRole,
+    SELECT_FALSE_INPUT_PORT, SELECT_TRUE_INPUT_PORT,
 };
 use crate::model::project::{PortDataType, PortDirection};
 
@@ -68,6 +69,10 @@ pub(in crate::core::render_plan) fn validate_point_field_consumers(
                             POINT_POSITION_INPUT_PORT
                                 | POINT_OFFSET_INPUT_PORT
                                 | POINT_SELECTION_INPUT_PORT
+                        ),
+                        Some(PointNodeRole::SetSize) => matches!(
+                            connection.to.port.as_str(),
+                            POINT_SIZE_PORT | POINT_SCALE_INPUT_PORT | POINT_SELECTION_INPUT_PORT
                         ),
                         Some(PointNodeRole::Info | PointNodeRole::Grid) => false,
                         None => {
@@ -150,9 +155,10 @@ impl<'a> PointDependencyResolver<'a> {
                     | POINT_NORMALIZED_AGE_OUTPUT_PORT
                     | POINT_RANDOM_OUTPUT_PORT
                     | POINT_POSITION_OUTPUT_PORT
+                    | POINT_SIZE_PORT
             ),
             PointNodeRole::StoreAttribute(_) => source.port == POINT_ATTRIBUTE_OUTPUT_PORT,
-            PointNodeRole::Grid | PointNodeRole::SetPosition => false,
+            PointNodeRole::Grid | PointNodeRole::SetPosition | PointNodeRole::SetSize => false,
         }) {
             return true;
         }

@@ -123,10 +123,10 @@ impl PointPipeline {
             }
             None => None,
         };
-        let has_position_output =
-            point_program.is_some_and(|program| program.position_register.is_some());
+        let has_geometry_output =
+            point_program.is_some_and(|program| program.has_geometry_output());
         let vertex_source =
-            point_vertex_source(source_kind, point_fields.is_some(), has_position_output);
+            point_vertex_source(source_kind, point_fields.is_some(), has_geometry_output);
         let fragment_source = point_fragment_source(point_fields.is_some());
         let render_program = match link_program(
             gl,
@@ -187,8 +187,8 @@ impl PointPipeline {
                     gl,
                     render_program,
                     source_kind,
-                    if has_position_output {
-                        super::source::PointSourceRequirements::SizeAndAlive
+                    if has_geometry_output {
+                        super::source::PointSourceRequirements::Alive
                     } else {
                         super::source::PointSourceRequirements::FullGeometry
                     },

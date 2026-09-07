@@ -1,9 +1,27 @@
 """Exact-route assertions for the shared native Node Editor QA helpers."""
 
+import copy
+import pathlib
+import runpy
 import unittest
 from unittest import mock
 
 import qa_node_module_support as support
+import qa_support
+
+
+class NodeSuiteEntrypointTests(unittest.TestCase):
+    def test_point_size_uses_shared_cli_and_propagates_exit_code(self):
+        script = pathlib.Path(__file__).with_name("qa-point-size-e2e.py")
+        with mock.patch.object(qa_support, "run_suite_main", autospec=True, return_value=37) as main:
+            with self.assertRaises(SystemExit) as exited:
+                runpy.run_path(str(script), run_name="__main__")
+        self.assertEqual(exited.exception.code, 37)
+        main.assert_called_once()
+        name, suite, evidence = main.call_args.args
+        self.assertEqual(name, "qa-point-size-e2e")
+        self.assertTrue(callable(suite))
+        self.assertEqual(evidence, "target/qa-point-size-e2e-evidence.json")
 
 
 def route(connection_id, source_port, target_port):
@@ -77,6 +95,78 @@ class NodeRouteTests(unittest.TestCase):
         with self.assertRaisesRegex(support.QaFailure, "drag origin is occluded"):
             support.place_created_node(client, "requested", 0.5)
         client.drag.assert_not_called()
+
+
+class PreviewSamplingTests(unittest.TestCase):
+    def fixture(self):
+        metadata = {
+            "rendered_revision": 7,
+            "rendered_frame": 30,
+            "nontransparent_pixels": 0,
+            "pixel_hash": "empty-frame",
+            "render_in_flight_request": None,
+            "render_desired_pending": False,
+        }
+        state = {
+            "history": {"revision": 7},
+            "editor": {
+                "timeline": {"current_frame": 30},
+                "preview": copy.deepcopy(metadata),
+                "error": None,
+            },
+        }
+        client = mock.Mock()
+        client.component_snapshot.return_value = {
+            "components": [{"id": "preview.canvas", "metadata": metadata}]
+        }
+        client.state.return_value = state
+        return client, metadata, state
+
+    def test_empty_preview_requires_explicit_opt_in(self):
+        client, _, state = self.fixture()
+        self.assertIsNone(support.settled_preview_state(client, 7, 30))
+        self.assertIs(
+            support.settled_preview_state(client, 7, 30, require_visible=False), state
+        )
+
+    def test_empty_preview_still_requires_exact_settled_component(self):
+        for key, value in (
+            ("rendered_revision", 6), ("rendered_frame", 29), ("pixel_hash", None),
+            ("render_in_flight_request", 1), ("render_desired_pending", True),
+            ("render_desired_pending", None),
+        ):
+            with self.subTest(key=key, value=value):
+                client, metadata, _ = self.fixture()
+                metadata[key] = value
+                self.assertIsNone(
+                    support.settled_preview_state(client, 7, 30, require_visible=False)
+                )
+
+    def test_empty_preview_still_requires_matching_error_free_editor_state(self):
+        for section, key, value in (
+            ("history", "revision", 8), ("timeline", "current_frame", 29),
+            ("preview", "rendered_revision", 6), ("preview", "rendered_frame", 29),
+            ("preview", "pixel_hash", "other-frame"), ("editor", "error", "failed"),
+        ):
+            with self.subTest(section=section, key=key):
+                client, _, state = self.fixture()
+                target = state[section] if section in ("history", "editor") else state["editor"][section]
+                target[key] = value
+                self.assertIsNone(
+                    support.settled_preview_state(client, 7, 30, require_visible=False)
+                )
+
+    def test_shared_sampler_can_return_verified_empty_pixels(self):
+        client, _, state = self.fixture()
+        client.wait_until.side_effect = lambda _description, predicate, _timeout: predicate()
+        with (
+            mock.patch.object(support, "activate_dock_tab"),
+            mock.patch.object(support, "seek_timeline_seconds", return_value=state),
+        ):
+            sampled = support.sample_rendered_preview(client, 1.0, 7, "zero size", require_visible=False)
+        self.assertEqual(sampled["frame"], 30)
+        self.assertEqual(sampled["pixel_hash"], "empty-frame")
+        self.assertEqual(sampled["nontransparent_pixels"], 0)
 
 
 if __name__ == "__main__":

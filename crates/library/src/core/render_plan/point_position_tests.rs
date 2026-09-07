@@ -29,14 +29,14 @@ fn vec3(x: f64, y: f64, z: f64) -> PropertyValue {
     })
 }
 
-fn renderer(fixture: &ParticleFixture) -> uuid::Uuid {
+pub(super) fn renderer(fixture: &ParticleFixture) -> uuid::Uuid {
     particle_node_id(
         fixture,
         crate::model::node::ParticleNodeRole::SpriteRenderer.catalog_id(),
     )
 }
 
-fn detach_renderer_input(
+pub(super) fn detach_renderer_input(
     definition: &mut ModuleDefinition,
     renderer: uuid::Uuid,
 ) -> ModulePortAddress {
@@ -106,7 +106,7 @@ fn unconnected_unpublished_position_uses_the_incoming_stream_snapshot() {
     )));
 }
 
-fn publish(
+pub(super) fn publish(
     definition: &mut ModuleDefinition,
     node_id: uuid::Uuid,
     port: &str,

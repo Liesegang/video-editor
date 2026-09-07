@@ -10,49 +10,31 @@ use crate::model::authoring::{ModuleDefinition, ModulePortAddress};
 use crate::model::node::{
     COLOR_RAMP_FACTOR_PORT, COLOR_RAMP_GRADIENT_PORT, COLOR_VALUE_PORT, CONDITION_INPUT_PORT,
     ColorContent, ConditionalNodeRole, NUMERIC_LENGTH_CATALOG_ID, NUMERIC_LENGTH_INPUT_PORT, Node,
-    NodeContent, PARTICLE_SYSTEM_PORT, POINT_ATTRIBUTE_OUTPUT_PORT, POINT_ATTRIBUTE_VALUE_PORT,
-    POINT_OFFSET_INPUT_PORT, POINT_POSITION_INPUT_PORT, POINT_SELECTION_INPUT_PORT,
+    NodeContent, POINT_ATTRIBUTE_OUTPUT_PORT, POINT_ATTRIBUTE_VALUE_PORT, POINT_OFFSET_INPUT_PORT,
+    POINT_POSITION_INPUT_PORT, POINT_SCALE_INPUT_PORT, POINT_SELECTION_INPUT_PORT, POINT_SIZE_PORT,
     POINT_SOURCE_PORT, PointNodeRole, SELECT_FALSE_INPUT_PORT, SELECT_TRUE_INPUT_PORT,
 };
 use crate::model::point::{
-    POINT_MAX_INSTRUCTIONS, POINT_MAX_RAMPS, PointAttributeDefinition, PointAttributeElementType,
+    NumericBinaryOperation, POINT_MAX_INSTRUCTIONS, POINT_MAX_RAMPS, PointAttributeElementType,
     PointAttributeId, PointAttributeSchema,
 };
 use crate::model::project::NUMBER_RESULT_OUTPUT_PORT;
 
 mod dependencies;
+mod schema;
+mod stream;
 
 use dependencies::PointDependencyResolver;
 pub(super) use dependencies::validate_point_field_consumers;
+use schema::point_attribute_schema;
+pub use schema::validate_module_node_name;
+use stream::{PointStage, PointStreamTrace, trace_point_stream};
 
 const POINT_AGE_OUTPUT_PORT: &str = "age";
 const POINT_NORMALIZED_AGE_OUTPUT_PORT: &str = "normalized_age";
 const POINT_POSITION_OUTPUT_PORT: &str = "position";
 const POINT_RANDOM_OUTPUT_PORT: &str = "random";
 const SPRITE_COLOR_INPUT_PORT: &str = "color";
-
-#[derive(Clone, Copy)]
-enum PointStage {
-    StoreAttribute(uuid::Uuid),
-    SetPosition(uuid::Uuid),
-    Passthrough(uuid::Uuid),
-}
-
-/// Point stream selected by one Sprite endpoint before source recognition.
-/// Render-stage operations are ordered upstream-to-downstream.
-struct PointStreamTrace {
-    pub terminal_source: ModulePortAddress,
-    stages: Vec<PointStage>,
-}
-
-impl PointStreamTrace {
-    fn stores(&self) -> impl Iterator<Item = uuid::Uuid> + '_ {
-        self.stages.iter().filter_map(|stage| match stage {
-            PointStage::StoreAttribute(node_id) => Some(*node_id),
-            PointStage::SetPosition(_) | PointStage::Passthrough(_) => None,
-        })
-    }
-}
 
 #[derive(Clone, Copy)]
 struct PointSourceCapabilities {
@@ -63,6 +45,78 @@ struct PointSourceCompilation {
     source: CompiledPointSource,
     lineage: HashSet<ModulePortAddress>,
     capabilities: PointSourceCapabilities,
+}
+
+/// Immutable geometry snapshots associated with each Point-stream address.
+/// Missing fields refer directly to the producer's geometry.
+#[derive(Clone, Default)]
+struct StreamGeometry {
+    position: Option<CompiledValue>,
+    size: Option<CompiledValue>,
+}
+
+impl StreamGeometry {
+    fn get(&self, field: GeometryField) -> Option<&CompiledValue> {
+        match field {
+            GeometryField::Position => self.position.as_ref(),
+            GeometryField::Size => self.size.as_ref(),
+        }
+    }
+
+    fn set(&mut self, field: GeometryField, value: CompiledValue) {
+        match field {
+            GeometryField::Position => self.position = Some(value),
+            GeometryField::Size => self.size = Some(value),
+        }
+    }
+
+    fn register(&self, field: GeometryField) -> Option<u16> {
+        self.get(field).map(|value| value.register)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum GeometryField {
+    Position,
+    Size,
+}
+
+impl GeometryField {
+    fn from_info_port(port: &str) -> Option<Self> {
+        match port {
+            POINT_POSITION_OUTPUT_PORT => Some(Self::Position),
+            POINT_SIZE_PORT => Some(Self::Size),
+            _ => None,
+        }
+    }
+
+    fn element_type(self) -> PointAttributeElementType {
+        match self {
+            Self::Position => PointAttributeElementType::Vec3,
+            Self::Size => PointAttributeElementType::Number,
+        }
+    }
+
+    fn input_port(self) -> &'static str {
+        match self {
+            Self::Position => POINT_POSITION_INPUT_PORT,
+            Self::Size => POINT_SIZE_PORT,
+        }
+    }
+
+    fn modifier(self) -> (&'static str, NumericBinaryOperation) {
+        match self {
+            Self::Position => (POINT_OFFSET_INPUT_PORT, NumericBinaryOperation::Add),
+            Self::Size => (POINT_SCALE_INPUT_PORT, NumericBinaryOperation::Multiply),
+        }
+    }
+
+    fn source_instruction(self) -> CompiledPointInstruction {
+        match self {
+            Self::Position => CompiledPointInstruction::Position,
+            Self::Size => CompiledPointInstruction::Size,
+        }
+    }
 }
 
 pub(super) fn compile_point_renderers(
@@ -107,45 +161,6 @@ pub(super) fn compile_point_renderers(
     Ok(compiled)
 }
 
-/// Validates the semantic display name of one Store Attribute Node against
-/// every current Point stream that contains it. Independent Point domains may
-/// intentionally reuse a display name; an unconnected Store has no stream yet
-/// but still follows the authoritative structural name rules.
-pub fn validate_module_node_name(
-    definition: &ModuleDefinition,
-    node_id: uuid::Uuid,
-    proposed_name: &str,
-) -> Result<(), String> {
-    let node = definition
-        .graph
-        .nodes
-        .get(&node_id)
-        .ok_or_else(|| format!("Missing Module Node {node_id}"))?;
-    let Some(element_type) = point_role(node).and_then(PointNodeRole::attribute_type) else {
-        return Ok(());
-    };
-    PointAttributeDefinition::new(
-        PointAttributeId::from_uuid(node.id),
-        proposed_name.to_string(),
-        element_type,
-        element_type.default_value(),
-    )?;
-
-    for renderer in definition.graph.nodes.values() {
-        if !particle_sprite(renderer) {
-            continue;
-        }
-        let Some(trace) = trace_point_stream(definition, renderer.id)? else {
-            continue;
-        };
-        let stores = trace.stores().collect::<Vec<_>>();
-        if stores.contains(&node_id) {
-            point_attribute_schema_with_name(definition, &stores, Some((node_id, proposed_name)))?;
-        }
-    }
-    Ok(())
-}
-
 fn compile_point_source(
     definition: &ModuleDefinition,
     terminal: &ModulePortAddress,
@@ -173,52 +188,6 @@ fn compile_point_source(
     }))
 }
 
-fn trace_point_stream(
-    definition: &ModuleDefinition,
-    renderer_node_id: uuid::Uuid,
-) -> Result<Option<PointStreamTrace>, String> {
-    let renderer_input = address(renderer_node_id, PARTICLE_SYSTEM_PORT);
-    let Some(mut source) = single_input_source(definition, &renderer_input) else {
-        return Ok(None);
-    };
-    let mut stages = Vec::new();
-    let mut visited = HashSet::new();
-    loop {
-        let Some(node) = definition.graph.nodes.get(&source.node_id) else {
-            return Ok(None);
-        };
-        let Some(role) = point_role(node) else {
-            break;
-        };
-        let stage = match role {
-            PointNodeRole::StoreAttribute(_) => PointStage::StoreAttribute(node.id),
-            PointNodeRole::SetPosition => PointStage::SetPosition(node.id),
-            PointNodeRole::Grid | PointNodeRole::Info => break,
-        };
-        if source.port != POINT_SOURCE_PORT || !visited.insert(node.id) {
-            return Ok(None);
-        }
-        if !node.enabled {
-            return Ok(None);
-        }
-        stages.push(if node.bypassed {
-            PointStage::Passthrough(node.id)
-        } else {
-            stage
-        });
-        let point_input = address(node.id, POINT_SOURCE_PORT);
-        let Some(upstream) = single_input_source(definition, &point_input) else {
-            return Ok(None);
-        };
-        source = upstream;
-    }
-    stages.reverse();
-    Ok(Some(PointStreamTrace {
-        terminal_source: source,
-        stages,
-    }))
-}
-
 fn compile_point_program(
     definition: &ModuleDefinition,
     renderer_node_id: uuid::Uuid,
@@ -230,20 +199,22 @@ fn compile_point_program(
     let schema = point_attribute_schema(definition, &stores)?;
     let mut builder = PointProgramBuilder::new(definition, schema);
     let mut allowed_streams = source_lineage.clone();
-    // `None` is the producer-local source position. A Set Position stage
-    // replaces it with an immutable SSA value only for its downstream branch.
-    let mut stream_positions = source_lineage
+    // Missing fields are producer-local geometry. Set stages replace only
+    // their own field with an immutable SSA value for the downstream branch.
+    let mut stream_geometry = source_lineage
         .iter()
         .cloned()
-        .map(|stream| (stream, None))
+        .map(|stream| (stream, StreamGeometry::default()))
         .collect::<HashMap<_, _>>();
     let mut available_attributes = 0;
     let mut position_register = None;
+    let mut size_register = None;
 
     for stage in &trace.stages {
         let stage_id = match stage {
             PointStage::StoreAttribute(node_id)
             | PointStage::SetPosition(node_id)
+            | PointStage::SetSize(node_id)
             | PointStage::Passthrough(node_id) => *node_id,
         };
         let point_input = address(stage_id, POINT_SOURCE_PORT);
@@ -257,11 +228,18 @@ fn compile_point_program(
         }
         let context = FieldContext {
             allowed_streams: &allowed_streams,
-            stream_positions: &stream_positions,
+            stream_geometry: &stream_geometry,
             available_attributes,
             capabilities,
         };
-        let output_position = match stage {
+        let mut output_geometry = context
+            .stream_geometry
+            .get(&expected_stream)
+            .cloned()
+            .ok_or_else(|| {
+                format!("Point operation Node {stage_id} reads a different Point domain")
+            })?;
+        match stage {
             PointStage::StoreAttribute(store_id) => {
                 let element_type = builder.schema.attributes()[available_attributes].element_type();
                 let value = builder.compile_input(
@@ -274,63 +252,32 @@ fn compile_point_program(
                     value: value.register,
                 })?;
                 available_attributes += 1;
-                context
-                    .stream_positions
-                    .get(&expected_stream)
-                    .cloned()
-                    .flatten()
             }
             PointStage::SetPosition(node_id) => {
-                let upstream = builder.compile_stream_position(&expected_stream, &context)?;
-                let position_target = address(*node_id, POINT_POSITION_INPUT_PORT);
-                let position = if single_input_source(definition, &position_target).is_some()
-                    || definition
-                        .interface
-                        .parameters
-                        .iter()
-                        .any(|parameter| parameter.target == position_target)
-                {
-                    builder.compile_input(
-                        &position_target,
-                        PointAttributeElementType::Vec3,
-                        &context,
-                    )?
-                } else {
-                    upstream.clone()
-                };
-                let offset = builder.compile_input(
-                    &address(*node_id, POINT_OFFSET_INPUT_PORT),
-                    PointAttributeElementType::Vec3,
+                let result = builder.compile_set_geometry(
+                    *node_id,
+                    &expected_stream,
+                    GeometryField::Position,
                     &context,
                 )?;
-                let selected = builder.compile_input(
-                    &address(*node_id, POINT_SELECTION_INPUT_PORT),
-                    PointAttributeElementType::Boolean,
-                    &context,
-                )?;
-                let translated = builder.emit_binary(
-                    crate::model::point::NumericBinaryOperation::Add,
-                    position,
-                    offset,
-                )?;
-                let result = builder.emit_select(
-                    PointAttributeElementType::Vec3,
-                    selected,
-                    translated,
-                    upstream,
-                )?;
-                position_register = Some(result.register);
-                Some(result)
+                output_geometry.set(GeometryField::Position, result);
             }
-            PointStage::Passthrough(_) => context
-                .stream_positions
-                .get(&expected_stream)
-                .cloned()
-                .flatten(),
-        };
+            PointStage::SetSize(node_id) => {
+                let result = builder.compile_set_geometry(
+                    *node_id,
+                    &expected_stream,
+                    GeometryField::Size,
+                    &context,
+                )?;
+                output_geometry.set(GeometryField::Size, result);
+            }
+            PointStage::Passthrough(_) => {}
+        }
+        position_register = output_geometry.register(GeometryField::Position);
+        size_register = output_geometry.register(GeometryField::Size);
         let output_stream = address(stage_id, POINT_SOURCE_PORT);
         allowed_streams.insert(output_stream.clone());
-        stream_positions.insert(output_stream, output_position);
+        stream_geometry.insert(output_stream, output_geometry);
     }
 
     let color_target = address(renderer_node_id, SPRITE_COLOR_INPUT_PORT);
@@ -347,7 +294,7 @@ fn compile_point_program(
     }
     let context = FieldContext {
         allowed_streams: &allowed_streams,
-        stream_positions: &stream_positions,
+        stream_geometry: &stream_geometry,
         available_attributes,
         capabilities,
     };
@@ -357,46 +304,14 @@ fn compile_point_program(
         instructions: builder.instructions,
         color_register: color.register,
         position_register,
+        size_register,
     };
     Ok(Some(program))
 }
 
-fn point_attribute_schema(
-    definition: &ModuleDefinition,
-    stores: &[uuid::Uuid],
-) -> Result<PointAttributeSchema, String> {
-    point_attribute_schema_with_name(definition, stores, None)
-}
-
-fn point_attribute_schema_with_name(
-    definition: &ModuleDefinition,
-    stores: &[uuid::Uuid],
-    proposed_name: Option<(uuid::Uuid, &str)>,
-) -> Result<PointAttributeSchema, String> {
-    let mut definitions = Vec::with_capacity(stores.len());
-    for store_id in stores {
-        let store =
-            definition.graph.nodes.get(store_id).ok_or_else(|| {
-                format!("Point Store Node {store_id} disappeared during compilation")
-            })?;
-        let element_type = point_role(store)
-            .and_then(PointNodeRole::attribute_type)
-            .ok_or_else(|| format!("Point Store Node {store_id} has no attribute type"))?;
-        definitions.push(PointAttributeDefinition::new(
-            PointAttributeId::from_uuid(store.id),
-            proposed_name
-                .filter(|(node_id, _)| *node_id == store.id)
-                .map_or_else(|| store.name.clone(), |(_, name)| name.to_string()),
-            element_type,
-            element_type.default_value(),
-        )?);
-    }
-    PointAttributeSchema::new(definitions)
-}
-
 struct FieldContext<'a> {
     allowed_streams: &'a HashSet<ModulePortAddress>,
-    stream_positions: &'a HashMap<ModulePortAddress, Option<CompiledValue>>,
+    stream_geometry: &'a HashMap<ModulePortAddress, StreamGeometry>,
     available_attributes: usize,
     capabilities: PointSourceCapabilities,
 }
@@ -472,24 +387,63 @@ impl<'a> PointProgramBuilder<'a> {
         self.dependency_resolver.depends_on_point(source)
     }
 
-    fn compile_stream_position(
+    fn compile_set_geometry(
         &mut self,
+        node_id: uuid::Uuid,
         stream: &ModulePortAddress,
+        field: GeometryField,
         context: &FieldContext<'_>,
     ) -> Result<CompiledValue, String> {
-        match context.stream_positions.get(stream) {
-            Some(Some(value)) => Ok(value.clone()),
-            Some(None) => {
-                let mut dependencies = FieldDependencies::default();
-                dependencies.point_streams.insert(stream.clone());
-                Ok(CompiledValue {
-                    register: self.emit(CompiledPointInstruction::Position)?,
-                    value_type: PointAttributeElementType::Vec3.into(),
-                    dependencies,
-                })
-            }
+        let upstream = self.compile_stream_geometry(stream, field, context)?;
+        let target = address(node_id, field.input_port());
+        let base = if single_input_source(self.definition, &target).is_some()
+            || self
+                .definition
+                .interface
+                .parameters
+                .iter()
+                .any(|parameter| parameter.target == target)
+        {
+            self.compile_input(&target, field.element_type(), context)?
+        } else {
+            upstream.clone()
+        };
+        let (modifier_port, operation) = field.modifier();
+        let modifier = self.compile_input(
+            &address(node_id, modifier_port),
+            field.element_type(),
+            context,
+        )?;
+        let selected = self.compile_input(
+            &address(node_id, POINT_SELECTION_INPUT_PORT),
+            PointAttributeElementType::Boolean,
+            context,
+        )?;
+        let modified = self.emit_binary(operation, base, modifier)?;
+        self.emit_select(field.element_type(), selected, modified, upstream)
+    }
+
+    fn compile_stream_geometry(
+        &mut self,
+        stream: &ModulePortAddress,
+        field: GeometryField,
+        context: &FieldContext<'_>,
+    ) -> Result<CompiledValue, String> {
+        match context.stream_geometry.get(stream) {
+            Some(geometry) => match geometry.get(field) {
+                Some(value) => Ok(value.clone()),
+                None => {
+                    let mut dependencies = FieldDependencies::default();
+                    dependencies.point_streams.insert(stream.clone());
+                    Ok(CompiledValue {
+                        register: self.emit(field.source_instruction())?,
+                        value_type: field.element_type().into(),
+                        dependencies,
+                    })
+                }
+            },
             None => Err(format!(
-                "Point position reads a different Point domain at {}:{}",
+                "Point geometry reads a different Point domain at {}:{}",
                 stream.node_id, stream.port
             )),
         }
@@ -633,7 +587,10 @@ impl<'a> PointProgramBuilder<'a> {
                     Some(PointNodeRole::StoreAttribute(_)) => {
                         self.compile_attribute_load(&node, source, context)?
                     }
-                    Some(PointNodeRole::Grid | PointNodeRole::SetPosition) | None => {
+                    Some(
+                        PointNodeRole::Grid | PointNodeRole::SetPosition | PointNodeRole::SetSize,
+                    )
+                    | None => {
                         return Err(unsupported_field_node(&node, source));
                     }
                 },
@@ -782,6 +739,9 @@ impl<'a> PointProgramBuilder<'a> {
         let mut dependencies = FieldDependencies::default();
         dependencies.point_streams.insert(point_stream.clone());
         dependencies.validate(context)?;
+        if let Some(field) = GeometryField::from_info_port(&source.port) {
+            return self.compile_stream_geometry(&point_stream, field, context);
+        }
         let instruction = match source.port.as_str() {
             POINT_AGE_OUTPUT_PORT if context.capabilities.age => CompiledPointInstruction::Age,
             POINT_NORMALIZED_AGE_OUTPUT_PORT if context.capabilities.age => {
@@ -792,9 +752,6 @@ impl<'a> PointProgramBuilder<'a> {
                     "Point Info output '{}' requires a Particle source with lifetime data",
                     source.port
                 ));
-            }
-            POINT_POSITION_OUTPUT_PORT => {
-                return self.compile_stream_position(&point_stream, context);
             }
             POINT_RANDOM_OUTPUT_PORT => CompiledPointInstruction::Random { channel: 0 },
             _ => {
@@ -807,12 +764,7 @@ impl<'a> PointProgramBuilder<'a> {
         let register = self.emit(instruction)?;
         Ok(CompiledValue {
             register,
-            value_type: if source.port == POINT_POSITION_OUTPUT_PORT {
-                PointAttributeElementType::Vec3
-            } else {
-                PointAttributeElementType::Number
-            }
-            .into(),
+            value_type: PointAttributeElementType::Number.into(),
             dependencies,
         })
     }

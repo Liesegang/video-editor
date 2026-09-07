@@ -102,7 +102,7 @@ pub(super) struct GridUniforms {
 #[derive(Clone, Copy)]
 pub(super) enum PointSourceRequirements {
     Optional,
-    SizeAndAlive,
+    Alive,
     FullGeometry,
 }
 
@@ -116,8 +116,9 @@ impl PointSourceUniforms {
         let uniforms = match kind {
             PointSourceKind::Particle => Self::Particle,
             PointSourceKind::Grid => Self::Grid(GridUniforms {
-                // A field-only shader may optimize geometry uniforms away;
-                // the shared Sprite shader consumes every one.
+                // Field evaluation and derived-geometry Sprite shaders may
+                // optimize source geometry uniforms away. Each caller states
+                // exactly which source components it still consumes.
                 counts: uniform(gl, program, "uGridCounts"),
                 spacing: uniform(gl, program, "uGridSpacing"),
                 center: uniform(gl, program, "uGridCenter"),
@@ -127,9 +128,7 @@ impl PointSourceUniforms {
         if let Self::Grid(grid) = &uniforms {
             let missing = match requirements {
                 PointSourceRequirements::Optional => false,
-                PointSourceRequirements::SizeAndAlive => {
-                    grid.counts.is_none() || grid.size.is_none()
-                }
+                PointSourceRequirements::Alive => grid.counts.is_none(),
                 PointSourceRequirements::FullGeometry => [
                     grid.counts.as_ref(),
                     grid.spacing.as_ref(),

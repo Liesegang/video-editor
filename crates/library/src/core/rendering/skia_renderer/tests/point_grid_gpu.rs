@@ -122,6 +122,7 @@ fn gpu_grid_uses_shared_sprite_fields_and_retains_stable_point_attributes() {
         ramps: vec![ramp.clone()],
         color_register: 5,
         position_register: None,
+        size_register: None,
     });
     let colored = render_point_test_scene(&mut renderer, &scene).unwrap();
     let field_pipelines = renderer

@@ -187,6 +187,7 @@ fn constant_color_program(use_last_stop: bool) -> PointRenderProgram {
         ramps: Vec::new(),
         color_register: 0,
         position_register: None,
+        size_register: None,
     }
 }
 

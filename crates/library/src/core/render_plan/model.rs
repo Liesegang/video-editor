@@ -169,6 +169,7 @@ pub(crate) struct CompiledPointProgram {
     pub instructions: Vec<CompiledPointInstruction>,
     pub color_register: u16,
     pub position_register: Option<u16>,
+    pub size_register: Option<u16>,
 }
 
 /// Compile-time constraint for a Point value. Numeric uniforms retain their
@@ -234,6 +235,7 @@ pub(crate) enum CompiledPointInstruction {
     Age,
     NormalizedAge,
     Position,
+    Size,
     Random {
         channel: u32,
     },

@@ -266,6 +266,7 @@ class QaRunnerTests(unittest.TestCase):
             "point-vector-fields",
             "point-conditional-fields",
             "point-position",
+            "point-size",
             "inspector-asset-preview",
             "timeline-edit",
             "timeline-transition",
@@ -308,6 +309,8 @@ class QaRunnerTests(unittest.TestCase):
         appearance = next(suite for suite in full if suite.name == "appearance")
         self.assertTrue(appearance.project_file)
         self.assertTrue(appearance.expects_exit)
+        point_size = next(suite for suite in full if suite.name == "point-size")
+        self.assertTrue(point_size.project_file and point_size.expects_exit)
         tracking = next(suite for suite in full if suite.name == "text-tracking")
         self.assertTrue(tracking.project_file)
         self.assertTrue(tracking.expects_exit)

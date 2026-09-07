@@ -23,6 +23,8 @@ pub enum PointInstruction {
     NormalizedAge,
     /// Producer-local position after simulation, before the Sprite transform.
     Position,
+    /// Producer-local point size before render-stage Point operations.
+    Size,
     Random {
         channel: u32,
     },
@@ -69,9 +71,16 @@ pub struct PointRenderProgram {
     /// Final derived position for the rendered stream. `None` preserves the
     /// producer's position without allocating a parallel authored value.
     pub position_register: Option<u16>,
+    /// Final derived size for the rendered stream. `None` preserves the
+    /// producer's size.
+    pub size_register: Option<u16>,
 }
 
 impl PointRenderProgram {
+    pub fn has_geometry_output(&self) -> bool {
+        self.position_register.is_some() || self.size_register.is_some()
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         self.register_types().map(drop)
     }
@@ -115,6 +124,7 @@ impl PointRenderProgram {
                     PointAttributeElementType::Number
                 }
                 PointInstruction::Position => PointAttributeElementType::Vec3,
+                PointInstruction::Size => PointAttributeElementType::Number,
                 PointInstruction::Random { channel } => {
                     if *channel >= 3 {
                         return Err("Point random channel must be in 0..3".into());
@@ -192,6 +202,9 @@ impl PointRenderProgram {
         )?;
         if let Some(position) = self.position_register {
             require_register(&registers, position, PointAttributeElementType::Vec3)?;
+        }
+        if let Some(size) = self.size_register {
+            require_register(&registers, size, PointAttributeElementType::Number)?;
         }
         Ok(registers)
     }

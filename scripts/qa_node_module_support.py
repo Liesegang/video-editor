@@ -57,7 +57,9 @@ def open_timeline_item_definition(client, item_id, expected_host, description):
     return active_definition(client.state(), expected_host)
 
 
-def sample_rendered_preview(client, seconds, revision, description):
+def sample_rendered_preview(
+    client, seconds, revision, description, require_visible=True
+):
     """Render and return one exact revision/frame Preview sample."""
 
     activate_dock_tab(client, "dock.tab:timeline", "Timeline", description)
@@ -65,15 +67,8 @@ def sample_rendered_preview(client, seconds, revision, description):
     frame = sought["editor"]["timeline"]["current_frame"]
 
     def rendered():
-        state = settled_preview_state(client, revision, frame)
-        preview = (state or {}).get("editor", {}).get("preview", {})
-        return (
-            state
-            if state
-            and state["editor"].get("error") is None
-            and preview.get("pixel_hash")
-            and int(preview.get("nontransparent_pixels") or 0) > 0
-            else None
+        return settled_preview_state(
+            client, revision, frame, require_visible=require_visible
         )
 
     state = client.wait_until(description + " rendered Preview", rendered, 30.0)

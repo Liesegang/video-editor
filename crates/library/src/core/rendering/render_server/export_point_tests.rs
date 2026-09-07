@@ -522,3 +522,126 @@ fn positioned_points_export_uses_attribute_driven_geometry_in_the_shared_program
 fn authoring_positioned_points_png_export_matches_preview_and_is_nontransparent() {
     assert_point_png_export_matches_preview(positioned_points_export_project());
 }
+
+fn sized_points_export_project() -> Arc<AuthoringProject> {
+    use crate::model::node::NUMERIC_LENGTH_CATALOG_ID;
+    use crate::model::property::{Property, PropertyValue};
+
+    let mut project = positioned_points_export_project().as_ref().clone();
+    let definition = project.module_definitions.values_mut().next().unwrap();
+    let find_catalog = |id: &str| {
+        definition
+            .graph
+            .nodes
+            .values()
+            .find(|node| {
+                matches!(node.content(), NodeContent::NativeOperation(operation)
+                    if operation.catalog_id == id)
+            })
+            .unwrap()
+            .id
+    };
+    let position_store =
+        find_catalog(PointNodeRole::StoreAttribute(PointAttributeElementType::Vec3).catalog_id());
+    let color_store =
+        find_catalog(PointNodeRole::StoreAttribute(PointAttributeElementType::Color).catalog_id());
+    let length = find_catalog(NUMERIC_LENGTH_CATALOG_ID);
+    let renderer_input = definition
+        .graph
+        .connections
+        .iter()
+        .find(|edge| edge.to.port == "particles")
+        .unwrap()
+        .clone();
+    let position_to_color = definition
+        .graph
+        .connections
+        .iter()
+        .find(|edge| {
+            edge.from.node_id == position_store
+                && edge.to.node_id == color_store
+                && edge.to.port == "points"
+        })
+        .unwrap()
+        .clone();
+    let number_store = Node::new_catalog_node(
+        PointNodeRole::StoreAttribute(PointAttributeElementType::Number).catalog_id(),
+    )
+    .unwrap();
+    let mut size = Node::new_catalog_node(PointNodeRole::SetSize.catalog_id()).unwrap();
+    size.set_property(
+        "scale".into(),
+        Property::constant(PropertyValue::Number(12.0.into())),
+    )
+    .unwrap();
+    let (number_store_id, size_id) = (number_store.id, size.id);
+    definition.graph.nodes.insert(number_store_id, number_store);
+    definition.graph.nodes.insert(size_id, size);
+    definition
+        .graph
+        .connections
+        .retain(|edge| edge.id != position_to_color.id && edge.id != renderer_input.id);
+    for (source, output, target, input) in [
+        (position_store, "points", number_store_id, "points"),
+        (length, "result", number_store_id, "value"),
+        (number_store_id, "points", color_store, "points"),
+        (renderer_input.from.node_id, "points", size_id, "points"),
+        (number_store_id, "attribute", size_id, "size"),
+        (size_id, "points", renderer_input.to.node_id, "particles"),
+    ] {
+        definition.graph.connections.push(ModuleConnection {
+            id: ModuleConnectionId::new(),
+            from: ModulePortAddress {
+                node_id: source,
+                port: output.into(),
+            },
+            to: ModulePortAddress {
+                node_id: target,
+                port: input.into(),
+            },
+            order: 0,
+            blend_mode: crate::model::BlendMode::Normal,
+        });
+    }
+    definition.topology_revision += 1;
+    project.validate().unwrap();
+    Arc::new(project)
+}
+
+#[test]
+fn sized_points_export_keeps_position_and_attribute_driven_size_in_one_program() {
+    let project = sized_points_export_project();
+    let plan = RenderPlanCompiler::compile(&project).unwrap();
+    let program = plan
+        .module_definitions
+        .values()
+        .next()
+        .unwrap()
+        .point_renderers
+        .values()
+        .next()
+        .unwrap()
+        .point_program
+        .as_ref()
+        .unwrap();
+    assert!(program.position_register.is_some());
+    assert!(program.size_register.is_some());
+    assert!(
+        program
+            .schema
+            .attributes()
+            .iter()
+            .any(|attribute| attribute.element_type() == PointAttributeElementType::Number)
+    );
+    assert!(program.instructions.iter().any(|instruction| matches!(
+        instruction,
+        crate::core::render_plan::CompiledPointInstruction::LoadAttribute { .. }
+    )));
+}
+
+#[cfg(all(feature = "gl", target_os = "windows"))]
+#[test]
+#[ignore = "requires an idle desktop OpenGL 4.3 GPU"]
+fn authoring_sized_points_png_export_matches_preview_and_is_nontransparent() {
+    assert_point_png_export_matches_preview(sized_points_export_project());
+}
