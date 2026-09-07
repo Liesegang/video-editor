@@ -1,32 +1,6 @@
+use super::particle_collision_support::*;
 use super::*;
 use crate::model::frame::particle::ParticleCollider;
-use crate::model::point::{PointAttributeSchema, PointInstruction, PointRenderProgram};
-use crate::model::property::{ColorValue, PropertyValue};
-use crate::rendering::scene_runtime::{PointFieldReadback, PointInvocationStats};
-
-const STEP_SECONDS: f32 = 1.0 / 120.0;
-
-fn transparent() -> Color {
-    Color {
-        r: 0,
-        g: 0,
-        b: 0,
-        a: 0,
-    }
-}
-
-fn color_program(color: Color) -> PointRenderProgram {
-    PointRenderProgram {
-        schema: PointAttributeSchema::new(Vec::new()).unwrap(),
-        instructions: vec![PointInstruction::Constant {
-            value: PropertyValue::ColorValue(ColorValue::from_straight_srgba8(&color)),
-        }],
-        ramps: Vec::new(),
-        color_register: 0,
-        position_register: None,
-        size_register: None,
-    }
-}
 
 fn plane(
     point: [f64; 3],
@@ -41,62 +15,6 @@ fn plane(
         radius: radius.into(),
         bounce: bounce.into(),
         friction: friction.into(),
-    }
-}
-
-fn deterministic_scene(
-    target_step: u64,
-    position: [f64; 3],
-    velocity: [f64; 3],
-) -> PointSceneFrame {
-    let mut scene = particle_scene(target_step);
-    scene.point_program = Some(color_program(Color::white()));
-    let parameters = particle_parameters_mut(&mut scene);
-    parameters.capacity = 64;
-    parameters.emission_rate = 120.0.into();
-    parameters.lifetime_seconds = 10.0.into();
-    parameters.emitter_position = particle_vec3(position[0], position[1], position[2]);
-    parameters.velocity_min = particle_vec3(velocity[0], velocity[1], velocity[2]);
-    parameters.velocity_max = particle_vec3(velocity[0], velocity[1], velocity[2]);
-    parameters.forces.clear();
-    parameters.collisions.clear();
-    parameters.size_min = 4.0.into();
-    parameters.size_max = 4.0.into();
-    scene
-}
-
-fn fields(renderer: &SkiaRenderer, scene: &PointSceneFrame) -> Vec<PointFieldReadback> {
-    renderer
-        .scene_runtime
-        .as_ref()
-        .unwrap()
-        .read_point_fields(&scene.invocation)
-        .unwrap()
-}
-
-fn serial(fields: &[PointFieldReadback], serial: u32) -> &PointFieldReadback {
-    fields
-        .iter()
-        .find(|point| point.serial == serial)
-        .unwrap_or_else(|| panic!("missing live Particle serial {serial}: {fields:?}"))
-}
-
-fn stats(renderer: &SkiaRenderer, scene: &PointSceneFrame) -> PointInvocationStats {
-    renderer
-        .scene_runtime
-        .as_ref()
-        .unwrap()
-        .invocation_stats(&scene.invocation)
-        .unwrap()
-}
-
-fn assert_vec3_near(actual: [f32; 3], expected: [f32; 3], tolerance: f32, label: &str) {
-    for (axis, (actual, expected)) in actual.into_iter().zip(expected).enumerate() {
-        assert!(
-            (actual - expected).abs() <= tolerance,
-            "{label}[{axis}] expected {expected:?}, got {actual:?} (delta {:?})",
-            (actual - expected).abs()
-        );
     }
 }
 
@@ -270,7 +188,10 @@ fn gpu_collision_order_breaks_ties_and_incompatible_planes_kill_boundedly() {
                     bounce,
                     friction,
                     ..
-                } = collision;
+                } = collision
+                else {
+                    panic!("Plane tie fixture changed collider kind")
+                };
                 plane_response(
                     velocity,
                     [
@@ -369,7 +290,10 @@ fn gpu_collision_changes_reset_history_while_render_fields_rewind_and_cold_repla
     assert_eq!(field_edit.current_step, before_field_edit.current_step);
 
     let ParticleCollider::Plane { bounce, .. } =
-        &mut particle_parameters_mut(&mut scene).collisions[0];
+        &mut particle_parameters_mut(&mut scene).collisions[0]
+    else {
+        panic!("Plane reset fixture changed collider kind")
+    };
     *bounce = 0.35.into();
     render_point_test_scene(&mut renderer, &scene).unwrap();
     let collision_edit = stats(&renderer, &scene);

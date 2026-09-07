@@ -13,6 +13,7 @@ use crate::core::ensemble::effectors::{
 };
 use crate::core::ensemble::types::{DecoratorConfig, EffectorConfig, EnsembleData, TransformData};
 use crate::error::LibraryError;
+use crate::model::frame::appearance::SOURCE_RASTER_OUTSET;
 use crate::model::frame::draw_type::PathEffect;
 use crate::model::frame::effect::ImageEffect;
 use crate::model::frame::entity::{
@@ -210,8 +211,6 @@ pub enum RuntimeShapeGeometry {
     Path(RuntimePathShape),
 }
 
-const CONSERVATIVE_RASTER_OUTSET: f32 = 1.0;
-
 /// Evaluate exactly the same per-element Ensemble transforms used by text
 /// rasterization. Preview bounds and rendered pixels must not independently
 /// interpret Effector target grouping or random seeds.
@@ -376,7 +375,7 @@ pub fn measure_ensemble_text_visual_bounds(
             Some(visual_bounds.map_or(decorator_bounds, |current| current.union(decorator_bounds)));
     }
 
-    Ok(visual_bounds.map(|bounds| bounds.expand(CONSERVATIVE_RASTER_OUTSET)))
+    Ok(visual_bounds.map(|bounds| bounds.expand(SOURCE_RASTER_OUTSET)))
 }
 
 /// Measure the local bounds of the Text body that crosses the Shape -> Image
@@ -395,7 +394,7 @@ pub fn measure_text_visual_bounds(
         Some(ensemble) => measure_ensemble_text_visual_bounds(text, styles, ensemble, current_time),
         None => {
             let outset = crate::core::rendering::text_layout::text_style_outset(styles)
-                + CONSERVATIVE_RASTER_OUTSET;
+                + SOURCE_RASTER_OUTSET;
             Ok(Some(text.block_bounds.expand(outset)))
         }
     }
@@ -668,10 +667,10 @@ impl RuntimeShape {
         self.into_appearance_object(vec![style], current_time)
     }
 
-    /// Cross the Shape -> Image boundary once with one ordered Appearance.
-    /// All layer styles share the same composed content alpha and renderer
-    /// phase ordering; evaluating each style as an independent Image would
-    /// change shadow, glow, offset-fill, and partial-alpha semantics.
+    /// Rasterize Shape content with the supplied authored style sequence.
+    /// Production graph evaluation normally supplies one style per
+    /// Shape -> Image stage; the ordered slice is retained for shared vector
+    /// rendering callers and preserves the sequence without phase sorting.
     pub fn into_appearance_object(
         self,
         styles: Vec<StyleConfig>,
@@ -679,7 +678,7 @@ impl RuntimeShape {
     ) -> Result<FrameObject, LibraryError> {
         if styles.is_empty() {
             return Err(LibraryError::Validation(
-                "Appearance Stack requires at least one Style".to_string(),
+                "Shape rasterization requires at least one Style".to_string(),
             ));
         }
         let source_node_id = self.source_id;
@@ -726,7 +725,7 @@ impl RuntimeShape {
                     );
                 }
                 bounds.map(|bounds| {
-                    let bounds = bounds.expand(CONSERVATIVE_RASTER_OUTSET);
+                    let bounds = bounds.expand(SOURCE_RASTER_OUTSET);
                     FrameBounds::new(bounds.left, bounds.top, bounds.width(), bounds.height())
                 })
             }

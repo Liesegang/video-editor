@@ -19,16 +19,14 @@ use crate::editor::project_service::MediaNodeRequest;
 use crate::model::authoring::{
     AppearanceOperation, AutomationKeyframe, ModuleConnection, ModuleDefinitionSharing,
     ModulePortAddress, PublishedParameter, ShapeKind, ShapeSource, TextEnsembleOperation,
-    appearance_direct_contract_is_compatible, property_value_type,
+    property_value_type,
 };
-use crate::model::node::{
-    APPEARANCE_STACK_CATALOG_ID, ELLIPSE_SHAPE_CATALOG_ID, RECTANGLE_SHAPE_CATALOG_ID,
-};
+use crate::model::node::{ELLIPSE_SHAPE_CATALOG_ID, RECTANGLE_SHAPE_CATALOG_ID};
 use crate::model::node::{NodeContent, PluginOperationContent};
 use crate::model::project::asset::AssetKind;
 use crate::model::project::{
-    APPEARANCE_STYLES_PORT, AUDIO_OUTPUT_PORT, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, PortDataType,
-    SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT, STYLE_OUTPUT_PORT,
+    AUDIO_OUTPUT_PORT, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, PortDataType, SHAPE_INPUT_PORT,
+    SHAPE_OUTPUT_PORT,
 };
 use crate::plugin::{
     EFFECT_APPLY_OPERATION, EFFECT_CATEGORY, PROPERTY_PORT_PREFIX, STYLE_APPLY_OPERATION,
@@ -828,8 +826,11 @@ impl GraphBuilder<'_> {
     }
 
     fn position_node(&mut self, node: &mut Node) {
+        if node.properties().iter().next().is_some() {
+            node.ui_size[0] = node.ui_size[0].max(crate::model::node::PROPERTY_NODE_UI_WIDTH);
+        }
         node.ui_position = [self.next_column, 120.0];
-        self.next_column += 300.0;
+        self.next_column += node.ui_size[0] + crate::model::node::NODE_LAYOUT_COLUMN_GAP;
     }
 }
 

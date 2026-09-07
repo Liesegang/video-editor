@@ -7,7 +7,7 @@ use crate::model::frame::particle::ParticleCollider;
 use crate::model::frame::point::{PointSceneFrame, PointSceneSource};
 use crate::model::property::{PropertyValue, Vec3};
 
-fn vec3(x: f64, y: f64, z: f64) -> Vec3 {
+pub(super) fn vec3(x: f64, y: f64, z: f64) -> Vec3 {
     Vec3 {
         x: OrderedFloat(x),
         y: OrderedFloat(y),
@@ -50,7 +50,7 @@ fn collision_export_project() -> Arc<AuthoringProject> {
     service.snapshot().unwrap()
 }
 
-fn particle_scene(items: &[FrameItem]) -> Option<&PointSceneFrame> {
+pub(super) fn particle_scene(items: &[FrameItem]) -> Option<&PointSceneFrame> {
     for item in items {
         match item {
             FrameItem::Object(object) => {

@@ -115,6 +115,7 @@ impl<'a> PaintFactory<'a> {
                 Ok(paint)
             }
             DrawStyle::DropShadow { .. }
+            | DrawStyle::Opacity { .. }
             | DrawStyle::ColorOverlay { .. }
             | DrawStyle::GradientOverlay { .. }
             | DrawStyle::PatternOverlay { .. }

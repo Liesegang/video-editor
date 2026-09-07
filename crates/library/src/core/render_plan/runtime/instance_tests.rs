@@ -280,6 +280,7 @@ fn item_position(items: &[FrameItem], item_id: TimelineItemId) -> Option<(f64, f
 
 #[test]
 fn published_composition_values_are_owned_by_each_concrete_instance_path() {
+    let plugins = crate::plugin::PluginManager::default();
     let service = TimelineEditorService::create_default("Composition parameters").unwrap();
     let (child_timeline_id, child_track_id, _) = service
         .add_timeline(
@@ -300,7 +301,9 @@ fn published_composition_values_are_owned_by_each_concrete_instance_path() {
             "Title".to_string(),
             SourceRef::Text {
                 text: "Definition title".to_string(),
-                appearance_operations: Vec::new(),
+                appearance_operations: vec![
+                    crate::editor::AppearanceOperationFactory::create(&plugins, "fill").unwrap(),
+                ],
                 ensemble_operations: Vec::new(),
             },
             TimelineInterval::new(seconds(0), seconds(4)).unwrap(),

@@ -182,6 +182,7 @@ fn particle_catalog_advertises_bypass_only_for_type_preserving_modifiers() {
         "native.particle.vortex-force",
         "native.particle.point-force",
         "native.particle.collision-plane",
+        "native.particle.collision-sphere",
     ] {
         let node = Node::new_catalog_node(catalog_id).expect("implemented Particle modifier");
         assert!(node.supports_bypass(), "{catalog_id}");
@@ -264,6 +265,79 @@ fn collision_plane_catalog_exposes_the_bounded_simulation_contract() {
             crate::model::authoring::PublishedParameterAutomationCapability::ConstantOnly { .. }
         ));
     }
+}
+
+#[test]
+fn collision_sphere_catalog_exposes_modes_and_constant_simulation_inputs() {
+    let descriptor = native_node_descriptor(ParticleNodeRole::CollisionSphere.catalog_id())
+        .expect("Collision Sphere descriptor");
+    assert_eq!(
+        descriptor.qa_id(),
+        "node_editor.menu.create.particle_collision_sphere"
+    );
+    assert_eq!(
+        descriptor.runtime_status(),
+        NativeNodeRuntimeStatus::Implemented
+    );
+    assert_eq!(ParticleNodeRole::CollisionSphere.execution_rank(), 4);
+    assert!(ParticleNodeRole::CollisionSphere.is_collision());
+    assert!(!ParticleNodeRole::CollisionSphere.is_force());
+    assert_eq!(
+        descriptor
+            .ports()
+            .iter()
+            .filter(|port| port.direction == PortDirection::Input)
+            .map(|port| port.key.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "particles",
+            "active",
+            "center",
+            "radius",
+            "particle_radius",
+            "mode",
+            "bounce",
+            "friction",
+        ]
+    );
+    let node = Node::new_catalog_node(descriptor.catalog_id()).expect("Collision Sphere node");
+    assert!(node.supports_bypass());
+    for (key, value) in [
+        ("active", PropertyValue::Boolean(true)),
+        (
+            "center",
+            PropertyValue::Vec3(Vec3 {
+                x: OrderedFloat(0.0),
+                y: OrderedFloat(120.0),
+                z: OrderedFloat(0.0),
+            }),
+        ),
+        ("radius", PropertyValue::Number(OrderedFloat(100.0))),
+        ("particle_radius", PropertyValue::Number(OrderedFloat(0.0))),
+        ("mode", PropertyValue::String("Solid".to_string())),
+        ("bounce", PropertyValue::Number(OrderedFloat(0.5))),
+        ("friction", PropertyValue::Number(OrderedFloat(0.1))),
+    ] {
+        assert_eq!(
+            node.properties().get(key).unwrap().get_static_value(),
+            Some(&value),
+            "{key}"
+        );
+        assert!(matches!(
+            descriptor.input_automation_capability(key),
+            crate::model::authoring::PublishedParameterAutomationCapability::ConstantOnly { .. }
+        ));
+    }
+    let properties = descriptor.property_definitions();
+    let mode = properties
+        .iter()
+        .find(|property| property.name() == "mode")
+        .expect("Mode Property");
+    assert!(matches!(
+        mode.ui_type(),
+        PropertyUiType::Dropdown { options }
+            if options.iter().map(String::as_str).eq(["Solid", "Container"])
+    ));
 }
 
 #[test]

@@ -481,7 +481,6 @@ fn parse_data_type(value: &str, node_label: &str, port_name: &str) -> (PortDataT
         "List<Any>" | "List<Path>" => PortDataType::List,
         "Image" | "List<Image>" => PortDataType::Image,
         "Shape" => PortDataType::Shape,
-        "Style" | "List<Style>" => PortDataType::Style,
         "Audio" => PortDataType::Audio,
         "Spectrum" => PortDataType::Spectrum,
         "Scalar/Vector" | "Numeric" => PortDataType::Numeric,

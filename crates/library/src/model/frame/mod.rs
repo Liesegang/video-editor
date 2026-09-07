@@ -11,6 +11,7 @@ pub mod entity;
 )]
 pub mod frame;
 pub mod image;
+pub mod image_bounds;
 pub mod particle;
 pub mod point;
 pub mod runtime_shape;

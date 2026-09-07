@@ -352,7 +352,7 @@ macro_rules! layer_effect_plugin {
 
         impl StylePlugin for $type {
             fn descriptor(&self) -> Result<OperationDescriptor, OperationDescriptorError> {
-                OperationDescriptor::style(self.id(), self.name(), $properties)
+                OperationDescriptor::image_style(self.id(), self.name(), $properties)
             }
 
             fn evaluate_values(

@@ -90,7 +90,7 @@ pub(super) fn input_port_interface_actions(
         })),
     );
     let mut actions = Vec::new();
-    response.context_menu(|ui| {
+    crate::ui::widgets::property_value_editor::property_value_context_menu(response, |ui| {
         show_interface_menu(ui, definition, &visual, &mut actions);
         additional_menu(ui);
     });

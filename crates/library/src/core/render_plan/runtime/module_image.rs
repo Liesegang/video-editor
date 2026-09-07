@@ -194,7 +194,9 @@ impl ModuleImageRuntime<'_> {
             NodeContent::PluginOperation(operation)
                 if operation.category == STYLE_CATEGORY
                     && operation.operation == STYLE_APPLY_OPERATION
-                    && operation.component_id != IMAGE_OPACITY_STYLE_COMPONENT_ID =>
+                    && crate::model::authoring::appearance_input_kind(
+                        &operation.declared_ports,
+                    ) == Some(crate::model::authoring::AppearanceInputKind::Shape) =>
             {
                 self.style_shape_image(&node, operation)
             }
@@ -372,7 +374,7 @@ impl ModuleImageRuntime<'_> {
                 transform: Transform::default(),
                 blend_mode: node.blend_mode,
                 effect_time: OrderedFloat(seconds),
-                effects: vec![ImageEffect {
+                effects: vec![ImageEffect::Plugin {
                     effect_type: operation.component_id.clone(),
                     properties: values,
                 }],
@@ -403,24 +405,20 @@ impl ModuleImageRuntime<'_> {
                 items: vec![source],
             })));
         }
-        if operation.category == STYLE_CATEGORY
-            && operation.component_id == IMAGE_OPACITY_STYLE_COMPONENT_ID
-            && operation.operation == STYLE_APPLY_OPERATION
-        {
-            let opacity = required_number(&values, "opacity", "Image Opacity")?;
+        if operation.category == STYLE_CATEGORY && operation.operation == STYLE_APPLY_OPERATION {
+            let Some(style) = self.evaluate_style_config(node, operation)? else {
+                return Ok(None);
+            };
             return Ok(Some(FrameItem::Group(FrameGroup {
                 source_id: node.id,
                 kind: FrameGroupKind::ImageStyle,
                 width: self.width,
                 height: self.height,
                 background_color: transparent(),
-                transform: Transform {
-                    opacity,
-                    ..Transform::default()
-                },
+                transform: Transform::default(),
                 blend_mode: node.blend_mode,
                 effect_time: OrderedFloat(seconds),
-                effects: Vec::new(),
+                effects: vec![ImageEffect::LayerStyle(style)],
                 items: vec![source],
             })));
         }
@@ -436,7 +434,6 @@ impl ModuleImageRuntime<'_> {
         catalog_id: &str,
     ) -> Result<Option<FrameItem>, LibraryError> {
         match catalog_id {
-            crate::model::node::APPEARANCE_STACK_CATALOG_ID => self.appearance_stack_image(node),
             crate::model::node::PARTICLE_SPRITE_RENDERER_CATALOG_ID => {
                 let Some(point_renderer) = self.definition.point_renderers.get(&node.id).cloned()
                 else {

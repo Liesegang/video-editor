@@ -8,6 +8,7 @@ use library::animation::EasingFunction;
 use library::editor::project_service::MediaNodeRequest;
 use library::framing::get_frame_from_project;
 use library::model::asset::{Asset, AssetKind};
+use library::model::frame::effect::ImageEffect;
 use library::model::frame::entity::{FrameContent, FrameGroup, FrameItem, FrameObject};
 use library::model::project::{
     Composition, EvalOutput, FMOD_DIVISOR_INPUT_PORT, FMOD_X_INPUT_PORT, FPS_PORT, FRAME_PORT,
@@ -227,8 +228,11 @@ fn operation_and_merge_paths_use_the_same_source_node_time_remap() -> Result<()>
     );
     let effect_group = find_group(&frame.items, effect_id).context("effect group must exist")?;
     assert_close(effect_group.effect_time.into_inner(), 0.5);
+    let ImageEffect::Plugin { properties, .. } = &effect_group.effects[0] else {
+        panic!("Blur must lower to a Plugin ImageEffect")
+    };
     assert_close(
-        effect_group.effects[0].properties["sigma_x"]
+        properties["sigma_x"]
             .get_as::<f64>()
             .context("sigma_x must be numeric")?,
         5.0,

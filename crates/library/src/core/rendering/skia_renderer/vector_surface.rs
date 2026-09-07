@@ -9,7 +9,7 @@ use skia_safe::{Point, Rect, Surface};
 
 use super::{Affine2D, LibraryError, SkiaRenderer};
 
-const DEVICE_PIXEL_GUARD: f64 = 2.0;
+use crate::model::frame::image_bounds::FRAME_IMAGE_RASTER_GUARD;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum VectorSurfaceMode {
@@ -108,10 +108,10 @@ fn resolve_content_region(
         .fold(f64::NEG_INFINITY, f64::max);
     let target_width = target.0 as f64;
     let target_height = target.1 as f64;
-    let left = (min_x.floor() - DEVICE_PIXEL_GUARD).clamp(0.0, target_width);
-    let top = (min_y.floor() - DEVICE_PIXEL_GUARD).clamp(0.0, target_height);
-    let right = (max_x.ceil() + DEVICE_PIXEL_GUARD).clamp(0.0, target_width);
-    let bottom = (max_y.ceil() + DEVICE_PIXEL_GUARD).clamp(0.0, target_height);
+    let left = (min_x.floor() - FRAME_IMAGE_RASTER_GUARD).clamp(0.0, target_width);
+    let top = (min_y.floor() - FRAME_IMAGE_RASTER_GUARD).clamp(0.0, target_height);
+    let right = (max_x.ceil() + FRAME_IMAGE_RASTER_GUARD).clamp(0.0, target_width);
+    let bottom = (max_y.ceil() + FRAME_IMAGE_RASTER_GUARD).clamp(0.0, target_height);
     if right <= left || bottom <= top {
         return Ok(transparent_region());
     }

@@ -14,10 +14,9 @@ use crate::model::frame::color::Color;
 use crate::model::frame::entity::StyleConfig;
 use crate::model::frame::runtime_shape::{
     RuntimeBounds, evaluate_text_element_transforms, text_element_affine, text_element_center,
-    transform_bounds,
 };
 use crate::rendering::blend::with_restored_canvas;
-use crate::rendering::skia_working_surface::{self, SkiaSurfaceContract};
+use crate::rendering::skia_working_surface::SkiaSurfaceContract;
 use crate::rendering::text_layout::ShapedTextLayout;
 
 #[derive(Clone, PartialEq)]
@@ -33,16 +32,11 @@ struct GlyphBatch {
     paint: ElementPaint,
 }
 
-struct GlyphGeometry {
-    bounds: RuntimeBounds,
-    element: usize,
-}
-
 pub(super) struct TextBody {
     pub(super) layout: ShapedTextLayout,
     pub(super) transforms: Vec<TransformData>,
     batches: Vec<GlyphBatch>,
-    geometry: Vec<GlyphGeometry>,
+    geometry: Vec<crate::rendering::text_layout::ShapedGlyphGeometry>,
 }
 
 impl TextBody {
@@ -72,39 +66,9 @@ impl TextBody {
             })
             .collect::<Vec<_>>();
         let mut batches = Vec::new();
-        let mut geometry = Vec::new();
+        let geometry = layout.glyph_geometry()?;
         for run in &layout.runs {
-            let elements = run
-                .source_starts
-                .iter()
-                .take(run.glyphs.len())
-                .map(|start| {
-                    let start = *start as usize;
-                    layout.metadata.element_index_at_utf8(start).ok_or_else(|| {
-                        LibraryError::Render(format!(
-                            "Shaped glyph at UTF-8 byte {start} has no Text element"
-                        ))
-                    })
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            for ((bounds, position), element) in
-                run.bounds.iter().zip(&run.positions).zip(&elements)
-            {
-                if bounds.is_empty() {
-                    continue;
-                }
-                let x = run.origin.x + position.x;
-                let y = run.origin.y + position.y;
-                geometry.push(GlyphGeometry {
-                    bounds: RuntimeBounds::new(
-                        bounds.left + x,
-                        bounds.top + y,
-                        bounds.right + x,
-                        bounds.bottom + y,
-                    ),
-                    element: *element,
-                });
-            }
+            let elements = layout.run_element_indices(run)?;
             let mut start = 0;
             while start < run.glyphs.len() {
                 let paint = &paints[elements[start]];
@@ -136,59 +100,38 @@ impl TextBody {
     }
 
     pub(super) fn local_bounds(&self, body_outset: f32) -> Option<(RuntimeBounds, RuntimeBounds)> {
-        self.geometry
-            .iter()
-            .filter(|glyph| self.transforms[glyph.element].opacity > 0.0)
-            .map(|glyph| {
-                let element = &self.layout.metadata.elements[glyph.element];
-                let transform = &self.transforms[glyph.element];
-                let center = text_element_center(element);
-                (
-                    transform_bounds(glyph.bounds, center, transform),
-                    transform_bounds(glyph.bounds.expand(body_outset), center, transform),
-                )
-            })
-            .reduce(|(geometry, content), (next_geometry, next_content)| {
-                (geometry.union(next_geometry), content.union(next_content))
-            })
+        let geometry = crate::rendering::text_layout::transformed_glyph_bounds(
+            &self.layout.metadata,
+            &self.transforms,
+            &self.geometry,
+            0.0,
+        )?;
+        let content = crate::rendering::text_layout::transformed_glyph_bounds(
+            &self.layout.metadata,
+            &self.transforms,
+            &self.geometry,
+            body_outset,
+        )?;
+        Some((geometry, content))
     }
 
-    pub(super) fn draw_body(
+    pub(super) fn draw_style(
         &self,
         contract: &SkiaSurfaceContract,
         canvas: &Canvas,
-        styles: &[StyleConfig],
+        config: &StyleConfig,
     ) -> Result<(), LibraryError> {
-        for config in styles {
-            if config.style.composite_phase() != super::layer_styles::CompositePhase::Body {
-                continue;
-            }
-            self.paint_batches(canvas, |material| {
-                PaintFactory::new(contract).text_paint(
-                    &config.style,
-                    material.opacity,
-                    material.color.as_ref(),
-                )
-            })?;
+        if config.style.composite_phase() != super::layer_styles::CompositePhase::Body {
+            return Err(LibraryError::Render(
+                "Text Shape rasterization received an Image layer style".to_string(),
+            ));
         }
-        Ok(())
-    }
-
-    pub(super) fn draw_silhouette(
-        &self,
-        contract: &SkiaSurfaceContract,
-        canvas: &Canvas,
-    ) -> Result<(), LibraryError> {
         self.paint_batches(canvas, |material| {
-            let mut paint = Paint::default();
-            skia_working_surface::set_paint_authored_color(
-                &mut paint,
-                contract,
-                &Color::white(),
+            PaintFactory::new(contract).text_paint(
+                &config.style,
                 material.opacity,
-            )?;
-            paint.set_anti_alias(true);
-            Ok(paint)
+                material.color.as_ref(),
+            )
         })
     }
 

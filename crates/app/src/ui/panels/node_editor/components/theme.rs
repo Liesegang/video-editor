@@ -229,7 +229,6 @@ pub(in crate::ui::panels::node_editor) fn pin_color(data_type: PortDataType) -> 
     match data_type {
         PortDataType::Image => Color32::from_rgb(238, 207, 109),
         PortDataType::Shape => Color32::from_rgb(142, 132, 246),
-        PortDataType::Style => Color32::from_rgb(224, 146, 214),
         PortDataType::Audio => Color32::from_rgb(100, 200, 100),
         PortDataType::Spectrum => Color32::from_rgb(88, 207, 220),
         PortDataType::String => Color32::from_rgb(100, 220, 220),

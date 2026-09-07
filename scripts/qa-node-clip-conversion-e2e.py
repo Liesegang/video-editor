@@ -10,6 +10,8 @@ from qa_support import (
     run_suite_main,
     settled_preview_state,
 )
+from qa_appearance_persistence import assert_canonical_appearance_graph
+from qa_node_module_support import assert_node_editor_nodes_do_not_overlap
 from qa_text_content_support import (
     direct_text_content,
     edit_direct_text,
@@ -730,39 +732,31 @@ def run_suite(client):
     ]
     tile_nodes = [node_id for node_id, node in nodes.items() if _plugin_component(node) == "tile"]
     fill_nodes = [node_id for node_id, node in nodes.items() if _plugin_component(node) == "fill"]
-    stack_nodes = [
-        node_id
-        for node_id, node in nodes.items()
-        if _node_type(node) == "nativeoperation"
-        and ((node.get("content") or {}).get("data") or {}).get("catalog_id")
-        == "native.appearance-stack"
-    ]
     if not (
-        len(nodes) == 5
+        len(nodes) == 4
         and len(output_nodes) == 1
         and len(text_nodes) == 1
         and tile_nodes == [tile_id]
         and len(fill_nodes) == 1
-        and len(stack_nodes) == 1
-        and len(definition["graph"]["connections"]) == 4
+        and len(definition["graph"]["connections"]) == 3
     ):
-        raise QaFailure("converted topology must combine Text + Fill in one Appearance Stack")
-    links = {
-        (edge["from"]["node_id"], edge["from"]["port"],
-         edge["to"]["node_id"], edge["to"]["port"])
-        for edge in definition["graph"]["connections"]
-    }
-    required_links = {
-        (text_nodes[0], "shape", stack_nodes[0], "shape_in"),
-        (fill_nodes[0], "style", stack_nodes[0], "styles"),
-        (stack_nodes[0], "image", tile_id, "image_in"),
-    }
-    output_links = links - required_links
-    if not required_links.issubset(links) or len(output_links) != 1 or not any(
-        source == tile_id and port == "image" and target == output_nodes[0]
-        for source, port, target, _ in output_links
-    ):
-        raise QaFailure("conversion lost the typed Shape/Style boundary or Effect/Output order")
+        raise QaFailure("converted topology must be finite Text -> Fill -> Tile -> Output")
+    appearance_graph = assert_canonical_appearance_graph(
+        after["project"],
+        definition_id,
+        source["output_id"],
+        [
+            {"id": fill_nodes[0], "component_id": "fill"},
+            {
+                "id": tile_id,
+                "component_id": "tile",
+                "category": "effect",
+                "operation": "effect.apply.v1",
+            },
+        ],
+    )
+    if appearance_graph["shape_source"] != (text_nodes[0], "shape"):
+        raise QaFailure("converted Fill is not driven by the converted Text Shape")
 
     _, canvas = client.wait_component_settled("node_editor.canvas")
     metadata = canvas.get("metadata") or {}
@@ -772,6 +766,9 @@ def run_suite(client):
         raise QaFailure("conversion expanded Timeline structure into Nodes")
     for node_id in nodes:
         client.wait_component("node_editor.node:" + node_id)
+    converted_layout = assert_node_editor_nodes_do_not_overlap(
+        client, list(nodes), "converted Text Node Clip"
+    )
 
     rendered_after = client.wait_until(
         "converted Preview publication",
@@ -867,7 +864,8 @@ def run_suite(client):
             "connections": definition["graph"]["connections"],
             "output_node": output_nodes[0],
             "pre_effect_node": tile_nodes[0],
-            "appearance_stack_node": stack_nodes[0],
+            "appearance_nodes": appearance_graph["operation_ids"],
+            "rendered_layout": converted_layout,
         },
         "preview_hash": preview_hash,
         "direct_text_controls": direct_controls,

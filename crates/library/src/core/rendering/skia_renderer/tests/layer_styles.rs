@@ -184,36 +184,42 @@ fn opaque(r: u8, g: u8, b: u8) -> Color {
 
 #[test]
 fn color_gradient_and_pattern_overlays_render_real_masked_pixels() {
-    let solid = render_shape(vec![DrawStyle::ColorOverlay {
-        color: opaque(255, 0, 0),
-        opacity: 1.0,
-        blend_mode: BlendMode::Normal,
-    }]);
+    let solid = render_shape(vec![
+        white_fill(),
+        DrawStyle::ColorOverlay {
+            color: opaque(255, 0, 0),
+            opacity: 1.0,
+            blend_mode: BlendMode::Normal,
+        },
+    ]);
     let solid_center = pixel(&solid, 32, 32);
     assert!(solid_center[0] > 0.95 && solid_center[1] < 0.01);
     assert_eq!(pixel(&solid, 10, 10), [0.0; 4]);
 
-    let gradient = render_shape(vec![DrawStyle::GradientOverlay {
-        gradient: GradientStyle {
-            geometry: GradientGeometry::Linear {
-                start: point(20.0 / WIDTH as f64, 0.5),
-                end: point(44.0 / WIDTH as f64, 0.5),
+    let gradient = render_shape(vec![
+        white_fill(),
+        DrawStyle::GradientOverlay {
+            gradient: GradientStyle {
+                geometry: GradientGeometry::Linear {
+                    start: point(20.0 / WIDTH as f64, 0.5),
+                    end: point(44.0 / WIDTH as f64, 0.5),
+                },
+                spread: GradientSpread::Pad,
+                stops: vec![
+                    GradientStyleStop {
+                        offset: OrderedFloat(0.0),
+                        color: opaque(255, 0, 0),
+                    },
+                    GradientStyleStop {
+                        offset: OrderedFloat(1.0),
+                        color: opaque(0, 0, 255),
+                    },
+                ],
             },
-            spread: GradientSpread::Pad,
-            stops: vec![
-                GradientStyleStop {
-                    offset: OrderedFloat(0.0),
-                    color: opaque(255, 0, 0),
-                },
-                GradientStyleStop {
-                    offset: OrderedFloat(1.0),
-                    color: opaque(0, 0, 255),
-                },
-            ],
+            opacity: 1.0,
+            blend_mode: BlendMode::Normal,
         },
-        opacity: 1.0,
-        blend_mode: BlendMode::Normal,
-    }]);
+    ]);
     let left = pixel(&gradient, 22, 32);
     let right = pixel(&gradient, 42, 32);
     assert!(left[0] > left[2], "gradient left stop missing: {left:?}");
@@ -223,19 +229,22 @@ fn color_gradient_and_pattern_overlays_render_real_masked_pixels() {
     );
     assert_eq!(pixel(&gradient, 10, 10), [0.0; 4]);
 
-    let pattern = render_shape(vec![DrawStyle::PatternOverlay {
-        pattern: PatternStyle {
-            kind: PatternKind::Stripes,
-            foreground: opaque(255, 255, 255),
-            background: opaque(0, 0, 0),
-            scale: point(8.0, 8.0),
-            phase: point(0.0, 0.0),
-            angle: OrderedFloat(0.0),
-            duty: OrderedFloat(0.5),
+    let pattern = render_shape(vec![
+        white_fill(),
+        DrawStyle::PatternOverlay {
+            pattern: PatternStyle {
+                kind: PatternKind::Stripes,
+                foreground: opaque(255, 255, 255),
+                background: opaque(0, 0, 0),
+                scale: point(8.0, 8.0),
+                phase: point(0.0, 0.0),
+                angle: OrderedFloat(0.0),
+                duty: OrderedFloat(0.5),
+            },
+            opacity: 1.0,
+            blend_mode: BlendMode::Normal,
         },
-        opacity: 1.0,
-        blend_mode: BlendMode::Normal,
-    }]);
+    ]);
     let foreground = pixel(&pattern, 24, 32);
     let background = pixel(&pattern, 30, 32);
     assert!(
@@ -268,30 +277,36 @@ fn red_shadow(distance: f64, size: f64) -> DrawStyle {
 
 #[test]
 fn drop_shadow_and_outer_glow_render_real_pixels_beyond_the_source_alpha() {
-    let shadow = render_shape(vec![DrawStyle::DropShadow {
-        color: Color::white(),
-        opacity: 1.0,
-        blend_mode: BlendMode::Normal,
-        angle: 180.0,
-        distance: 10.0,
-        spread: 0.0,
-        size: 6.0,
-    }]);
+    let shadow = render_shape(vec![
+        white_fill(),
+        DrawStyle::DropShadow {
+            color: Color::white(),
+            opacity: 1.0,
+            blend_mode: BlendMode::Normal,
+            angle: 180.0,
+            distance: 10.0,
+            spread: 0.0,
+            size: 6.0,
+        },
+    ]);
     assert!(
         pixel(&shadow, 50, 32)[3] > 0.01,
         "translated shadow missing"
     );
     assert_eq!(pixel(&shadow, 8, 8), [0.0; 4]);
 
-    let glow = render_shape(vec![DrawStyle::OuterGlow {
-        color: Color::white(),
-        opacity: 1.0,
-        blend_mode: BlendMode::Normal,
-        spread: 0.25,
-        size: 8.0,
-    }]);
+    let glow = render_shape(vec![
+        white_fill(),
+        DrawStyle::OuterGlow {
+            color: Color::white(),
+            opacity: 1.0,
+            blend_mode: BlendMode::Normal,
+            spread: 0.25,
+            size: 8.0,
+        },
+    ]);
     assert!(pixel(&glow, 16, 32)[3] > 0.01, "outer glow missing");
-    assert!(pixel(&glow, 32, 32)[3] < 0.01, "outer glow leaked inside");
+    assert!(pixel(&glow, 32, 32)[3] > 0.99, "upstream body disappeared");
 }
 
 #[test]
@@ -333,7 +348,7 @@ fn inner_shadow_glow_and_satin_remain_clipped_to_the_source_alpha() {
         ),
     ];
     for (label, style) in styles {
-        let pixels = render_shape(vec![style]);
+        let pixels = render_shape(vec![white_fill(), style]);
         assert!(
             non_transparent_count(&pixels) > 0,
             "{label} rendered no pixels"
@@ -345,27 +360,30 @@ fn inner_shadow_glow_and_satin_remain_clipped_to_the_source_alpha() {
 
 #[test]
 fn bevel_emboss_produces_opposing_highlight_and_shadow_edges() {
-    let pixels = render_shape(vec![DrawStyle::BevelEmboss {
-        style: BevelStyle::InnerBevel,
-        technique: BevelTechnique::Smooth,
-        depth: 0.8,
-        direction: BevelDirection::Up,
-        size: 8.0,
-        soften: 2.0,
-        angle: 135.0,
-        altitude: 45.0,
-        highlight_color: Color::white(),
-        highlight_opacity: 1.0,
-        highlight_blend_mode: BlendMode::Normal,
-        shadow_color: Color {
-            r: 255,
-            g: 0,
-            b: 0,
-            a: 255,
+    let pixels = render_shape(vec![
+        white_fill(),
+        DrawStyle::BevelEmboss {
+            style: BevelStyle::InnerBevel,
+            technique: BevelTechnique::Smooth,
+            depth: 0.8,
+            direction: BevelDirection::Up,
+            size: 8.0,
+            soften: 2.0,
+            angle: 135.0,
+            altitude: 45.0,
+            highlight_color: Color::white(),
+            highlight_opacity: 1.0,
+            highlight_blend_mode: BlendMode::Normal,
+            shadow_color: Color {
+                r: 255,
+                g: 0,
+                b: 0,
+                a: 255,
+            },
+            shadow_opacity: 1.0,
+            shadow_blend_mode: BlendMode::Normal,
         },
-        shadow_opacity: 1.0,
-        shadow_blend_mode: BlendMode::Normal,
-    }]);
+    ]);
     let colored = pixels.iter().filter(|pixel| pixel[3] > 0.01).count();
     assert!(colored > 0, "bevel rendered no alpha-mask lighting");
     assert_eq!(pixel(&pixels, 10, 10), [0.0; 4]);
@@ -412,6 +430,7 @@ fn derived_bevel_kernel_stays_within_its_reported_outset_for_every_technique() {
 fn text_uses_the_same_alpha_mask_style_renderer_as_shapes() {
     let fill = render_text(vec![white_fill()]);
     let styled = render_text(vec![
+        white_fill(),
         DrawStyle::OuterGlow {
             color: Color::white(),
             opacity: 1.0,
@@ -419,7 +438,6 @@ fn text_uses_the_same_alpha_mask_style_renderer_as_shapes() {
             spread: 0.2,
             size: 8.0,
         },
-        white_fill(),
     ]);
     assert!(
         non_transparent_count(&styled) > non_transparent_count(&fill),
@@ -428,10 +446,11 @@ fn text_uses_the_same_alpha_mask_style_renderer_as_shapes() {
 }
 
 #[test]
-fn drop_shadow_is_always_composited_below_shape_content() {
+fn image_effect_before_shape_has_transparent_input_and_does_not_reorder() {
     let fill_then_shadow = render_shape(vec![white_fill(), red_shadow(0.0, 0.0)]);
     let shadow_then_fill = render_shape(vec![red_shadow(0.0, 0.0), white_fill()]);
-    assert_eq!(fill_then_shadow, shadow_then_fill);
+    let plain_fill = render_shape(vec![white_fill()]);
+    assert_eq!(shadow_then_fill, plain_fill);
     let center = pixel(&fill_then_shadow, 32, 32);
     assert!(center[0] > 0.95 && center[1] > 0.95 && center[2] > 0.95);
 
@@ -625,19 +644,21 @@ fn grouped_path_opacity_is_applied_once_before_one_shared_shadow_phase() {
 }
 
 #[test]
-fn overlapping_partial_parts_share_body_alpha_without_reapplying_paint_opacity() {
+fn overlapping_partial_parts_compose_each_shape_to_image_body_stage() {
     let parts = [
         path_part("M 12 20 L 32 20 L 32 44 L 12 44 Z", 0.5),
         path_part("M 24 20 L 44 20 L 44 44 L 24 44 Z", 0.5),
     ];
-    // Each part contains two opaque paints. Its 0.5 opacity must wrap their
-    // complete body, rather than turn each paint into a separate 0.5 layer.
+    // Each authored Fill is now an independent Shape -> Image branch. The
+    // part's 0.5 alpha therefore applies once to each Fill before the two
+    // images merge: two stages produce 0.75 alpha, while two overlapping
+    // parts across those stages produce 0.9375 alpha.
     let pixels = render_shape_with_parts(
         vec![white_fill(), white_fill(), red_shadow(36.0, 0.0)],
         Affine2D::IDENTITY,
         &parts,
     );
-    for (x, expected) in [(18, 0.5), (28, 0.75), (54, 0.5), (64, 0.75)] {
+    for (x, expected) in [(18, 0.75), (28, 0.9375), (54, 0.75), (64, 0.9375)] {
         let actual = pixel(&pixels, x, 32)[3];
         assert!(
             (actual - expected).abs() < 2.0e-3,
@@ -674,27 +695,41 @@ fn grouped_open_strokes_keep_zero_height_geometry_in_the_shared_mask_bounds() {
 }
 
 #[test]
-fn authored_order_remains_stable_within_the_same_compositing_phase() {
-    let blue_shadow = DrawStyle::DropShadow {
-        color: Color {
-            r: 0,
-            g: 0,
-            b: 255,
-            a: 255,
-        },
+fn authored_order_remains_stable_between_image_effects() {
+    let blue_overlay = DrawStyle::ColorOverlay {
+        color: opaque(0, 0, 255),
         opacity: 1.0,
         blend_mode: BlendMode::Normal,
-        angle: 0.0,
-        distance: 0.0,
-        spread: 0.0,
-        size: 0.0,
     };
-    let red_then_blue = render_shape(vec![red_shadow(0.0, 0.0), blue_shadow.clone()]);
-    let blue_then_red = render_shape(vec![blue_shadow, red_shadow(0.0, 0.0)]);
+    let red_overlay = DrawStyle::ColorOverlay {
+        color: opaque(255, 0, 0),
+        opacity: 1.0,
+        blend_mode: BlendMode::Normal,
+    };
+    let red_then_blue = render_shape(vec![
+        white_fill(),
+        red_overlay.clone(),
+        blue_overlay.clone(),
+    ]);
+    let blue_then_red = render_shape(vec![white_fill(), blue_overlay, red_overlay]);
     let first = pixel(&red_then_blue, 32, 32);
     let second = pixel(&blue_then_red, 32, 32);
     assert!(first[2] > 0.95 && first[0] < 0.05);
     assert!(second[0] > 0.95 && second[2] < 0.05);
+}
+
+#[test]
+fn image_opacity_multiplies_the_complete_upstream_image_at_its_authored_stage() {
+    let half = render_shape(vec![white_fill(), DrawStyle::Opacity { opacity: 0.5 }]);
+    let center = pixel(&half, 32, 32);
+    assert!((center[3] - 0.5).abs() < 0.01, "half opacity: {center:?}");
+    assert!(
+        (center[0] - 0.5).abs() < 0.01,
+        "premultiplied body: {center:?}"
+    );
+
+    let before_body = render_shape(vec![DrawStyle::Opacity { opacity: 0.0 }, white_fill()]);
+    assert_eq!(before_body, render_shape(vec![white_fill()]));
 }
 
 #[test]

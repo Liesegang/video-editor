@@ -79,9 +79,12 @@ pub(crate) fn vector_drag_values(
             .on_hover_text(format!("Unit: {suffix}"));
         }
     });
+    let response = axes.iter().fold(group.response, |combined, axis| {
+        combined | axis.response.clone()
+    });
 
     VectorDragValueResponse {
-        response: group.response,
+        response,
         axes,
         changed,
         reset,
@@ -92,6 +95,81 @@ pub(crate) fn vector_drag_values(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn secondary_pointer(position: egui::Pos2, pressed: bool) -> egui::Event {
+        egui::Event::PointerButton {
+            pos: position,
+            button: egui::PointerButton::Secondary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        }
+    }
+
+    fn render_vec3(
+        context: &egui::Context,
+        events: Vec<egui::Event>,
+        frame: usize,
+        values: &mut [f64; 3],
+    ) -> VectorDragValueResponse {
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(500.0, 120.0));
+        let config = FloatDragValueConfig {
+            speed: 0.25,
+            suffix: String::new(),
+            hard_min: None,
+            hard_max: None,
+        };
+        let mut response = None;
+        drop(context.run(
+            egui::RawInput {
+                screen_rect: Some(screen),
+                time: Some(frame as f64 / 60.0),
+                events,
+                ..Default::default()
+            },
+            |context| {
+                egui::CentralPanel::default().show(context, |ui| {
+                    let [x, y, z] = values;
+                    response = Some(vector_drag_values(
+                        ui,
+                        &config,
+                        &mut [("X", x), ("Y", y), ("Z", z)],
+                        20.0,
+                    ));
+                });
+            },
+        ));
+        response.expect("Vec3 response")
+    }
+
+    #[test]
+    fn vector_response_propagates_secondary_click_from_an_axis() {
+        let context = egui::Context::default();
+        let mut values = [1.0, 2.0, 3.0];
+        let initial = render_vec3(&context, Vec::new(), 0, &mut values);
+        let position = initial.axes[1].response.rect.center();
+        render_vec3(
+            &context,
+            vec![
+                egui::Event::PointerMoved(position),
+                secondary_pointer(position, true),
+            ],
+            1,
+            &mut values,
+        );
+        let released = render_vec3(
+            &context,
+            vec![secondary_pointer(position, false)],
+            2,
+            &mut values,
+        );
+
+        assert!(released.axes[1].response.secondary_clicked());
+        assert!(
+            released.response.secondary_clicked(),
+            "the shared vector response must own context-menu interaction"
+        );
+        assert_eq!(values, [1.0, 2.0, 3.0]);
+    }
 
     #[test]
     fn vec4_uses_one_fixed_width_ordered_row() {

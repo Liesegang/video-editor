@@ -160,7 +160,11 @@ fn frame_graph_applies_image_style_alpha_once_with_identity_geometry() -> Result
     )?;
     let group = find_group(&frame.items, style_id).context("Image Style group must exist")?;
     assert_eq!(group.kind, FrameGroupKind::ImageStyle);
-    assert_eq!(group.transform.opacity, 0.25);
+    assert_eq!(group.transform.opacity, 1.0);
+    assert!(
+        matches!(group.effects.as_slice(), [library::model::frame::effect::ImageEffect::LayerStyle(style)]
+        if style.style == library::model::frame::draw_type::DrawStyle::Opacity { opacity: 0.25 })
+    );
     assert_eq!(group.transform.position.x, 0.0);
     assert_eq!(group.transform.position.y, 0.0);
     assert_eq!(group.transform.scale.x, 1.0);

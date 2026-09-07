@@ -32,6 +32,19 @@ pub(crate) struct PropertyValueEditorSpec<'a> {
     pub palette: &'a ProjectPalette,
 }
 
+/// Attach actions to a property value without sharing the popup identity used
+/// by controls such as [`egui::ComboBox`]. Both Inspector Reset and Node
+/// published-interface actions use this owner.
+pub(crate) fn property_value_context_menu(response: &Response, add_contents: impl FnOnce(&mut Ui)) {
+    let _ = egui::Popup::context_menu(response)
+        .id(property_value_context_menu_id(response))
+        .show(add_contents);
+}
+
+fn property_value_context_menu_id(response: &Response) -> Id {
+    response.id.with("property_value_context_menu")
+}
+
 #[derive(Clone)]
 struct LegacyColorDraft {
     source: Color,
@@ -494,6 +507,101 @@ fn capture_qa_rect(id: &str, local: egui::Rect, global: egui::Rect) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn primary_pointer(position: egui::Pos2, pressed: bool) -> egui::Event {
+        egui::Event::PointerButton {
+            pos: position,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        }
+    }
+
+    fn render_dropdown_with_context_menu(
+        context: &egui::Context,
+        events: Vec<egui::Event>,
+        frame: usize,
+        value: &mut PropertyValue,
+    ) -> Response {
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(500.0, 300.0));
+        let palette = ProjectPalette::default();
+        let definition = PropertyDefinition::new(
+            "shape",
+            PropertyUiType::Dropdown {
+                options: vec!["Point".to_string(), "Box".to_string()],
+            },
+            "Shape",
+            PropertyValue::String("Point".to_string()),
+        );
+        let mut response = None;
+        drop(context.run(
+            egui::RawInput {
+                screen_rect: Some(screen),
+                time: Some(frame as f64 / 60.0),
+                events,
+                ..Default::default()
+            },
+            |context| {
+                egui::CentralPanel::default().show(context, |ui| {
+                    let edit = property_value_editor(
+                        ui,
+                        egui::Id::new("shape"),
+                        "inspector.test.shape",
+                        value,
+                        PropertyValueEditorSpec {
+                            definition: Some(&definition),
+                            fallback_suffix: "",
+                            fallback_speed: 1.0,
+                            palette: &palette,
+                        },
+                    );
+                    property_value_context_menu(&edit.response, |ui| {
+                        ui.label("Reset to default");
+                    });
+                    response = Some(edit.response);
+                });
+            },
+        ));
+        response.expect("dropdown response")
+    }
+
+    #[test]
+    fn primary_dropdown_popup_is_independent_from_property_context_menu() {
+        let context = egui::Context::default();
+        let mut value = PropertyValue::String("Point".to_string());
+        let response = render_dropdown_with_context_menu(&context, Vec::new(), 0, &mut value);
+        let position = response.rect.center();
+        assert_ne!(
+            response.id.with("popup"),
+            property_value_context_menu_id(&response)
+        );
+
+        render_dropdown_with_context_menu(
+            &context,
+            vec![
+                egui::Event::PointerMoved(position),
+                primary_pointer(position, true),
+            ],
+            1,
+            &mut value,
+        );
+        let response = render_dropdown_with_context_menu(
+            &context,
+            vec![primary_pointer(position, false)],
+            2,
+            &mut value,
+        );
+        assert!(
+            egui::Popup::is_id_open(&context, response.id.with("popup")),
+            "primary-clicking the value must leave its dropdown open"
+        );
+
+        let response = render_dropdown_with_context_menu(&context, Vec::new(), 3, &mut value);
+        assert!(
+            egui::Popup::is_id_open(&context, response.id.with("popup")),
+            "the context-menu owner must not close the dropdown on the next frame"
+        );
+    }
 
     #[test]
     fn vector_editor_keeps_components_in_one_shared_control() {

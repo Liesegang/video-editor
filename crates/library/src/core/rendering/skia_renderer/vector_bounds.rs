@@ -4,14 +4,14 @@ use skia_safe::Rect;
 
 use crate::core::ensemble::types::DecoratorConfig;
 use crate::error::LibraryError;
-use crate::model::frame::appearance::{AppearanceOutsets, appearance_outsets, path_effect_outset};
+use crate::model::frame::appearance::{
+    AppearanceOutsets, SOURCE_RASTER_OUTSET, appearance_outsets, path_effect_outset,
+};
 use crate::model::frame::draw_type::PathEffect;
 use crate::model::frame::entity::StyleConfig;
 use crate::model::frame::runtime_shape::{
     RuntimeBounds, measure_path_decorator_bounds, measure_text_decorator_bounds,
 };
-
-const ANTIALIAS_OUTSET: f32 = 1.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct VectorLayerBounds {
@@ -38,7 +38,7 @@ impl VectorLayerBounds {
         };
         // Stroke follows element transforms; antialiasing support is reserved
         // after their union so a strongly scaled-down glyph cannot be clipped.
-        let content = expand(runtime_rect(content), ANTIALIAS_OUTSET);
+        let content = expand(runtime_rect(content), SOURCE_RASTER_OUTSET);
         Ok(Self {
             geometry: runtime_rect(geometry),
             content,
@@ -70,7 +70,7 @@ impl VectorLayerBounds {
     ) -> Self {
         let content = expand(
             geometry,
-            geometry_effect_outset + outsets.body + ANTIALIAS_OUTSET,
+            geometry_effect_outset + outsets.body + SOURCE_RASTER_OUTSET,
         );
         Self {
             geometry,
@@ -89,7 +89,7 @@ impl VectorLayerBounds {
 
     fn with_decorators(mut self, decorators: Option<RuntimeBounds>) -> Self {
         if let Some(decorators) = decorators {
-            let decorators = expand(runtime_rect(decorators), ANTIALIAS_OUTSET);
+            let decorators = expand(runtime_rect(decorators), SOURCE_RASTER_OUTSET);
             self.visual = union_rect(self.visual, decorators);
         }
         self

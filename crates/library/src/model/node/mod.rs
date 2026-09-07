@@ -13,6 +13,12 @@ use serde::{Deserialize, Serialize};
 use std::sync::LazyLock;
 use uuid::Uuid;
 
+/// Persisted presentation width reserved for Nodes with inline Property rows.
+/// Generated layouts use this same hint instead of guessing rendered widths.
+pub const PROPERTY_NODE_UI_WIDTH: f32 = 600.0;
+/// Horizontal separation between persisted Node presentation rectangles.
+pub const NODE_LAYOUT_COLUMN_GAP: f32 = 120.0;
+
 use crate::model::authoring::ModuleOutputId;
 
 mod catalog;
@@ -26,13 +32,12 @@ mod path;
 mod sound_analysis;
 mod transition;
 pub(crate) use catalog::{
-    APPEARANCE_STACK_CATALOG_ID, CONDITION_INPUT_PORT, ConditionalNodeRole,
-    ELLIPSE_SHAPE_CATALOG_ID, NUMERIC_LENGTH_CATALOG_ID, NUMERIC_LENGTH_INPUT_PORT,
-    PARTICLE_SPRITE_RENDERER_CATALOG_ID, PARTICLE_SYSTEM_PORT, POINT_ATTRIBUTE_OUTPUT_PORT,
-    POINT_ATTRIBUTE_VALUE_PORT, POINT_OFFSET_INPUT_PORT, POINT_POSITION_INPUT_PORT,
-    POINT_SCALE_INPUT_PORT, POINT_SELECTION_INPUT_PORT, POINT_SIZE_PORT, POINT_SOURCE_PORT,
-    ParticleNodeRole, PointNodeRole, RECTANGLE_SHAPE_CATALOG_ID, SELECT_FALSE_INPUT_PORT,
-    SELECT_TRUE_INPUT_PORT,
+    CONDITION_INPUT_PORT, ConditionalNodeRole, ELLIPSE_SHAPE_CATALOG_ID, NUMERIC_LENGTH_CATALOG_ID,
+    NUMERIC_LENGTH_INPUT_PORT, PARTICLE_SPRITE_RENDERER_CATALOG_ID, PARTICLE_SYSTEM_PORT,
+    POINT_ATTRIBUTE_OUTPUT_PORT, POINT_ATTRIBUTE_VALUE_PORT, POINT_OFFSET_INPUT_PORT,
+    POINT_POSITION_INPUT_PORT, POINT_SCALE_INPUT_PORT, POINT_SELECTION_INPUT_PORT, POINT_SIZE_PORT,
+    POINT_SOURCE_PORT, ParticleNodeRole, PointNodeRole, RECTANGLE_SHAPE_CATALOG_ID,
+    SELECT_FALSE_INPUT_PORT, SELECT_TRUE_INPUT_PORT,
 };
 pub use catalog::{
     NativeNodeCatalogDescriptor, NativeNodeFactory, NativeNodeRuntimeStatus, native_node_catalog,

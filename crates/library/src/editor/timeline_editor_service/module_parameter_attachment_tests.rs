@@ -158,8 +158,14 @@ fn blur_sigma(items: &[FrameItem]) -> Option<f64> {
         FrameItem::Group(group) => group
             .effects
             .iter()
-            .find(|effect| effect.effect_type == "blur")
-            .and_then(|effect| effect.properties.get("sigma_x"))
+            .find_map(|effect| match effect {
+                crate::model::frame::effect::ImageEffect::Plugin {
+                    effect_type,
+                    properties,
+                } if effect_type == "blur" => properties.get("sigma_x"),
+                crate::model::frame::effect::ImageEffect::Plugin { .. }
+                | crate::model::frame::effect::ImageEffect::LayerStyle(_) => None,
+            })
             .and_then(|value| value.get_as::<f64>())
             .or_else(|| blur_sigma(&group.items)),
         FrameItem::Object(_) | FrameItem::Transition(_) => None,

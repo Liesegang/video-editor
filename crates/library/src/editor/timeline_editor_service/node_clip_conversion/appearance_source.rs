@@ -1,4 +1,4 @@
-//! Conversion of an authored Appearance stack into a bounded style branch.
+//! Conversion of an authored Appearance stack into its canonical Image graph.
 
 use super::*;
 
@@ -17,9 +17,9 @@ impl GraphBuilder<'_> {
             ));
         }
 
-        let style_column = self.next_column;
-        let mut outputs = Vec::with_capacity(operations.len());
-        for (index, authored) in operations.iter().enumerate() {
+        let first_column = self.next_column;
+        let mut operation_ids = Vec::with_capacity(operations.len());
+        for authored in operations {
             let mut node = self
                 .plugins
                 .create_style_operation_node(&authored.operation.component_id)?;
@@ -35,15 +35,15 @@ impl GraphBuilder<'_> {
                 || content.component_id != authored.operation.component_id
                 || content.operation != authored.operation.operation
                 || content.declared_ports != authored.declared_ports
-                || !appearance_direct_contract_is_compatible(&authored.declared_ports)
+                || crate::model::authoring::appearance_input_kind(&authored.declared_ports)
+                    .is_none()
             {
                 return Err(LibraryError::Validation(format!(
-                    "Appearance operation {} no longer matches its Style contract",
+                    "Appearance operation {} no longer matches its Image contract",
                     authored.id
                 )));
             }
             node.id = authored.id;
-            node.ui_position = [style_column, 40.0 + index as f32 * 190.0];
             if self
                 .definition
                 .graph
@@ -76,7 +76,7 @@ impl GraphBuilder<'_> {
                     .cloned()
                     .ok_or_else(|| {
                         LibraryError::Validation(format!(
-                            "Style {} has no default for Property '{}'",
+                            "Appearance {} has no default for Property '{}'",
                             authored.operation.component_id,
                             definition.name()
                         ))
@@ -89,54 +89,18 @@ impl GraphBuilder<'_> {
                 )?;
                 self.move_property_value(parameter_id, property)?;
             }
-            outputs.push(ModulePortAddress {
-                node_id: node.id,
-                port: STYLE_OUTPUT_PORT.to_string(),
-            });
+            operation_ids.push(node.id);
         }
-        self.next_column += 300.0;
 
-        let mut stack = Node::new_catalog_node(APPEARANCE_STACK_CATALOG_ID)
-            .map_err(LibraryError::Validation)?;
-        self.position_node(&mut stack);
-        let stack_id = stack.id;
-        if self
-            .definition
-            .graph
-            .nodes
-            .insert(stack_id, stack)
-            .is_some()
-        {
-            return Err(LibraryError::Validation(format!(
-                "Appearance Stack {stack_id} collides with an existing Node"
-            )));
-        }
-        self.definition.graph.connections.push(ModuleConnection {
-            id: ModuleConnectionId::new(),
-            from: shape_source,
-            to: ModulePortAddress {
-                node_id: stack_id,
-                port: SHAPE_INPUT_PORT.to_string(),
-            },
-            order: 0,
-            blend_mode: BlendMode::Normal,
-        });
-        for (order, from) in outputs.into_iter().enumerate() {
-            self.definition.graph.connections.push(ModuleConnection {
-                id: ModuleConnectionId::new(),
-                from,
-                to: ModulePortAddress {
-                    node_id: stack_id,
-                    port: APPEARANCE_STYLES_PORT.to_string(),
-                },
-                order: order as i64,
-                blend_mode: BlendMode::Normal,
-            });
-        }
-        self.current = Some(ModulePortAddress {
-            node_id: stack_id,
-            port: IMAGE_OUTPUT_PORT.to_string(),
-        });
+        let (image, next_column) = super::super::appearance::node_clip::build_appearance_chain(
+            &mut self.definition,
+            &shape_source,
+            &operation_ids,
+            first_column,
+        )
+        .map_err(LibraryError::Validation)?;
+        self.next_column = next_column;
+        self.current = Some(image);
         Ok(())
     }
 }

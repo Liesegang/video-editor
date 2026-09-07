@@ -18,12 +18,6 @@ pub const MERGE_IMAGES_PORT: &str = "images";
 pub const MERGE_SOUNDS_PORT: &str = "sounds";
 pub const SHAPE_OUTPUT_PORT: &str = "shape";
 pub const SHAPE_INPUT_PORT: &str = "shape_in";
-/// Transient evaluated appearance value emitted by descriptor-backed Style
-/// operations. It is deliberately distinct from an Image: Appearance Stack
-/// combines ordered Style values with one Shape before the raster boundary.
-pub const STYLE_OUTPUT_PORT: &str = "style";
-/// Ordered Style values consumed by the native Appearance Stack operation.
-pub const APPEARANCE_STYLES_PORT: &str = "styles";
 /// Separately addressed geometry template used by two-Shape operations such
 /// as Backplate, distinct from their primary target Shape.
 pub const BACKGROUND_SHAPE_INPUT_PORT: &str = "background_shape";
@@ -160,9 +154,6 @@ pub enum PortDataType {
     /// Render-time vector/typographic value. This is distinct from canonical
     /// authored `Path` geometry.
     Shape,
-    /// Render-time appearance configuration. Style is not a raster Image and
-    /// can only be consumed by an explicit appearance-composition operation.
-    Style,
     Audio,
     /// Transient frequency-domain Sound value. Spectrum payloads are never
     /// persisted in Project; only this typed connection contract is authored.

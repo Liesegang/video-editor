@@ -1,6 +1,7 @@
 use crate::error::LibraryError;
 use crate::model::frame::Image;
 use crate::model::frame::color::Color;
+use crate::model::frame::image_bounds::FrameImageBounds;
 
 use crate::model::BlendMode;
 use crate::model::frame::draw_type::PathEffect;
@@ -52,6 +53,18 @@ impl Affine2D {
             translate_y: y,
             ..Self::IDENTITY
         }
+    }
+
+    /// A one-to-one pixel copy may move its raster origin without resampling.
+    pub fn is_pixel_aligned_translation(self) -> bool {
+        self.scale_x == 1.0
+            && self.scale_y == 1.0
+            && self.skew_x == 0.0
+            && self.skew_y == 0.0
+            && self.translate_x.is_finite()
+            && self.translate_y.is_finite()
+            && self.translate_x.fract() == 0.0
+            && self.translate_y.fract() == 0.0
     }
 
     /// Compose mappings so `child` is applied first and `self` second.
@@ -161,6 +174,18 @@ pub enum RenderOutput {
 /// serialized or exposed as a user-editable resource.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct RetainedRenderLayer(pub(crate) u64);
+
+/// Physical bounds and scale for one typed Image -> Image style evaluation.
+///
+/// The frame evaluator owns logical image bounds. The render service maps
+/// them into the isolated, padded layer before crossing this backend boundary,
+/// so every renderer uses the same ink-relative Gradient coordinates and
+/// decoration support.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ImageStyleContext {
+    pub render_scale: f64,
+    pub bounds: FrameImageBounds,
+}
 
 /// Verified authoring-to-working contract installed for one Project frame.
 ///
@@ -412,6 +437,35 @@ pub trait Renderer {
         self.draw_layer_affine_with_blend(&layer, transform, opacity, blend_mode)
     }
 
+    /// Apply one typed Image -> Image layer style to an already isolated
+    /// upstream image. Backends must preserve the active render color domain.
+    fn apply_image_style(
+        &mut self,
+        _layer: &RenderOutput,
+        _style: &StyleConfig,
+        _context: ImageStyleContext,
+    ) -> Result<RenderOutput, LibraryError> {
+        Err(LibraryError::Render(
+            "renderer does not implement typed Image layer styles".to_string(),
+        ))
+    }
+
+    /// Finish the current isolated group, apply one style, and composite it.
+    /// GPU backends override this boundary to retain the group's native
+    /// surface rather than reading it back between two adjacent graph Nodes.
+    fn end_group_with_image_style_and_draw(
+        &mut self,
+        style: &StyleConfig,
+        context: ImageStyleContext,
+        transform: &Affine2D,
+        opacity: f64,
+        blend_mode: BlendMode,
+    ) -> Result<(), LibraryError> {
+        let layer = self.end_group()?;
+        let styled = self.apply_image_style(&layer, style, context)?;
+        self.draw_layer_affine_with_blend(&styled, transform, opacity, blend_mode)
+    }
+
     fn rasterize_text_layer(
         &mut self,
         request: TextRasterRequest<'_>,
@@ -535,6 +589,15 @@ pub trait Renderer {
 mod tests {
     use super::Affine2D;
     use crate::model::frame::transform::{Position, Scale, Transform};
+
+    #[test]
+    fn integer_origin_changes_do_not_require_image_resampling() {
+        assert!(Affine2D::IDENTITY.is_pixel_aligned_translation());
+        assert!(Affine2D::translate(-32.0, 17.0).is_pixel_aligned_translation());
+        assert!(!Affine2D::translate(0.5, 0.0).is_pixel_aligned_translation());
+        assert!(!Affine2D::scale(2.0, 1.0).is_pixel_aligned_translation());
+        assert!(!Affine2D::translate(f64::INFINITY, 0.0).is_pixel_aligned_translation());
+    }
 
     #[test]
     fn affine_transform_maps_anchor_to_position_with_rotation_and_anisotropic_scale() {

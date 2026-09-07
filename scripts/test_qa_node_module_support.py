@@ -70,6 +70,20 @@ class NodeRouteTests(unittest.TestCase):
         )
         return result
 
+    def test_node_layout_reports_overlap_and_canvas_clipping(self):
+        canvas = {"min_x": 0.0, "min_y": 0.0, "max_x": 200.0, "max_y": 100.0}
+        rects = {
+            "left": {"min_x": 10.0, "min_y": 10.0, "max_x": 90.0, "max_y": 60.0},
+            "overlap": {"min_x": 80.0, "min_y": 20.0, "max_x": 150.0, "max_y": 70.0},
+            "clipped": {"min_x": 160.0, "min_y": 40.0, "max_x": 210.0, "max_y": 90.0},
+        }
+        violations = support._node_editor_layout_violations(canvas, rects)
+        self.assertEqual(violations["clipped"], ["clipped"])
+        self.assertEqual(
+            [(entry["left"], entry["right"]) for entry in violations["overlaps"]],
+            [("left", "overlap")],
+        )
+
     def test_connection_matches_ports_not_only_node_pair(self):
         expected = route("field", "attribute", "factor")
         connections = [
@@ -96,6 +110,70 @@ class NodeRouteTests(unittest.TestCase):
             [
                 mock.call("node_editor.connection:removed", button="secondary"),
                 mock.call("node_editor.wire_menu.disconnect"),
+            ],
+        )
+
+    def test_publish_input_waits_for_one_exact_parameter_transaction(self):
+        existing = {
+            "id": "plane-radius",
+            "name": "Radius",
+            "default_value": 0.0,
+            "target": {"node_id": "plane", "port": "radius"},
+        }
+        published = {
+            "id": "sphere-radius",
+            "name": "Radius",
+            "default_value": 80.0,
+            "target": {"node_id": "sphere", "port": "radius"},
+        }
+        definition = {"interface": {"parameters": [existing]}}
+        before = {"history": {"revision": 4}}
+        after = {
+            "history": {"revision": 5},
+            "project": {
+                "module_definitions": {
+                    "definition": {"interface": {"parameters": [existing, published]}}
+                }
+            },
+        }
+        client = mock.Mock()
+        client.state.side_effect = [before, after]
+        client.wait_component_settled.return_value = (
+            {},
+            {
+                "enabled": True,
+                "metadata": {
+                    "action": "publish_parameter",
+                    "node_id": "sphere",
+                    "port": "radius",
+                    "label": "Radius",
+                },
+            },
+        )
+        client.wait_until.side_effect = lambda _description, predicate: predicate()
+        with mock.patch.object(
+            support, "active_definition", return_value=("definition", definition)
+        ):
+            state, parameter = support.publish_node_input_parameter(
+                client,
+                "node_clip",
+                "sphere",
+                "radius",
+                "node_editor.property.node:sphere:radius",
+                "Radius",
+                80.0,
+            )
+        self.assertIs(state, after)
+        self.assertIs(parameter, published)
+        self.assertEqual(
+            client.click_component.call_args_list,
+            [
+                mock.call(
+                    "node_editor.property.node:sphere:radius", button="secondary"
+                ),
+                mock.call(
+                    "node_editor.interface_action.node:sphere.input:radius:publish_parameter"
+                ),
             ],
         )
 

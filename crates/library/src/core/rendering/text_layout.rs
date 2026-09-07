@@ -8,12 +8,17 @@ use unicode_segmentation::UnicodeSegmentation;
 use crate::model::frame::entity::StyleConfig;
 use crate::model::frame::runtime_shape::{
     RuntimeBounds, RuntimeLine, RuntimeTextElement, RuntimeTextShape,
+    evaluate_text_element_transforms, text_element_center, transform_bounds,
+};
+use crate::{
+    core::ensemble::types::{EnsembleData, TransformData},
+    error::LibraryError,
 };
 
 mod shaped_runs;
 mod spacing;
 
-pub(crate) use shaped_runs::ShapedTextLayout;
+pub(crate) use shaped_runs::{ShapedGlyphGeometry, ShapedTextLayout};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TextLayoutMetrics {
@@ -90,6 +95,50 @@ pub(crate) fn layout_runtime_text_shape(
     size: f32,
 ) -> RuntimeTextShape {
     ShapedTextLayout::new(text, primary_font_name, size).metadata
+}
+
+/// Exact transformed glyph-ink bounds from the same shaped runs used by Text
+/// painting. No antialias or Style outset is included.
+pub(crate) fn measure_text_geometry_bounds(
+    text: &str,
+    primary_font_name: &str,
+    size: f32,
+    ensemble: Option<&EnsembleData>,
+    current_time: f32,
+) -> Result<Option<RuntimeBounds>, LibraryError> {
+    let layout = ShapedTextLayout::new(text, primary_font_name, size);
+    let transforms = match ensemble.filter(|ensemble| ensemble.enabled) {
+        Some(ensemble) => {
+            evaluate_text_element_transforms(&layout.metadata, ensemble, current_time)?
+        }
+        None => vec![TransformData::identity(); layout.metadata.elements.len()],
+    };
+    let geometry = layout.glyph_geometry()?;
+    Ok(transformed_glyph_bounds(
+        &layout.metadata,
+        &transforms,
+        &geometry,
+        0.0,
+    ))
+}
+
+pub(crate) fn transformed_glyph_bounds(
+    text: &RuntimeTextShape,
+    transforms: &[TransformData],
+    geometry: &[ShapedGlyphGeometry],
+    outset: f32,
+) -> Option<RuntimeBounds> {
+    geometry
+        .iter()
+        .filter(|glyph| transforms[glyph.element].opacity > 0.0)
+        .map(|glyph| {
+            transform_bounds(
+                glyph.bounds.expand(outset),
+                text_element_center(&text.elements[glyph.element]),
+                &transforms[glyph.element],
+            )
+        })
+        .reduce(RuntimeBounds::union)
 }
 
 pub(super) fn runtime_text_shape_from_paragraph(

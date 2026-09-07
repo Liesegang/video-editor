@@ -1,6 +1,6 @@
 use library::model::project::{
     IMAGE_OUTPUT_PORT, PortDataType, PortDefinition, PortDirection, PortExposure, PortMultiplicity,
-    PortSide, SHAPE_INPUT_PORT, STYLE_OUTPUT_PORT, TIME_PORT,
+    PortSide, SHAPE_INPUT_PORT, TIME_PORT,
 };
 use library::model::property::{PropertyDefinition, PropertyUiType, PropertyValue};
 use library::plugin::{
@@ -28,6 +28,24 @@ fn descriptor_with_ports(
         )],
         ports,
     )
+}
+
+#[test]
+fn manually_created_operations_keep_their_compact_presentation_hint() {
+    let manager = PluginManager::default();
+    let fill = manager
+        .create_style_operation_node("fill")
+        .expect("ordinary manually placed Shape raster operation");
+    let style = manager
+        .create_style_operation_node("drop_shadow")
+        .expect("ordinary manually placed Image style");
+    for node in [fill, style] {
+        assert_eq!(
+            node.ui_size,
+            [240.0, 160.0],
+            "wide generated layouts must not resize ordinary user-placed Nodes"
+        );
+    }
 }
 
 #[test]
@@ -150,7 +168,93 @@ fn bundled_fill_descriptor_keeps_its_persisted_port_contract() {
             PortDefinition::input(&property_port_key("offset"), "Offset", PortDataType::Number,),
             PortDefinition::input(SHAPE_INPUT_PORT, "Shape", PortDataType::Shape),
             output(IMAGE_OUTPUT_PORT, "Image", PortDataType::Image),
-            output(STYLE_OUTPUT_PORT, "Style", PortDataType::Style),
         ]
     );
+}
+
+#[test]
+fn appearance_nodes_use_only_shape_to_image_or_image_to_image_contracts() {
+    use library::model::authoring::{AppearanceInputKind, appearance_input_kind};
+    use library::model::project::IMAGE_INPUT_PORT;
+
+    let manager = PluginManager::default();
+    for component in ["fill", "stroke"] {
+        let descriptor = manager
+            .operation_descriptor(STYLE_CATEGORY, component, STYLE_APPLY_OPERATION)
+            .unwrap();
+        assert_eq!(
+            appearance_input_kind(descriptor.declared_ports()),
+            Some(AppearanceInputKind::Shape)
+        );
+        assert_eq!(
+            descriptor
+                .declared_ports()
+                .iter()
+                .filter(|port| port.direction == PortDirection::Output)
+                .count(),
+            1
+        );
+        assert!(
+            !descriptor
+                .declared_ports()
+                .iter()
+                .any(|port| port.key == IMAGE_INPUT_PORT)
+        );
+    }
+    for component in [
+        "drop_shadow",
+        "outer_glow",
+        "inner_shadow",
+        "inner_glow",
+        "satin",
+        "bevel_emboss",
+        "color_overlay",
+        "gradient_overlay",
+        "pattern_overlay",
+    ] {
+        let node = manager.create_style_operation_node(component).unwrap();
+        let library::model::NodeContent::PluginOperation(operation) = node.content() else {
+            panic!("Style factory must create a typed operation");
+        };
+        assert_eq!(
+            appearance_input_kind(&operation.declared_ports),
+            Some(AppearanceInputKind::Image),
+            "{component}"
+        );
+        assert_eq!(
+            operation
+                .declared_ports
+                .iter()
+                .filter(|port| port.direction == PortDirection::Output)
+                .count(),
+            1
+        );
+        assert!(
+            !operation
+                .declared_ports
+                .iter()
+                .any(|port| port.key == SHAPE_INPUT_PORT),
+            "{component}"
+        );
+    }
+    assert!(library::model::native_node_descriptor("native.appearance-stack").is_none());
+}
+
+#[test]
+fn appearance_contract_rejects_aggregate_and_ambiguous_inputs() {
+    use library::model::authoring::appearance_input_kind;
+    use library::model::project::IMAGE_INPUT_PORT;
+    let image = output(IMAGE_OUTPUT_PORT, "Image", PortDataType::Image);
+    assert!(appearance_input_kind(std::slice::from_ref(&image)).is_none());
+    assert!(
+        appearance_input_kind(&[
+            image.clone(),
+            PortDefinition::input(SHAPE_INPUT_PORT, "Shape", PortDataType::Shape),
+            PortDefinition::input(IMAGE_INPUT_PORT, "Image", PortDataType::Image),
+        ])
+        .is_none()
+    );
+    let mut variadic = PortDefinition::input(IMAGE_INPUT_PORT, "Images", PortDataType::Image);
+    variadic.multiplicity = PortMultiplicity::Variadic;
+    assert!(appearance_input_kind(&[image, variadic]).is_none());
 }

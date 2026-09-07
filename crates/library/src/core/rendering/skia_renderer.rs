@@ -24,6 +24,7 @@ use skia_safe::{
 };
 
 mod context_lifecycle;
+mod image_styles;
 mod layer_styles;
 mod legacy_backplate;
 mod output_compositing;
@@ -346,7 +347,7 @@ impl SkiaRenderer {
     ) -> Result<(), LibraryError> {
         self.activate_graphics_context()?;
         let matrix = build_transform_matrix(transform);
-        let identity = *transform == Affine2D::IDENTITY;
+        let pixel_aligned = transform.is_pixel_aligned_translation();
         let blend_runtime = &mut self.blend_runtime;
         let canvas: &Canvas = if let Some(group) = self.group_surfaces.last_mut() {
             group.surface.canvas()
@@ -359,7 +360,7 @@ impl SkiaRenderer {
                 canvas,
                 image,
                 skia_safe::Point::new(0.0, 0.0),
-                identity,
+                pixel_aligned,
                 opacity.clamp(0.0, 1.0) as f32,
                 blend_mode,
             )
@@ -466,6 +467,26 @@ impl Renderer for SkiaRenderer {
         drop(image);
         drop(group);
         result
+    }
+
+    fn apply_image_style(
+        &mut self,
+        layer: &RenderOutput,
+        style: &crate::model::frame::entity::StyleConfig,
+        context: crate::rendering::renderer::ImageStyleContext,
+    ) -> Result<RenderOutput, LibraryError> {
+        self.apply_image_style_output(layer, style, context)
+    }
+
+    fn end_group_with_image_style_and_draw(
+        &mut self,
+        style: &crate::model::frame::entity::StyleConfig,
+        context: crate::rendering::renderer::ImageStyleContext,
+        transform: &Affine2D,
+        opacity: f64,
+        blend_mode: crate::model::BlendMode,
+    ) -> Result<(), LibraryError> {
+        self.finish_group_with_image_style(style, context, transform, opacity, blend_mode)
     }
 
     fn end_group_retained(&mut self) -> Result<RetainedRenderLayer, LibraryError> {

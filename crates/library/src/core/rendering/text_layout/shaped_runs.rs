@@ -1,6 +1,7 @@
 use skia_safe::textlayout::Paragraph;
 use skia_safe::{Font, GlyphId, Point, Rect};
 
+use crate::error::LibraryError;
 use crate::model::frame::runtime_shape::RuntimeTextShape;
 
 use super::{build_text_paragraph, runtime_text_shape_from_paragraph};
@@ -29,6 +30,11 @@ pub(crate) struct ShapedGlyphRun {
     pub(crate) source_starts: Vec<u32>,
 }
 
+pub(crate) struct ShapedGlyphGeometry {
+    pub(crate) bounds: crate::model::frame::runtime_shape::RuntimeBounds,
+    pub(crate) element: usize,
+}
+
 impl ShapedTextLayout {
     pub(crate) fn new(text: &str, primary_font_name: &str, size: f32) -> Self {
         let mut paragraph = build_text_paragraph(text, primary_font_name, size, None);
@@ -43,6 +49,49 @@ impl ShapedTextLayout {
         );
         super::spacing::assign_spacing_sequences(&mut metadata, &runs);
         Self { metadata, runs }
+    }
+
+    pub(crate) fn run_element_indices(
+        &self,
+        run: &ShapedGlyphRun,
+    ) -> Result<Vec<usize>, LibraryError> {
+        run.source_starts
+            .iter()
+            .take(run.glyphs.len())
+            .map(|start| {
+                let start = *start as usize;
+                self.metadata.element_index_at_utf8(start).ok_or_else(|| {
+                    LibraryError::Render(format!(
+                        "Shaped glyph at UTF-8 byte {start} has no Text element"
+                    ))
+                })
+            })
+            .collect()
+    }
+
+    pub(crate) fn glyph_geometry(&self) -> Result<Vec<ShapedGlyphGeometry>, LibraryError> {
+        let mut geometry = Vec::new();
+        for run in &self.runs {
+            let elements = self.run_element_indices(run)?;
+            for ((bounds, position), element) in run.bounds.iter().zip(&run.positions).zip(elements)
+            {
+                if bounds.is_empty() {
+                    continue;
+                }
+                let x = run.origin.x + position.x;
+                let y = run.origin.y + position.y;
+                geometry.push(ShapedGlyphGeometry {
+                    bounds: crate::model::frame::runtime_shape::RuntimeBounds::new(
+                        bounds.left + x,
+                        bounds.top + y,
+                        bounds.right + x,
+                        bounds.bottom + y,
+                    ),
+                    element,
+                });
+            }
+        }
+        Ok(geometry)
     }
 }
 

@@ -35,15 +35,15 @@ fn node_clip_graph_backplate_consumes_its_background_shape_input() {
         })
         .unwrap()
         .id;
-    let appearance_stack_id = definition
+    let fill_id = definition
         .graph
         .nodes
         .values()
         .find(|node| {
             matches!(
                 node.content(),
-                NodeContent::NativeOperation(operation)
-                    if operation.catalog_id == crate::model::node::APPEARANCE_STACK_CATALOG_ID
+                NodeContent::PluginOperation(operation)
+                    if operation.component_id == "fill"
             )
         })
         .unwrap()
@@ -54,7 +54,7 @@ fn node_clip_graph_backplate_consumes_its_background_shape_input() {
         .iter()
         .find(|connection| {
             connection.from.node_id == text_id
-                && connection.to.node_id == appearance_stack_id
+                && connection.to.node_id == fill_id
                 && connection.to.port == SHAPE_INPUT_PORT
         })
         .unwrap()
@@ -113,7 +113,7 @@ fn node_clip_graph_backplate_consumes_its_background_shape_input() {
                 port: SHAPE_OUTPUT_PORT.to_string(),
             },
             ModulePortAddress {
-                node_id: appearance_stack_id,
+                node_id: fill_id,
                 port: SHAPE_INPUT_PORT.to_string(),
             },
         ),

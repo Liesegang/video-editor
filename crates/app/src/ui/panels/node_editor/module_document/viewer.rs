@@ -553,15 +553,22 @@ impl SnarlViewer<Uuid> for ModuleNodeViewer<'_, '_> {
                 );
             }
         }
+        let screen_rect = *self.to_global * rect;
         crate::qa::register_component_with_metadata(
             format!("node_editor.node:{node_id}"),
             "node_editor_node",
-            (*self.to_global * rect).intersect(*self.canvas_clip),
+            screen_rect.intersect(*self.canvas_clip),
             true,
             Some(serde_json::json!({
                 "document_kind": "module_definition",
                 "node_id": node_id,
                 "production_surface": "egui_snarl",
+                "screen_bounds": {
+                    "x": screen_rect.min.x,
+                    "y": screen_rect.min.y,
+                    "width": screen_rect.width(),
+                    "height": screen_rect.height(),
+                },
             })),
         );
     }

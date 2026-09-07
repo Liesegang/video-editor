@@ -107,7 +107,8 @@ pub(super) fn compile_particle_source(
             | ParticleNodeRole::Turbulence
             | ParticleNodeRole::Vortex
             | ParticleNodeRole::Point
-            | ParticleNodeRole::CollisionPlane => return Ok(None),
+            | ParticleNodeRole::CollisionPlane
+            | ParticleNodeRole::CollisionSphere => return Ok(None),
             ParticleNodeRole::SpriteRenderer => return Ok(None),
         };
         if slot.is_some() {

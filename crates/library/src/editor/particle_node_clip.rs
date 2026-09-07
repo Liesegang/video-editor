@@ -118,8 +118,6 @@ impl ParticleNodeClipFactory {
         // Vec3 rows exceed the generic 240px header minimum. Author both the
         // presentation size and placement so Fit and Clean Layout share the
         // same usable bounds instead of reintroducing overlapping controls.
-        const STAGE_WIDTH: f32 = 600.0;
-        const STAGE_GAP: f32 = 120.0;
         for (index, node) in [
             &mut emitter,
             &mut shape_location,
@@ -134,8 +132,13 @@ impl ParticleNodeClipFactory {
         .chain(definition.graph.nodes.get_mut(&output_node_id))
         .enumerate()
         {
-            node.ui_size[0] = STAGE_WIDTH;
-            node.ui_position = [index as f32 * (STAGE_WIDTH + STAGE_GAP), 140.0];
+            node.ui_size[0] = crate::model::node::PROPERTY_NODE_UI_WIDTH;
+            node.ui_position = [
+                index as f32
+                    * (crate::model::node::PROPERTY_NODE_UI_WIDTH
+                        + crate::model::node::NODE_LAYOUT_COLUMN_GAP),
+                140.0,
+            ];
         }
 
         let emitter_id = emitter.id;

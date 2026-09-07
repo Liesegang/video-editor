@@ -4,11 +4,11 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use library::editor::ModuleNodePresentationUpdate;
 use library::model::authoring::ModuleDefinition;
+use library::model::node::NODE_LAYOUT_COLUMN_GAP;
 use uuid::Uuid;
 
 use crate::command::CommandId;
 
-const COLUMN_GAP: f32 = 120.0;
 const ROW_GAP: f32 = 72.0;
 
 pub(super) fn module_layout_updates(
@@ -53,7 +53,7 @@ pub(super) fn module_layout_updates(
             }
             y += size[1] + ROW_GAP;
         }
-        x += column_width + COLUMN_GAP;
+        x += column_width + NODE_LAYOUT_COLUMN_GAP;
     }
     updates
 }

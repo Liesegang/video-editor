@@ -8,6 +8,7 @@ use super::vector_bounds::VectorLayerBounds;
 use super::vector_path_body::PathBody;
 use super::vector_surface::{NativeLayer, VectorSurfaceMode};
 use super::*;
+use skia_safe::{Picture, PictureRecorder};
 
 impl SkiaRenderer {
     pub(super) fn create_sksl_layer_surface(
@@ -100,19 +101,15 @@ impl SkiaRenderer {
             .ensemble
             .filter(|ensemble| ensemble.enabled)
             .map_or(&[][..], |ensemble| ensemble.decorator_configs.as_slice());
-        let has_content = has_content_styles(request.styles);
         let bounds = VectorLayerBounds::text_body(&body, request.styles, decorators)?;
-        let mask = if layer_styles::has_mask_styles(request.styles) {
-            Some(layer_styles::LayerMask::record(bounds, |canvas| {
-                if has_content {
-                    body.draw_body(&self.surface_contract, canvas, request.styles)
-                } else {
-                    body.draw_silhouette(&self.surface_contract, canvas)
-                }
-            })?)
-        } else {
-            None
-        };
+        let surface_contract = &self.surface_contract;
+        let picture = ordered_appearance_picture(
+            surface_contract,
+            &mut self.blend_runtime,
+            bounds,
+            request.styles,
+            |canvas, style| body.draw_style(surface_contract, canvas, style),
+        )?;
         let mut layer = self.create_vector_surface(mode, bounds.visual, request.transform)?;
         let canvas: &Canvas = layer.surface.canvas();
         with_restored_canvas(canvas, |canvas| -> Result<(), LibraryError> {
@@ -124,24 +121,8 @@ impl SkiaRenderer {
                 decorators,
                 &self.surface_contract,
             )?;
-            if let Some(mask) = &mask {
-                self.draw_mask_style_phase(
-                    canvas,
-                    request.styles,
-                    layer_styles::CompositePhase::Underlay,
-                    mask,
-                )?;
-                if has_content {
-                    mask.draw_content(canvas);
-                }
-                self.draw_mask_style_phase(
-                    canvas,
-                    request.styles,
-                    layer_styles::CompositePhase::Overlay,
-                    mask,
-                )?;
-            } else {
-                body.draw_body(&self.surface_contract, canvas, request.styles)?;
+            if let Some(picture) = &picture {
+                canvas.draw_picture(picture, None, None);
             }
             Ok(())
         })?;
@@ -165,22 +146,18 @@ impl SkiaRenderer {
         } = request;
         let body = PathBody::resolve(canonical_path, path_data, parts)?;
         let body_bounds = body.bounds();
-        let has_content = has_content_styles(styles);
         let decorators = ensemble
             .filter(|ensemble| ensemble.enabled)
             .map_or(&[][..], |ensemble| ensemble.decorator_configs.as_slice());
         let bounds = VectorLayerBounds::path(body_bounds, styles, path_effects, decorators)?;
-        let mask = if layer_styles::has_mask_styles(styles) {
-            Some(layer_styles::LayerMask::record(bounds, |canvas| {
-                if has_content {
-                    body.draw_body(&self.surface_contract, canvas, path_effects, styles)
-                } else {
-                    body.draw_silhouette(&self.surface_contract, canvas, path_effects)
-                }
-            })?)
-        } else {
-            None
-        };
+        let surface_contract = &self.surface_contract;
+        let picture = ordered_appearance_picture(
+            surface_contract,
+            &mut self.blend_runtime,
+            bounds,
+            styles,
+            |canvas, style| body.draw_style(surface_contract, canvas, path_effects, style),
+        )?;
         let mut layer = self.create_vector_surface(mode, bounds.visual, transform)?;
         {
             let canvas: &Canvas = layer.surface.canvas();
@@ -196,41 +173,12 @@ impl SkiaRenderer {
                     &self.surface_contract,
                 )?;
             }
-            if let Some(mask) = &mask {
-                self.draw_mask_style_phase(
-                    canvas,
-                    styles,
-                    layer_styles::CompositePhase::Underlay,
-                    mask,
-                )?;
-                if has_content {
-                    mask.draw_content(canvas);
-                }
-                self.draw_mask_style_phase(
-                    canvas,
-                    styles,
-                    layer_styles::CompositePhase::Overlay,
-                    mask,
-                )?;
-            } else {
-                body.draw_body(&self.surface_contract, canvas, path_effects, styles)?;
+            if let Some(picture) = &picture {
+                canvas.draw_picture(picture, None, None);
             }
             canvas.restore();
         }
         Ok(layer)
-    }
-
-    fn draw_mask_style_phase(
-        &mut self,
-        canvas: &Canvas,
-        styles: &[crate::model::frame::entity::StyleConfig],
-        phase: layer_styles::CompositePhase,
-        mask: &layer_styles::LayerMask,
-    ) -> Result<(), LibraryError> {
-        layer_styles::visit_phase(styles, phase, |config| {
-            layer_styles::LayerStyleRenderer::new(&self.surface_contract, &mut self.blend_runtime)
-                .draw(canvas, &config.style, mask)
-        })
     }
 
     pub(super) fn draw_native_layer_surface(
@@ -263,8 +211,56 @@ impl SkiaRenderer {
     }
 }
 
-fn has_content_styles(styles: &[crate::model::frame::entity::StyleConfig]) -> bool {
-    styles
-        .iter()
-        .any(|config| config.style.composite_phase() == layer_styles::CompositePhase::Body)
+fn ordered_appearance_picture(
+    surface_contract: &SkiaSurfaceContract,
+    blend_runtime: &mut BlendRuntime,
+    bounds: VectorLayerBounds,
+    styles: &[crate::model::frame::entity::StyleConfig],
+    mut draw_body: impl FnMut(
+        &Canvas,
+        &crate::model::frame::entity::StyleConfig,
+    ) -> Result<(), LibraryError>,
+) -> Result<Option<Picture>, LibraryError> {
+    let mut current = None;
+    for style in styles {
+        match style.style.composite_phase() {
+            layer_styles::CompositePhase::Body => {
+                let previous = current.take();
+                current = Some(record_picture(bounds.visual, |canvas| {
+                    if let Some(previous) = &previous {
+                        canvas.draw_picture(previous, None, None);
+                    }
+                    draw_body(canvas, style)
+                })?);
+            }
+            layer_styles::CompositePhase::Underlay | layer_styles::CompositePhase::Overlay => {
+                let Some(previous) = current.take() else {
+                    // Image -> Image effects applied before the first Shape ->
+                    // Image stage have a transparent input by definition.
+                    continue;
+                };
+                let mask = layer_styles::LayerMask::record(bounds, |canvas| {
+                    canvas.draw_picture(&previous, None, None);
+                    Ok(())
+                })?;
+                current = Some(record_picture(bounds.visual, |canvas| {
+                    layer_styles::LayerStyleRenderer::new(surface_contract, blend_runtime, 1.0)
+                        .compose(canvas, &style.style, &mask)
+                })?);
+            }
+        }
+    }
+    Ok(current)
+}
+
+fn record_picture(
+    bounds: skia_safe::Rect,
+    draw: impl FnOnce(&Canvas) -> Result<(), LibraryError>,
+) -> Result<Picture, LibraryError> {
+    let mut recorder = PictureRecorder::new();
+    let canvas = recorder.begin_recording(bounds, false);
+    draw(canvas)?;
+    recorder
+        .finish_recording_as_picture(Some(&bounds))
+        .ok_or_else(|| LibraryError::Render("Cannot record ordered Appearance stage".to_string()))
 }

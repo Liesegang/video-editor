@@ -1098,43 +1098,6 @@ Merge:
     - name: image
       type: Image
 
-Appearance Stack:
-  category: Compositing
-  catalog_status: native
-  catalog_id: native.appearance-stack
-  runtime_status: implemented
-  description: Rasterize one Shape once with an ordered stack of typed Style values
-  inputs:
-    - name: time
-      key: time
-      label: Time
-      type: Number
-      side: Left
-      exposure: Graph
-      multiplicity: Single
-    - name: shape
-      key: shape_in
-      label: Shape
-      type: Shape
-      side: Left
-      exposure: Graph
-      multiplicity: Single
-    - name: styles
-      key: styles
-      label: Styles
-      type: List<Style>
-      side: Left
-      exposure: Graph
-      multiplicity: Variadic
-  outputs:
-    - name: image
-      key: image
-      label: Image
-      type: Image
-      side: Right
-      exposure: Graph
-      multiplicity: Single
-
 # --- Audio ---
 Audio Mix:
   category: Audio
@@ -2792,6 +2755,32 @@ Collision Plane:
   outputs:
     - name: particles
       type: ParticleSystem
+Collision Sphere:
+  category: Particles
+  catalog_status: native
+  catalog_id: native.particle.collision-sphere
+  runtime_status: implemented
+  inputs:
+    - name: particles
+      type: ParticleSystem
+    - name: active
+      label: Collision Enabled
+      type: Boolean
+    - name: center
+      type: Vector3
+    - name: radius
+      type: Scalar
+    - name: particle_radius
+      type: Scalar
+    - name: mode
+      type: String
+    - name: bounce
+      type: Scalar
+    - name: friction
+      type: Scalar
+  outputs:
+    - name: particles
+      type: ParticleSystem
 Collision Depth:
   category: Particles
   catalog_status: native
@@ -3354,16 +3343,9 @@ Fill:
       side: Right
       exposure: Graph
       multiplicity: Single
-    - name: style
-      key: style
-      label: Style
-      type: Style
-      side: Right
-      exposure: Graph
-      multiplicity: Single
-+Drop Shadow Style:
+Drop Shadow Style:
   label: Drop Shadow
-  category: Shape Operations / Styles
+  category: Image Operations / Styles
   catalog_status: plugin-managed
   operation_category: style
   component_id: drop_shadow
@@ -3439,10 +3421,10 @@ Fill:
       multiplicity: Single
       property: size
       property_metadata: { ui_type: Float, default: 5.0, min: 0.0, max: 1000.0, step: 0.1, suffix: " px", min_hard_limit: true, max_hard_limit: true }
-    - name: shape
-      key: shape_in
-      label: Shape
-      type: Shape
+    - name: image
+      key: image_in
+      label: Image
+      type: Image
       side: Left
       exposure: Graph
       multiplicity: Single
@@ -3454,15 +3436,8 @@ Fill:
       side: Right
       exposure: Graph
       multiplicity: Single
-    - name: style
-      key: style
-      label: Style
-      type: Style
-      side: Right
-      exposure: Graph
-      multiplicity: Single
 Inner Shadow:
-  category: Shape Operations / Styles
+  category: Image Operations / Styles
   catalog_status: plugin-managed
   operation_category: style
   component_id: inner_shadow
@@ -3538,10 +3513,10 @@ Inner Shadow:
       multiplicity: Single
       property: size
       property_metadata: { ui_type: Float, default: 5.0, min: 0.0, max: 1000.0, step: 0.1, suffix: " px", min_hard_limit: true, max_hard_limit: true }
-    - name: shape
-      key: shape_in
-      label: Shape
-      type: Shape
+    - name: image
+      key: image_in
+      label: Image
+      type: Image
       side: Left
       exposure: Graph
       multiplicity: Single
@@ -3553,15 +3528,8 @@ Inner Shadow:
       side: Right
       exposure: Graph
       multiplicity: Single
-    - name: style
-      key: style
-      label: Style
-      type: Style
-      side: Right
-      exposure: Graph
-      multiplicity: Single
 Outer Glow:
-  category: Shape Operations / Styles
+  category: Image Operations / Styles
   catalog_status: plugin-managed
   operation_category: style
   component_id: outer_glow
@@ -3619,10 +3587,10 @@ Outer Glow:
       multiplicity: Single
       property: size
       property_metadata: { ui_type: Float, default: 5.0, min: 0.0, max: 1000.0, step: 0.1, suffix: " px", min_hard_limit: true, max_hard_limit: true }
-    - name: shape
-      key: shape_in
-      label: Shape
-      type: Shape
+    - name: image
+      key: image_in
+      label: Image
+      type: Image
       side: Left
       exposure: Graph
       multiplicity: Single
@@ -3634,15 +3602,8 @@ Outer Glow:
       side: Right
       exposure: Graph
       multiplicity: Single
-    - name: style
-      key: style
-      label: Style
-      type: Style
-      side: Right
-      exposure: Graph
-      multiplicity: Single
 Inner Glow:
-  category: Shape Operations / Styles
+  category: Image Operations / Styles
   catalog_status: plugin-managed
   operation_category: style
   component_id: inner_glow
@@ -3700,10 +3661,10 @@ Inner Glow:
       multiplicity: Single
       property: size
       property_metadata: { ui_type: Float, default: 5.0, min: 0.0, max: 1000.0, step: 0.1, suffix: " px", min_hard_limit: true, max_hard_limit: true }
-    - name: shape
-      key: shape_in
-      label: Shape
-      type: Shape
+    - name: image
+      key: image_in
+      label: Image
+      type: Image
       side: Left
       exposure: Graph
       multiplicity: Single
@@ -3715,15 +3676,8 @@ Inner Glow:
       side: Right
       exposure: Graph
       multiplicity: Single
-    - name: style
-      key: style
-      label: Style
-      type: Style
-      side: Right
-      exposure: Graph
-      multiplicity: Single
 Satin:
-  category: Shape Operations / Styles
+  category: Image Operations / Styles
   catalog_status: plugin-managed
   operation_category: style
   component_id: satin
@@ -3799,10 +3753,10 @@ Satin:
       multiplicity: Single
       property: invert
       property_metadata: { ui_type: Bool, default: true }
-    - name: shape
-      key: shape_in
-      label: Shape
-      type: Shape
+    - name: image
+      key: image_in
+      label: Image
+      type: Image
       side: Left
       exposure: Graph
       multiplicity: Single
@@ -3814,15 +3768,8 @@ Satin:
       side: Right
       exposure: Graph
       multiplicity: Single
-    - name: style
-      key: style
-      label: Style
-      type: Style
-      side: Right
-      exposure: Graph
-      multiplicity: Single
 Bevel & Emboss:
-  category: Shape Operations / Styles
+  category: Image Operations / Styles
   catalog_status: plugin-managed
   operation_category: style
   component_id: bevel_emboss
@@ -3961,10 +3908,10 @@ Bevel & Emboss:
       multiplicity: Single
       property: shadow_blend_mode
       property_metadata: { ui_type: Dropdown, default: Multiply, options: [Normal, Multiply] }
-    - name: shape
-      key: shape_in
-      label: Shape
-      type: Shape
+    - name: image
+      key: image_in
+      label: Image
+      type: Image
       side: Left
       exposure: Graph
       multiplicity: Single
@@ -3976,15 +3923,8 @@ Bevel & Emboss:
       side: Right
       exposure: Graph
       multiplicity: Single
-    - name: style
-      key: style
-      label: Style
-      type: Style
-      side: Right
-      exposure: Graph
-      multiplicity: Single
 Color Overlay:
-  category: Shape Operations / Styles
+  category: Image Operations / Styles
   catalog_status: plugin-managed
   operation_category: style
   component_id: color_overlay
@@ -4024,10 +3964,10 @@ Color Overlay:
       multiplicity: Single
       property: blend_mode
       property_metadata: { ui_type: Dropdown, default: Normal, options: [Normal, Multiply, Screen, Linear Dodge (Add)] }
-    - name: shape
-      key: shape_in
-      label: Shape
-      type: Shape
+    - name: image
+      key: image_in
+      label: Image
+      type: Image
       side: Left
       exposure: Graph
       multiplicity: Single
@@ -4039,15 +3979,8 @@ Color Overlay:
       side: Right
       exposure: Graph
       multiplicity: Single
-    - name: style
-      key: style
-      label: Style
-      type: Style
-      side: Right
-      exposure: Graph
-      multiplicity: Single
 Gradient Overlay:
-  category: Shape Operations / Styles
+  category: Image Operations / Styles
   catalog_status: plugin-managed
   operation_category: style
   component_id: gradient_overlay
@@ -4087,10 +4020,10 @@ Gradient Overlay:
       multiplicity: Single
       property: blend_mode
       property_metadata: { ui_type: Dropdown, default: Normal, options: [Normal, Multiply, Screen, Linear Dodge (Add)] }
-    - name: shape
-      key: shape_in
-      label: Shape
-      type: Shape
+    - name: image
+      key: image_in
+      label: Image
+      type: Image
       side: Left
       exposure: Graph
       multiplicity: Single
@@ -4102,15 +4035,8 @@ Gradient Overlay:
       side: Right
       exposure: Graph
       multiplicity: Single
-    - name: style
-      key: style
-      label: Style
-      type: Style
-      side: Right
-      exposure: Graph
-      multiplicity: Single
 Pattern Overlay:
-  category: Shape Operations / Styles
+  category: Image Operations / Styles
   catalog_status: plugin-managed
   operation_category: style
   component_id: pattern_overlay
@@ -4150,10 +4076,10 @@ Pattern Overlay:
       multiplicity: Single
       property: blend_mode
       property_metadata: { ui_type: Dropdown, default: Normal, options: [Normal, Multiply, Screen, Linear Dodge (Add)] }
-    - name: shape
-      key: shape_in
-      label: Shape
-      type: Shape
+    - name: image
+      key: image_in
+      label: Image
+      type: Image
       side: Left
       exposure: Graph
       multiplicity: Single
@@ -4162,13 +4088,6 @@ Pattern Overlay:
       key: image
       label: Image
       type: Image
-      side: Right
-      exposure: Graph
-      multiplicity: Single
-    - name: style
-      key: style
-      label: Style
-      type: Style
       side: Right
       exposure: Graph
       multiplicity: Single
@@ -4333,28 +4252,6 @@ Stroke:
       side: Right
       exposure: Graph
       multiplicity: Single
-    - name: style
-      key: style
-      label: Style
-      type: Style
-      side: Right
-      exposure: Graph
-      multiplicity: Single
-Shadow Style:
-  category: Style
-  catalog_status: design-needed
-  description: Drop Shadow Style
-  inputs:
-    - name: color
-      type: Color
-    - name: offset
-      type: Vector2
-    - name: blur
-      type: Scalar
-  outputs:
-    - name: style
-      type: Style
-
 # --- Ensemble ---
 Transform Modulation:
   category: Ensemble

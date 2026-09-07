@@ -308,6 +308,31 @@ def run_suite(client):
         timeout=30.0,
     )
 
+    # Return to the useful raster-first chain after exercising an earlier
+    # operation. The next pair proves that two Image operations are ordered,
+    # rather than merely collected as an unordered style list.
+    move_down_id = "inspector.appearance.move_down:" + shadow_id
+    _bring_into_inspector(client, move_down_id)
+    client.click_component(move_down_id)
+    shadow_after_fill = client.wait_until(
+        "Drop Shadow after Fill",
+        lambda: state
+        if (
+            (state := client.state())["history"]["revision"]
+            == restored["history"]["revision"] + 1
+            and [operation["id"] for operation in _appearance(state, item_id)]
+            == [original_operations[0]["id"], shadow_id]
+        )
+        else None,
+    )
+    shadow_after_fill_render = client.wait_until(
+        "Drop Shadow after Fill Preview",
+        lambda: settled_preview_state(
+            client, shadow_after_fill["history"]["revision"], frame
+        ),
+        timeout=30.0,
+    )
+
     gradient_choice, _ = _add_style(
         client, item_id, "gradient overlay", "gradient_overlay"
     )
@@ -320,7 +345,10 @@ def run_suite(client):
             (state, operation)
             if operation is not None
             and operation["operation"].get("component_id") == "gradient_overlay"
-            and state["history"]["revision"] == restored["history"]["revision"] + 1
+            and state["history"]["revision"]
+            == shadow_after_fill["history"]["revision"] + 1
+            and [candidate["id"] for candidate in operations]
+            == [original_operations[0]["id"], shadow_id, operation["id"]]
             else None
         )
 
@@ -342,7 +370,60 @@ def run_suite(client):
                 client, gradient_state["history"]["revision"], frame
             ))
             and state["editor"]["preview"].get("pixel_hash")
-            != reordered_render["editor"]["preview"].get("pixel_hash")
+            != shadow_after_fill_render["editor"]["preview"].get("pixel_hash")
+        )
+        else None,
+        timeout=30.0,
+    )
+
+    gradient_move_up = "inspector.appearance.move_up:" + gradient_id
+    _bring_into_inspector(client, gradient_move_up)
+    client.click_component(gradient_move_up)
+    overlay_then_shadow = client.wait_until(
+        "Gradient Overlay before Drop Shadow",
+        lambda: state
+        if (
+            (state := client.state())["history"]["revision"]
+            == gradient_state["history"]["revision"] + 1
+            and [operation["id"] for operation in _appearance(state, item_id)]
+            == [original_operations[0]["id"], gradient_id, shadow_id]
+        )
+        else None,
+    )
+    overlay_then_shadow_render = client.wait_until(
+        "Gradient Overlay before Drop Shadow Preview",
+        lambda: state
+        if (
+            (state := settled_preview_state(
+                client, overlay_then_shadow["history"]["revision"], frame
+            ))
+            and state["editor"]["preview"].get("pixel_hash")
+            != gradient_render["editor"]["preview"].get("pixel_hash")
+        )
+        else None,
+        timeout=30.0,
+    )
+    client.key("z", True, command=True)
+    client.key("z", False, command=True)
+    gradient_order_undo = client.wait_until(
+        "Appearance Image order Undo",
+        lambda: state
+        if (
+            (state := client.state())["history"]["revision"]
+            == overlay_then_shadow["history"]["revision"] + 1
+            and state["project"] == gradient_state["project"]
+        )
+        else None,
+    )
+    client.wait_until(
+        "Appearance Image order Undo Preview",
+        lambda: state
+        if (
+            (state := settled_preview_state(
+                client, gradient_order_undo["history"]["revision"], frame
+            ))
+            and state["editor"]["preview"].get("pixel_hash")
+            == gradient_render["editor"]["preview"].get("pixel_hash")
         )
         else None,
         timeout=30.0,
@@ -368,7 +449,7 @@ def run_suite(client):
             state
             if operation is not None
             and state["history"]["revision"]
-            == gradient_state["history"]["revision"] + 1
+            == gradient_order_undo["history"]["revision"] + 1
             and _constant(operation, "gradient") != before_gradient
             else None
         )
@@ -533,6 +614,12 @@ def run_suite(client):
             "pattern_choice": pattern_choice,
             "pattern_editor": pattern_metadata,
             "gradient_hash": gradient_render["editor"]["preview"]["pixel_hash"],
+            "shadow_then_overlay_hash": gradient_render["editor"]["preview"][
+                "pixel_hash"
+            ],
+            "overlay_then_shadow_hash": overlay_then_shadow_render["editor"][
+                "preview"
+            ]["pixel_hash"],
             "pattern_hash": pattern_render["editor"]["preview"]["pixel_hash"],
             "pattern_edited_hash": pattern_edited_render["editor"]["preview"][
                 "pixel_hash"

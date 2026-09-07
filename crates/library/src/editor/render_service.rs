@@ -8,8 +8,8 @@ use crate::core::rendering::media_color_ingress::{
     MediaAssetKind, require_unmanaged_abi_srgb, source_asset_from_assets,
 };
 use crate::core::rendering::renderer::{
-    Affine2D, PointRasterRequest, RenderOutput, Renderer, RetainedRenderLayer, ShapeRasterRequest,
-    SkSLRasterRequest, TextRasterRequest,
+    Affine2D, ImageStyleContext, PointRasterRequest, RenderOutput, Renderer, RetainedRenderLayer,
+    ShapeRasterRequest, SkSLRasterRequest, TextRasterRequest,
 };
 use crate::editor::project_model::ProjectModel;
 use crate::error::{LibraryError, TransitionSourceHandleError};
@@ -20,6 +20,9 @@ use crate::model::frame::entity::{
     FrameTransitionKind, FrameTransitionSource, ImageSurface,
 };
 use crate::model::frame::frame::FrameInfo;
+use crate::model::frame::image_bounds::{
+    FRAME_IMAGE_RASTER_GUARD, FrameImageBounds, FrameImageBoundsCache, image_style_bounds,
+};
 use crate::model::frame::transform::Transform;
 use crate::model::project::Project;
 use crate::plugin::{ExportFrame, LoadRequest, PluginManager};
@@ -27,6 +30,7 @@ use crate::util::timing::{ScopedTimer, measure_debug};
 use std::sync::Arc;
 
 mod color_pipeline_cache;
+mod image_groups;
 mod transition;
 use color_pipeline_cache::ProjectColorPipelineCache;
 
@@ -35,6 +39,7 @@ pub struct RenderService<T: Renderer> {
     cache_manager: SharedCacheManager,
     plugin_manager: Arc<PluginManager>,
     color_pipeline_cache: ProjectColorPipelineCache,
+    frame_image_bounds: FrameImageBoundsCache,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -125,6 +130,7 @@ impl<T: Renderer> RenderService<T> {
             plugin_manager,
             cache_manager,
             color_pipeline_cache: ProjectColorPipelineCache::new(),
+            frame_image_bounds: FrameImageBoundsCache::default(),
         }
     }
 
@@ -298,6 +304,7 @@ impl<T: Renderer> RenderService<T> {
         frame_info: &FrameInfo,
         color_authority: &RenderColorAuthority<'_>,
     ) -> Result<(), LibraryError> {
+        self.frame_image_bounds.clear();
         self.clear()?;
         let object_count = frame_info.object_count();
         let _timer = ScopedTimer::debug(format!(
@@ -333,159 +340,6 @@ impl<T: Renderer> RenderService<T> {
             }
         }
         Ok(())
-    }
-
-    fn render_group(
-        &mut self,
-        group: &FrameGroup,
-        parent_context: &RenderContext,
-        color_authority: &RenderColorAuthority<'_>,
-    ) -> Result<(), LibraryError> {
-        if group.kind == FrameGroupKind::Composition {
-            return self.render_composition_group(group, parent_context, color_authority);
-        }
-        if group.kind == FrameGroupKind::ImageTransform {
-            return self.render_image_transform_group(group, parent_context, color_authority);
-        }
-        let child_context = parent_context.with_transform(&group.transform);
-        if !group_requires_isolation(group) {
-            return self.render_items(
-                &group.items,
-                &child_context,
-                group.effect_time.into_inner(),
-                color_authority,
-            );
-        }
-
-        self.renderer.begin_group(
-            parent_context.target_width,
-            parent_context.target_height,
-            &transparent_color(),
-        )?;
-        let children_result = self.render_items(
-            &group.items,
-            &child_context,
-            group.effect_time.into_inner(),
-            color_authority,
-        );
-        if let Err(error) = children_result {
-            return Err(self.close_failed_group(error, "isolated group"));
-        }
-        if group.effects.is_empty() {
-            return self.renderer.end_group_and_draw(
-                &Affine2D::IDENTITY,
-                group.transform.opacity,
-                group.blend_mode,
-            );
-        }
-        let output = self.renderer.end_group()?;
-        let output = self.apply_effects(
-            output,
-            &group.effects,
-            group.effect_time.into_inner(),
-            color_authority,
-        )?;
-        self.renderer.draw_layer_affine_with_blend(
-            &output,
-            &Affine2D::IDENTITY,
-            group.transform.opacity,
-            group.blend_mode,
-        )
-    }
-
-    /// Rasterize the upstream Image subtree before its affine transform,
-    /// preserving graph order and treating descendants as one image.
-    fn render_image_transform_group(
-        &mut self,
-        group: &FrameGroup,
-        parent_context: &RenderContext,
-        color_authority: &RenderColorAuthority<'_>,
-    ) -> Result<(), LibraryError> {
-        let width = scaled_dimension(group.width as f64, parent_context.render_scale);
-        let height = scaled_dimension(group.height as f64, parent_context.render_scale);
-        let child_context = RenderContext::composition(parent_context.render_scale, width, height);
-
-        self.renderer
-            .begin_group(width, height, &transparent_color())?;
-        let children_result = self.render_items(
-            &group.items,
-            &child_context,
-            group.effect_time.into_inner(),
-            color_authority,
-        );
-        if let Err(error) = children_result {
-            return Err(self.close_failed_group(error, "Image Transform group"));
-        }
-
-        let pixel_to_local = Affine2D::scale(
-            1.0 / parent_context.render_scale,
-            1.0 / parent_context.render_scale,
-        );
-        let transform = parent_context
-            .logical_to_target
-            .compose(Affine2D::from(&group.transform))
-            .compose(pixel_to_local);
-        self.renderer
-            .end_group_and_draw(&transform, group.transform.opacity, group.blend_mode)
-    }
-
-    fn render_composition_group(
-        &mut self,
-        group: &FrameGroup,
-        parent_context: &RenderContext,
-        color_authority: &RenderColorAuthority<'_>,
-    ) -> Result<(), LibraryError> {
-        let width = scaled_dimension(group.width as f64, parent_context.render_scale);
-        let height = scaled_dimension(group.height as f64, parent_context.render_scale);
-        let child_context = RenderContext::composition(parent_context.render_scale, width, height);
-
-        self.renderer
-            .begin_group(width, height, &group.background_color)?;
-        let children_result = self.render_items(
-            &group.items,
-            &child_context,
-            group.effect_time.into_inner(),
-            color_authority,
-        );
-        if let Err(error) = children_result {
-            return Err(self.close_failed_group(error, "Composition group"));
-        }
-
-        let pixel_to_local = Affine2D::scale(
-            1.0 / parent_context.render_scale,
-            1.0 / parent_context.render_scale,
-        );
-        let transform = parent_context
-            .logical_to_target
-            .compose(Affine2D::from(&group.transform))
-            .compose(pixel_to_local);
-        if group.effects.is_empty() {
-            return self.renderer.end_group_and_draw(
-                &transform,
-                group.transform.opacity,
-                group.blend_mode,
-            );
-        }
-        let output = self.renderer.end_group()?;
-        let output = self.apply_effects(
-            output,
-            &group.effects,
-            group.effect_time.into_inner(),
-            color_authority,
-        )?;
-        self.renderer.draw_layer_affine_with_blend(
-            &output,
-            &transform,
-            group.transform.opacity,
-            group.blend_mode,
-        )
-    }
-
-    fn close_failed_group(&mut self, render_error: LibraryError, label: &str) -> LibraryError {
-        if let Err(cleanup_error) = self.renderer.end_group() {
-            log::error!("failed to close {label} after child render error: {cleanup_error}");
-        }
-        render_error
     }
 
     fn render_object(
@@ -573,8 +427,13 @@ impl<T: Renderer> RenderService<T> {
                 let text_layer = measure_debug(format!("Rasterize text layer '{}'", text), || {
                     self.renderer.rasterize_text_layer(request)
                 })?;
-                let final_image =
-                    self.apply_effects(text_layer, effects, current_time, color_authority)?;
+                let final_image = self.apply_effects(
+                    text_layer,
+                    effects,
+                    current_time,
+                    context.image_style_context(),
+                    color_authority,
+                )?;
                 measure_debug(format!("Composite text '{}'", text), || {
                     self.renderer.draw_layer_affine_with_blend(
                         &final_image,
@@ -616,8 +475,13 @@ impl<T: Renderer> RenderService<T> {
                 let shape_layer = measure_debug(format!("Rasterize shape layer {}", path), || {
                     self.renderer.rasterize_shape_layer(request)
                 })?;
-                let final_image =
-                    self.apply_effects(shape_layer, effects, current_time, color_authority)?;
+                let final_image = self.apply_effects(
+                    shape_layer,
+                    effects,
+                    current_time,
+                    context.image_style_context(),
+                    color_authority,
+                )?;
                 measure_debug(format!("Composite shape {}", path), || {
                     self.renderer.draw_layer_affine_with_blend(
                         &final_image,
@@ -654,8 +518,13 @@ impl<T: Renderer> RenderService<T> {
                 let sksl_layer = measure_debug("Rasterize SkSL", || {
                     self.renderer.rasterize_sksl_layer(request)
                 })?;
-                let final_image =
-                    self.apply_effects(sksl_layer, effects, current_time, color_authority)?;
+                let final_image = self.apply_effects(
+                    sksl_layer,
+                    effects,
+                    current_time,
+                    context.image_style_context(),
+                    color_authority,
+                )?;
                 measure_debug("Composite SkSL", || {
                     self.renderer.draw_layer_affine_with_blend(
                         &final_image,
@@ -689,8 +558,13 @@ impl<T: Renderer> RenderService<T> {
                         transform: &render_transform,
                     })
                 })?;
-                let final_image =
-                    self.apply_effects(point_layer, effects, current_time, color_authority)?;
+                let final_image = self.apply_effects(
+                    point_layer,
+                    effects,
+                    current_time,
+                    context.image_style_context(),
+                    color_authority,
+                )?;
                 measure_debug("Composite GPU Point scene", || {
                     self.renderer.draw_layer_affine_with_blend(
                         &final_image,
@@ -736,6 +610,7 @@ impl<T: Renderer> RenderService<T> {
         layer: RenderOutput,
         effects: &[crate::model::frame::effect::ImageEffect],
         current_time: f64,
+        mut image_style_context: ImageStyleContext,
         color_authority: &RenderColorAuthority<'_>,
     ) -> Result<RenderOutput, LibraryError> {
         if effects.is_empty() {
@@ -744,32 +619,54 @@ impl<T: Renderer> RenderService<T> {
             let mut current_layer = layer;
             // Iterate over effects
             for effect in effects {
-                let effect_type = effect.effect_type.as_str();
-                let gpu_context = self.renderer.get_gpu_context();
-
-                let mut params = effect.properties.clone();
-                if matches!(current_layer, RenderOutput::Working(_)) {
-                    let color_parameters = self
-                        .plugin_manager
-                        .effect_project_linear_color_parameters(effect_type);
-                    prepare_effect_colors(&mut params, &color_parameters, color_authority)?;
-                }
-                params.insert(
-                    "u_time".to_string(),
-                    crate::model::property::PropertyValue::Number(ordered_float::OrderedFloat(
-                        current_time,
-                    )),
-                );
-
-                // Use the PluginManager to apply the effect
-                current_layer = measure_debug(format!("Apply effect '{}'", effect_type), || {
-                    self.plugin_manager.apply_effect(
+                current_layer = match effect {
+                    crate::model::frame::effect::ImageEffect::Plugin {
                         effect_type,
-                        &current_layer,
-                        &params,
-                        gpu_context,
-                    )
-                })?;
+                        properties,
+                    } => {
+                        let gpu_context = self.renderer.get_gpu_context();
+                        let mut params = properties.clone();
+                        if matches!(current_layer, RenderOutput::Working(_)) {
+                            let color_parameters = self
+                                .plugin_manager
+                                .effect_project_linear_color_parameters(effect_type);
+                            prepare_effect_colors(&mut params, &color_parameters, color_authority)?;
+                        }
+                        params.insert(
+                            "u_time".to_string(),
+                            crate::model::property::PropertyValue::Number(
+                                ordered_float::OrderedFloat(current_time),
+                            ),
+                        );
+                        measure_debug(format!("Apply effect '{effect_type}'"), || {
+                            self.plugin_manager.apply_effect(
+                                effect_type,
+                                &current_layer,
+                                &params,
+                                gpu_context,
+                            )
+                        })?
+                    }
+                    crate::model::frame::effect::ImageEffect::LayerStyle(style) => {
+                        let Some(bounds) = image_style_bounds(
+                            image_style_context.bounds,
+                            std::slice::from_ref(effect),
+                            image_style_context.render_scale,
+                        ) else {
+                            return Err(LibraryError::Render(
+                                "Image style has invalid bounds".to_string(),
+                            ));
+                        };
+                        image_style_context.bounds = bounds;
+                        measure_debug("Apply typed Image style", || {
+                            self.renderer.apply_image_style(
+                                &current_layer,
+                                style,
+                                image_style_context,
+                            )
+                        })?
+                    }
+                };
             }
             Ok(current_layer)
         }
@@ -811,8 +708,13 @@ impl<T: Renderer> RenderService<T> {
             }
         };
 
-        let final_image =
-            self.apply_effects(layer, &surface.effects, current_time, color_authority)?;
+        let final_image = self.apply_effects(
+            layer,
+            &surface.effects,
+            current_time,
+            context.image_style_context(),
+            color_authority,
+        )?;
 
         let render_transform = context.transform(&surface.transform);
 
@@ -838,6 +740,18 @@ struct RenderContext {
 }
 
 impl RenderContext {
+    fn image_style_context(self) -> ImageStyleContext {
+        ImageStyleContext {
+            render_scale: self.render_scale,
+            bounds: FrameImageBounds::from_rect(crate::model::frame::entity::FrameBounds::new(
+                0.0,
+                0.0,
+                self.target_width as f32,
+                self.target_height as f32,
+            )),
+        }
+    }
+
     fn root(frame: &FrameInfo) -> Self {
         let render_scale = frame.render_scale.into_inner().max(f64::EPSILON);
         let (region_x, region_y, logical_width, logical_height) = frame.region.as_ref().map_or(

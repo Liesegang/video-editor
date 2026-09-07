@@ -1,24 +1,39 @@
+use crate::model::frame::entity::StyleConfig;
 use crate::model::property::PropertyValue;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct ImageEffect {
-    #[serde(rename = "type")]
-    pub effect_type: String,
-    #[serde(default)]
-    pub properties: HashMap<String, PropertyValue>,
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ImageEffect {
+    Plugin {
+        effect_type: String,
+        #[serde(default)]
+        properties: HashMap<String, PropertyValue>,
+    },
+    /// One typed Image -> Image layer-style stage. Graph nesting, rather than
+    /// a separately sorted appearance stack, owns the application order.
+    LayerStyle(StyleConfig),
 }
 
 impl Hash for ImageEffect {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.effect_type.hash(state);
-        let mut entries: Vec<_> = self.properties.iter().collect();
-        entries.sort_by_key(|(k, _)| k.as_str());
-        for (k, v) in entries {
-            k.hash(state);
-            v.hash(state);
+        std::mem::discriminant(self).hash(state);
+        match self {
+            Self::Plugin {
+                effect_type,
+                properties,
+            } => {
+                effect_type.hash(state);
+                let mut entries: Vec<_> = properties.iter().collect();
+                entries.sort_by_key(|(key, _)| key.as_str());
+                for (key, value) in entries {
+                    key.hash(state);
+                    value.hash(state);
+                }
+            }
+            Self::LayerStyle(style) => style.hash(state),
         }
     }
 }

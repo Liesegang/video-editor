@@ -1,14 +1,13 @@
 //! One resolved path body for plain and opacity-grouped Shape rasterization.
 
-use skia_safe::{Canvas, Paint, Path, Rect};
+use skia_safe::{Canvas, Path, Rect};
 
 use super::paint::{PaintFactory, StrokeRenderConfig};
 use crate::error::LibraryError;
-use crate::model::frame::appearance::{appearance_outsets, path_effect_outset};
-use crate::model::frame::color::Color;
+use crate::model::frame::appearance::path_effect_outset;
 use crate::model::frame::draw_type::{DrawStyle, PathEffect};
 use crate::model::frame::entity::{FramePathPart, StyleConfig};
-use crate::rendering::skia_working_surface::{self, SkiaSurfaceContract};
+use crate::rendering::skia_working_surface::SkiaSurfaceContract;
 
 struct ResolvedPathPart {
     path: Path,
@@ -70,30 +69,57 @@ impl PathBody {
             .unwrap_or_else(Rect::new_empty)
     }
 
-    pub(super) fn draw_body(
+    pub(super) fn draw_style(
         &self,
         contract: &SkiaSurfaceContract,
         canvas: &Canvas,
         path_effects: &[PathEffect],
-        styles: &[StyleConfig],
+        config: &StyleConfig,
     ) -> Result<(), LibraryError> {
+        if config.style.composite_phase() != super::layer_styles::CompositePhase::Body {
+            return Err(LibraryError::Render(
+                "Path Shape rasterization received an Image layer style".to_string(),
+            ));
+        }
         self.visit_paths(
             canvas,
-            appearance_outsets(styles).body + path_effect_outset(path_effects) + 1.0,
-            |canvas, path| draw_path_body(contract, canvas, path, path_effects, styles),
-        )
-    }
-
-    pub(super) fn draw_silhouette(
-        &self,
-        contract: &SkiaSurfaceContract,
-        canvas: &Canvas,
-        path_effects: &[PathEffect],
-    ) -> Result<(), LibraryError> {
-        self.visit_paths(
-            canvas,
-            path_effect_outset(path_effects) + 1.0,
-            |canvas, path| draw_path_silhouette(contract, canvas, path, path_effects),
+            config.style.visual_outset() + path_effect_outset(path_effects) + 1.0,
+            |canvas, path| match &config.style {
+                DrawStyle::Fill { color, offset } => PaintFactory::new(contract).draw_shape_fill(
+                    canvas,
+                    path,
+                    color,
+                    path_effects,
+                    *offset,
+                ),
+                DrawStyle::Stroke {
+                    color,
+                    width,
+                    offset,
+                    cap,
+                    join,
+                    miter,
+                    dash_array,
+                    dash_offset,
+                } => PaintFactory::new(contract).draw_shape_stroke(
+                    canvas,
+                    path,
+                    path_effects,
+                    StrokeRenderConfig {
+                        color,
+                        width: *width,
+                        offset: *offset,
+                        cap,
+                        join,
+                        miter: *miter,
+                        dash_array,
+                        dash_offset: *dash_offset,
+                    },
+                ),
+                _ => Err(LibraryError::Render(
+                    "Path Shape rasterization received an Image layer style".to_string(),
+                )),
+            },
         )
     }
 
@@ -124,72 +150,4 @@ impl PathBody {
         }
         Ok(())
     }
-}
-
-fn draw_path_body(
-    contract: &SkiaSurfaceContract,
-    canvas: &Canvas,
-    path: &Path,
-    path_effects: &[PathEffect],
-    styles: &[StyleConfig],
-) -> Result<(), LibraryError> {
-    for config in styles {
-        match &config.style {
-            DrawStyle::Fill { color, offset } => PaintFactory::new(contract).draw_shape_fill(
-                canvas,
-                path,
-                color,
-                path_effects,
-                *offset,
-            )?,
-            DrawStyle::Stroke {
-                color,
-                width,
-                offset,
-                cap,
-                join,
-                miter,
-                dash_array,
-                dash_offset,
-            } => PaintFactory::new(contract).draw_shape_stroke(
-                canvas,
-                path,
-                path_effects,
-                StrokeRenderConfig {
-                    color,
-                    width: *width,
-                    offset: *offset,
-                    cap,
-                    join,
-                    miter: *miter,
-                    dash_array,
-                    dash_offset: *dash_offset,
-                },
-            )?,
-            DrawStyle::ColorOverlay { .. }
-            | DrawStyle::GradientOverlay { .. }
-            | DrawStyle::PatternOverlay { .. }
-            | DrawStyle::DropShadow { .. }
-            | DrawStyle::InnerShadow { .. }
-            | DrawStyle::OuterGlow { .. }
-            | DrawStyle::InnerGlow { .. }
-            | DrawStyle::Satin { .. }
-            | DrawStyle::BevelEmboss { .. } => {}
-        }
-    }
-    Ok(())
-}
-
-fn draw_path_silhouette(
-    contract: &SkiaSurfaceContract,
-    canvas: &Canvas,
-    path: &Path,
-    path_effects: &[PathEffect],
-) -> Result<(), LibraryError> {
-    let mut paint = Paint::default();
-    paint.set_anti_alias(true);
-    skia_working_surface::set_paint_authored_color(&mut paint, contract, &Color::white(), 1.0)?;
-    super::paint::apply_path_effects(path_effects, path, &mut paint)?;
-    canvas.draw_path(path, &paint);
-    Ok(())
 }

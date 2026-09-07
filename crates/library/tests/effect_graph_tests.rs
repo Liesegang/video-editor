@@ -9,6 +9,7 @@ use library::editor::project_service::ProjectManager;
 use library::framing::get_frame_from_project;
 use library::model::frame::Image;
 use library::model::frame::color::Color;
+use library::model::frame::effect::ImageEffect;
 use library::model::frame::entity::{FrameGroup, FrameGroupKind, FrameItem};
 use library::model::frame::frame::FrameInfo;
 use library::model::project::{
@@ -323,16 +324,30 @@ fn effect_chain_uses_wiring_order_and_evaluates_keyframes_and_scalar_overrides()
     let rendered = evaluate(&project, &plugins, 5)?;
     let outer = find_group(&rendered.items, dilate_id).context("Dilate group is missing")?;
     assert_eq!(outer.kind, FrameGroupKind::Effect);
-    assert_eq!(outer.effects[0].effect_type, "dilate");
+    let ImageEffect::Plugin {
+        effect_type,
+        properties: _,
+    } = &outer.effects[0]
+    else {
+        panic!("Dilate must lower to a Plugin ImageEffect")
+    };
+    assert_eq!(effect_type, "dilate");
     let inner = find_group(&outer.items, blur_id).context("Blur group is missing")?;
     assert_eq!(inner.kind, FrameGroupKind::Effect);
-    assert_eq!(inner.effects[0].effect_type, "blur");
+    let ImageEffect::Plugin {
+        effect_type,
+        properties,
+    } = &inner.effects[0]
+    else {
+        panic!("Blur must lower to a Plugin ImageEffect")
+    };
+    assert_eq!(effect_type, "blur");
     assert_eq!(
-        inner.effects[0].properties["sigma_x"],
+        properties["sigma_x"],
         PropertyValue::Number(OrderedFloat(5.0))
     );
     assert_eq!(
-        inner.effects[0].properties["sigma_y"],
+        properties["sigma_y"],
         PropertyValue::Number(OrderedFloat(0.5))
     );
     assert_eq!(

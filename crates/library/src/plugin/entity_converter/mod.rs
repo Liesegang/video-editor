@@ -362,7 +362,7 @@ impl<'a> FrameEvaluationContext<'a> {
             time,
             &format!("Effect {effect_type}"),
         )?;
-        Some(crate::model::frame::effect::ImageEffect {
+        Some(crate::model::frame::effect::ImageEffect::Plugin {
             effect_type: effect_type.to_string(),
             properties: evaluated,
         })

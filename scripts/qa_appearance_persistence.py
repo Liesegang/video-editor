@@ -3,6 +3,10 @@
 import os
 import pathlib
 
+from qa_node_module_support import (
+    assert_node_editor_nodes_do_not_overlap,
+    open_timeline_item_definition,
+)
 from qa_support import (
     AUTHORING_FIXTURE,
     QaClient,
@@ -25,6 +29,184 @@ from qa_support import (
 
 
 OPEN_EXISTING_PROJECT_ENV = "RUVIE_QA_OPEN_EXISTING_PROJECT"
+
+
+def assert_canonical_appearance_graph(project, definition_id, output_id, operations):
+    definition = project["module_definitions"][definition_id]
+    nodes = (definition.get("graph") or {}).get("nodes") or {}
+    connections = (definition.get("graph") or {}).get("connections") or []
+    operation_ids = [operation["id"] for operation in operations]
+    expected_operations = {
+        operation["id"]: {
+            "component_id": operation["component_id"],
+            "category": operation.get("category", "style"),
+            "operation": operation.get("operation", "style.apply.v1"),
+        }
+        for operation in operations
+    }
+
+    def content_data(node):
+        data = (node.get("content") or {}).get("data")
+        return data if isinstance(data, dict) else {}
+
+    def reject_style_ports(value):
+        if isinstance(value, dict):
+            if value.get("data_type") == "Style":
+                raise QaFailure("converted Appearance retained a Style-typed port")
+            for child in value.values():
+                reject_style_ports(child)
+        elif isinstance(value, list):
+            for child in value:
+                reject_style_ports(child)
+
+    reject_style_ports(definition)
+    if any(
+        content_data(node).get("catalog_id") == "native.appearance-stack"
+        for node in nodes.values()
+    ):
+        raise QaFailure("converted Appearance retained native.appearance-stack")
+
+    def address(connection, side):
+        endpoint = connection.get(side) or {}
+        return endpoint.get("node_id"), endpoint.get("port")
+
+    def matches(connection, source, target, order):
+        return (
+            address(connection, "from") == source
+            and address(connection, "to") == target
+            and connection.get("order") == order
+            and connection.get("blend_mode") == "Normal"
+        )
+
+    used = set()
+
+    def require_connection(source, target, order=0):
+        found = [
+            connection
+            for connection in connections
+            if matches(connection, source, target, order)
+        ]
+        if len(found) != 1:
+            raise QaFailure(
+                "Appearance graph expected one {}:{} -> {}:{} order {} Normal connection, got {}".format(
+                    source[0], source[1], target[0], target[1], order, len(found)
+                )
+            )
+        used.add(found[0]["id"])
+
+    merge_ids = {
+        node_id
+        for node_id, node in nodes.items()
+        if (node.get("content") or {}).get("type") == "Merge"
+    }
+    accumulated = None
+    shape_source = None
+    used_merges = set()
+    for node_id in operation_ids:
+        node = nodes.get(node_id)
+        if node is None:
+            raise QaFailure("converted Appearance operation Node is missing: " + node_id)
+        content = node.get("content") or {}
+        data = content_data(node)
+        expected = expected_operations[node_id]
+        component_id = expected["component_id"]
+        if (
+            content.get("type") != "PluginOperation"
+            or data.get("category") != expected["category"]
+            or data.get("component_id") != component_id
+            or data.get("operation") != expected["operation"]
+        ):
+            raise QaFailure(
+                "converted Appearance Node {} is not the expected {} Plugin operation".format(
+                    node_id, component_id
+                )
+            )
+        ports = data.get("declared_ports") or []
+        port_contract = {
+            (port.get("key"), port.get("direction"), port.get("data_type"))
+            for port in ports
+        }
+        if ("image", "Output", "Image") not in port_contract:
+            raise QaFailure(component_id + " does not expose its canonical Image output")
+        output = (node_id, "image")
+        if component_id in {"fill", "stroke"}:
+            if ("shape_in", "Input", "Shape") not in port_contract:
+                raise QaFailure(component_id + " is not a Shape-to-Image branch")
+            inbound = [
+                connection
+                for connection in connections
+                if address(connection, "to") == (node_id, "shape_in")
+            ]
+            if len(inbound) != 1:
+                raise QaFailure(component_id + " must have exactly one Shape input")
+            candidate_source = address(inbound[0], "from")
+            if candidate_source[1] != "shape":
+                raise QaFailure(component_id + " is not fed from a Shape output")
+            if shape_source is None:
+                shape_source = candidate_source
+            elif shape_source != candidate_source:
+                raise QaFailure("Fill/Stroke branches do not share one Shape source")
+            require_connection(shape_source, (node_id, "shape_in"))
+            if accumulated is None:
+                accumulated = output
+            else:
+                candidates = [
+                    merge_id
+                    for merge_id in merge_ids - used_merges
+                    if any(
+                        matches(connection, accumulated, (merge_id, "images"), 0)
+                        for connection in connections
+                    )
+                    and any(
+                        matches(connection, output, (merge_id, "images"), 1)
+                        for connection in connections
+                    )
+                ]
+                if len(candidates) != 1:
+                    raise QaFailure("Shape Appearance branches lack one ordered Normal Merge")
+                merge_id = candidates[0]
+                if nodes[merge_id].get("name") != "Appearance Merge":
+                    raise QaFailure("Appearance raster branches use an unrelated Merge Node")
+                require_connection(accumulated, (merge_id, "images"), 0)
+                require_connection(output, (merge_id, "images"), 1)
+                used_merges.add(merge_id)
+                accumulated = (merge_id, "image")
+        else:
+            if ("image_in", "Input", "Image") not in port_contract:
+                raise QaFailure(component_id + " is not an Image-to-Image operation")
+            if accumulated is None:
+                if any(
+                    address(connection, "to") == (node_id, "image_in")
+                    for connection in connections
+                ):
+                    raise QaFailure("leading Image Appearance unexpectedly has an input")
+            else:
+                require_connection(accumulated, (node_id, "image_in"))
+            accumulated = output
+
+    output_nodes = [
+        node_id
+        for node_id, node in nodes.items()
+        if (node.get("content") or {}).get("type") == "ModuleOutput"
+        and content_data(node).get("id") == output_id
+    ]
+    if accumulated is None or len(output_nodes) != 1:
+        raise QaFailure("converted Appearance has no unique Image output")
+    require_connection(accumulated, (output_nodes[0], "image_in"))
+    if used_merges != merge_ids:
+        raise QaFailure("converted Appearance retained an unrelated Merge Node")
+    if used != {connection["id"] for connection in connections}:
+        raise QaFailure("converted Appearance graph contains connections outside its ordered chain")
+    return {
+        "operation_ids": operation_ids,
+        "component_ids": [
+            expected_operations[node_id]["component_id"] for node_id in operation_ids
+        ],
+        "shape_source": shape_source,
+        "merge_ids": sorted(merge_ids),
+        "connection_ids": sorted(used),
+        "output_node_id": output_nodes[0],
+    }
 
 
 def _constant(operation, key):
@@ -172,6 +354,8 @@ def _fresh_process_reload(
     expected_file,
     expected_previews,
     converted_item_id,
+    definition_id,
+    output_id,
     expected_facade_operations,
     direct_operations,
     appearance,
@@ -193,6 +377,9 @@ def _fresh_process_reload(
         loaded = client.state()
         if loaded["project"] != expected_project:
             raise QaFailure("fresh process loaded a different Appearance Project")
+        graph = assert_canonical_appearance_graph(
+            loaded["project"], definition_id, output_id, expected_facade_operations
+        )
         for item_id, operations, description in direct_operations:
             if appearance(loaded, item_id) != operations:
                 raise QaFailure(
@@ -246,6 +433,7 @@ def _fresh_process_reload(
         "history": loaded["history"],
         "previews": actual_previews,
         "facade": metadata,
+        "graph": graph,
         "file": file_after_reload,
         "capture": capture,
         "close": close,
@@ -340,6 +528,12 @@ def exercise_appearance_persistence(
     expected_operation_ids = [operation["id"] for operation in text_operations]
     if converted_operation_ids != expected_operation_ids:
         raise QaFailure("Text Appearance stable IDs/order changed during Node Clip conversion")
+    converted_graph = assert_canonical_appearance_graph(
+        converted["project"],
+        definition_id,
+        module_source["value"]["output_id"],
+        converted_metadata.get("operations") or [],
+    )
 
     converted_reopened, converted_persistence = _save_and_reopen(
         client,
@@ -380,6 +574,45 @@ def exercise_appearance_persistence(
         operation.get("id") for operation in reopened_metadata.get("operations") or []
     ] != expected_operation_ids:
         raise QaFailure("reopened Node Clip Appearance facade changed stable IDs/order")
+    reopened_graph = assert_canonical_appearance_graph(
+        converted_reopened["project"],
+        definition_id,
+        module_source["value"]["output_id"],
+        reopened_metadata.get("operations") or [],
+    )
+    before_graph_capture = client.state()
+    opened_definition_id, _ = open_timeline_item_definition(
+        client, text_item_id, "node_clip", "Converted Appearance graph"
+    )
+    if opened_definition_id != definition_id:
+        raise QaFailure("Appearance graph capture opened a different Definition")
+    graph_capture_state = client.state()
+    if (
+        graph_capture_state["history"]["revision"]
+        != before_graph_capture["history"]["revision"]
+        or graph_capture_state["project"] != before_graph_capture["project"]
+    ):
+        raise QaFailure("opening the converted Appearance graph mutated the Project")
+    graph_layout = assert_node_editor_nodes_do_not_overlap(
+        client,
+        [
+            reopened_graph["shape_source"][0],
+            *reopened_graph["operation_ids"],
+            *reopened_graph["merge_ids"],
+            reopened_graph["output_node_id"],
+        ],
+        "converted Appearance graph",
+    )
+    artifact_dir = pathlib.Path(
+        os.environ.get(
+            "RUVIE_QA_ARTIFACT_DIR",
+            pathlib.Path("target") / "qa-appearance-e2e",
+        )
+    ).resolve()
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    graph_capture = capture_viewport(
+        client, artifact_dir / "converted-appearance-graph.png"
+    )
     initial_close = request_clean_native_close(
         client, "saved Appearance authoring app", client.timeout
     )
@@ -389,6 +622,8 @@ def exercise_appearance_persistence(
         converted_persistence,
         converted_persistence["previews"],
         text_item_id,
+        definition_id,
+        module_source["value"]["output_id"],
         reopened_metadata.get("operations") or [],
         (
             (shape["item_id"], shape_operations, "Shape"),
@@ -408,5 +643,9 @@ def exercise_appearance_persistence(
         "text_operation_ids": expected_operation_ids,
         "instance_id": instance_id,
         "definition_id": definition_id,
+        "converted_graph": converted_graph,
+        "reopened_graph": reopened_graph,
+        "graph_capture": graph_capture,
+        "graph_layout": graph_layout,
         "reopened_facade": reopened_metadata,
     }

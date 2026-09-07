@@ -1,7 +1,7 @@
 //! Typed Particle node contracts.
 //!
 //! The bounded native slice owns emission, birth attributes, an ordered force
-//! stage, plane collisions, and sprite rendering. Descriptors outside that slice remain
+//! stages, bounded collisions, and sprite rendering. Descriptors outside that slice remain
 //! explicitly disabled.
 
 use ordered_float::OrderedFloat;
@@ -9,7 +9,7 @@ use ordered_float::OrderedFloat;
 use super::descriptor::{DescriptorIdentity, DescriptorSpec, PortSpec};
 use crate::model::frame::color::Color;
 use crate::model::frame::particle::{
-    ParticleCollider, ParticleForce, validate_particle_cold_replay_budget,
+    ParticleCollider, ParticleCollisionMode, ParticleForce, validate_particle_cold_replay_budget,
     validate_particle_size_range,
 };
 use crate::model::project::{IMAGE_OUTPUT_PORT, PortDataType};
@@ -32,6 +32,7 @@ pub(crate) enum ParticleNodeRole {
     Vortex,
     Point,
     CollisionPlane,
+    CollisionSphere,
     SpriteRenderer,
 }
 
@@ -47,6 +48,7 @@ impl ParticleNodeRole {
             Self::Vortex => "native.particle.vortex-force",
             Self::Point => "native.particle.point-force",
             Self::CollisionPlane => "native.particle.collision-plane",
+            Self::CollisionSphere => "native.particle.collision-sphere",
             Self::SpriteRenderer => "native.particle.sprite-renderer",
         }
     }
@@ -57,13 +59,13 @@ impl ParticleNodeRole {
             Self::ShapeLocation => 1,
             Self::Initialize => 2,
             Self::Gravity | Self::Turbulence | Self::Drag | Self::Vortex | Self::Point => 3,
-            Self::CollisionPlane => 4,
+            Self::CollisionPlane | Self::CollisionSphere => 4,
             Self::SpriteRenderer => 5,
         }
     }
 
     pub(crate) const fn is_collision(self) -> bool {
-        matches!(self, Self::CollisionPlane)
+        matches!(self, Self::CollisionPlane | Self::CollisionSphere)
     }
 
     pub(crate) const fn is_force(self) -> bool {
@@ -84,6 +86,7 @@ impl ParticleNodeRole {
             Self::Vortex,
             Self::Point,
             Self::CollisionPlane,
+            Self::CollisionSphere,
             Self::SpriteRenderer,
         ]
         .into_iter()
@@ -181,6 +184,16 @@ const COLLISION_PLANE_INPUTS: &[PortSpec] = &[
     PortSpec::single("bounce", "Bounce", PortDataType::Number),
     PortSpec::single("friction", "Friction", PortDataType::Number),
 ];
+const COLLISION_SPHERE_INPUTS: &[PortSpec] = &[
+    PARTICLE,
+    PortSpec::single("active", "Collision Enabled", PortDataType::Boolean),
+    PortSpec::single("center", "Center", PortDataType::Vec3),
+    PortSpec::single("radius", "Radius", PortDataType::Number),
+    PortSpec::single("particle_radius", "Particle Radius", PortDataType::Number),
+    PortSpec::single("mode", "Mode", PortDataType::String),
+    PortSpec::single("bounce", "Bounce", PortDataType::Number),
+    PortSpec::single("friction", "Friction", PortDataType::Number),
+];
 const COLLISION_DEPTH_INPUTS: &[PortSpec] = &[
     PARTICLE,
     PortSpec::single("depth_buffer", "Depth Buffer", PortDataType::Image),
@@ -207,6 +220,15 @@ const COLLISION_PLANE_CONSTANT_ONLY_INPUTS: &[&str] = &[
     "plane_point",
     "plane_normal",
     "radius",
+    "bounce",
+    "friction",
+];
+const COLLISION_SPHERE_CONSTANT_ONLY_INPUTS: &[&str] = &[
+    "active",
+    "center",
+    "radius",
+    "particle_radius",
+    "mode",
     "bounce",
     "friction",
 ];
@@ -388,6 +410,31 @@ const SPECS: &[DescriptorSpec] = &[
     .validate_property_set(validate_collision_plane_property_set)
     .constant_only_inputs(
         COLLISION_PLANE_CONSTANT_ONLY_INPUTS,
+        PARTICLE_FIXED_STEP_REASON,
+    ),
+    DescriptorSpec::implemented_native(
+        DescriptorIdentity::new(
+            ParticleNodeRole::CollisionSphere.catalog_id(),
+            "Collision Sphere",
+            "Particles",
+            "node_editor.menu.create.particle_collision_sphere",
+            &[
+                "particle",
+                "collision",
+                "sphere",
+                "container",
+                "bounce",
+                "friction",
+                "gpu",
+            ],
+        ),
+        COLLISION_SPHERE_INPUTS,
+        PARTICLE_OUTPUT,
+        collision_sphere_properties,
+    )
+    .validate_property_set(validate_collision_sphere_property_set)
+    .constant_only_inputs(
+        COLLISION_SPHERE_CONSTANT_ONLY_INPUTS,
         PARTICLE_FIXED_STEP_REASON,
     ),
     DescriptorSpec::placeholder(
@@ -619,29 +666,15 @@ fn validate_point_force_property_set(properties: &PropertyMap) -> Result<(), Str
 }
 
 fn collision_plane_properties() -> Vec<PropertyDefinition> {
-    vec![
-        PropertyDefinition::new(
-            "active",
-            PropertyUiType::Bool,
-            "Collision Enabled",
-            PropertyValue::Boolean(true),
-        ),
+    collision_properties(vec![
         vec3_property("plane_point", "Plane Point", [0.0, 120.0, 0.0], " px"),
         vec3_property("plane_normal", "Plane Normal", [0.0, -1.0, 0.0], ""),
         number_property("radius", "Radius", 0.0, 1_000_000.0, 0.0, " px"),
-        number_property("bounce", "Bounce", 0.0, 1.0, 0.5, ""),
-        number_property("friction", "Friction", 0.0, 1.0, 0.1, ""),
-    ]
+    ])
 }
 
 fn validate_collision_plane_property_set(properties: &PropertyMap) -> Result<(), String> {
-    match properties
-        .get("active")
-        .and_then(|property| property.value())
-    {
-        Some(PropertyValue::Boolean(_)) => {}
-        _ => return Err("Collision Plane requires a Boolean 'active' Property".to_string()),
-    }
+    validate_collision_active(properties, "Collision Plane")?;
     ParticleCollider::Plane {
         plane_point: required_vec3(properties, "Collision Plane", "plane_point")?,
         plane_normal: required_vec3(properties, "Collision Plane", "plane_normal")?,
@@ -650,6 +683,81 @@ fn validate_collision_plane_property_set(properties: &PropertyMap) -> Result<(),
         friction: OrderedFloat(required_number(properties, "Collision Plane", "friction")? as f32),
     }
     .validate()
+}
+
+fn collision_sphere_properties() -> Vec<PropertyDefinition> {
+    collision_properties(vec![
+        vec3_property("center", "Center", [0.0, 120.0, 0.0], " px"),
+        number_property("radius", "Radius", 0.000_01, 1_000_000.0, 100.0, " px"),
+        number_property(
+            "particle_radius",
+            "Particle Radius",
+            0.0,
+            1_000_000.0,
+            0.0,
+            " px",
+        ),
+        PropertyDefinition::new(
+            "mode",
+            PropertyUiType::Dropdown {
+                options: vec!["Solid".to_string(), "Container".to_string()],
+            },
+            "Mode",
+            PropertyValue::String("Solid".to_string()),
+        ),
+    ])
+}
+
+fn collision_properties(mut geometry: Vec<PropertyDefinition>) -> Vec<PropertyDefinition> {
+    let mut properties = vec![PropertyDefinition::new(
+        "active",
+        PropertyUiType::Bool,
+        "Collision Enabled",
+        PropertyValue::Boolean(true),
+    )];
+    properties.append(&mut geometry);
+    properties.extend([
+        number_property("bounce", "Bounce", 0.0, 1.0, 0.5, ""),
+        number_property("friction", "Friction", 0.0, 1.0, 0.1, ""),
+    ]);
+    properties
+}
+
+fn validate_collision_sphere_property_set(properties: &PropertyMap) -> Result<(), String> {
+    validate_collision_active(properties, "Collision Sphere")?;
+    let mode = match properties.get("mode").and_then(|property| property.value()) {
+        Some(PropertyValue::String(value)) if value == "Solid" => ParticleCollisionMode::Solid,
+        Some(PropertyValue::String(value)) if value == "Container" => {
+            ParticleCollisionMode::Container
+        }
+        Some(PropertyValue::String(value)) => {
+            return Err(format!("Collision Sphere has unknown mode '{value}'"));
+        }
+        _ => return Err("Collision Sphere requires a string 'mode' Property".to_string()),
+    };
+    ParticleCollider::Sphere {
+        center: required_vec3(properties, "Collision Sphere", "center")?,
+        radius: OrderedFloat(required_number(properties, "Collision Sphere", "radius")? as f32),
+        particle_radius: OrderedFloat(required_number(
+            properties,
+            "Collision Sphere",
+            "particle_radius",
+        )? as f32),
+        mode,
+        bounce: OrderedFloat(required_number(properties, "Collision Sphere", "bounce")? as f32),
+        friction: OrderedFloat(required_number(properties, "Collision Sphere", "friction")? as f32),
+    }
+    .validate()
+}
+
+fn validate_collision_active(properties: &PropertyMap, node: &str) -> Result<(), String> {
+    match properties
+        .get("active")
+        .and_then(|property| property.value())
+    {
+        Some(PropertyValue::Boolean(_)) => Ok(()),
+        _ => Err(format!("{node} requires a Boolean 'active' Property")),
+    }
 }
 
 fn required_number(properties: &PropertyMap, node: &str, key: &str) -> Result<f64, String> {

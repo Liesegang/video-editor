@@ -72,9 +72,9 @@ pub fn node_editor_panel(
     render_document_breadcrumb(ui, project, definition, &host);
     if state.node_editor.fit_requested {
         let viewport = ui.available_rect_before_wrap();
-        if let Some(canvas) = super::surface::fit_module_document_canvas(definition, viewport) {
+        if let Some(canvas) = super::surface::fit_module_document_canvas(definition, viewport, None)
+        {
             state.node_editor.canvas = canvas;
-            state.node_editor.fit_requested = false;
         }
     }
     if apply_pending_layout(ui, definition, instance_id, state, service) {

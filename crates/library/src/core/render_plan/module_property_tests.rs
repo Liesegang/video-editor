@@ -319,7 +319,12 @@ fn module_effect_values_reach_the_frame_operation() {
     let plan = RenderPlanCompiler::compile(&project).unwrap();
     let frame = evaluate_render_plan_frame(&project, &plan, &plugins, 30, 1.0, None).unwrap();
     let group = find_group(&frame.items, blur_id, FrameGroupKind::Effect).unwrap();
-    let values = &group.effects[0].properties;
+    let crate::model::frame::effect::ImageEffect::Plugin {
+        properties: values, ..
+    } = &group.effects[0]
+    else {
+        panic!("Blur must remain a plugin image effect");
+    };
 
     assert_eq!(values["sigma_x"], PropertyValue::from(6.0));
     assert_eq!(values["sigma_y"], PropertyValue::from(23.0));

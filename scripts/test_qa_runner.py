@@ -261,6 +261,7 @@ class QaRunnerTests(unittest.TestCase):
             "assets-timeline",
             "particle-node-clip",
             "particle-collision",
+            "particle-sphere-collision",
             "color-ramp",
             "point-attributes",
             "point-grid",

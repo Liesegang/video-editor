@@ -282,31 +282,49 @@ pub struct AppearanceOperation {
     pub properties: PropertyMap,
 }
 
-/// Whether a descriptor is a self-contained Shape-to-Image appearance
-/// operation suitable for a direct Timeline Text or Shape source.
+/// Whether a descriptor is a unary Shape-to-Image or Image-to-Image
+/// appearance operation. A Timeline appearance list supplies the Shape to
+/// rasterizers and the preceding accumulated Image to image operations.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AppearanceInputKind {
+    Shape,
+    Image,
+}
+
 pub fn appearance_direct_contract_is_compatible(
     ports: &[crate::model::project::PortDefinition],
 ) -> bool {
+    appearance_input_kind(ports).is_some()
+}
+
+pub fn appearance_input_kind(
+    ports: &[crate::model::project::PortDefinition],
+) -> Option<AppearanceInputKind> {
     use std::collections::HashSet;
 
     use crate::model::project::{
-        IMAGE_OUTPUT_PORT, PortDirection, PortMultiplicity, SHAPE_INPUT_PORT, STYLE_OUTPUT_PORT,
+        IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, PortDirection, PortMultiplicity, SHAPE_INPUT_PORT,
         TIME_PORT,
     };
 
     let mut shape_inputs = 0;
+    let mut image_inputs = 0;
     let mut image_outputs = 0;
-    let mut style_outputs = 0;
     let mut keys = HashSet::new();
     for port in ports {
         if !keys.insert(port.key.as_str()) || port.multiplicity != PortMultiplicity::Single {
-            return false;
+            return None;
         }
         match (port.direction, port.key.as_str()) {
             (PortDirection::Input, SHAPE_INPUT_PORT)
                 if port.data_type == crate::model::project::PortDataType::Shape =>
             {
                 shape_inputs += 1;
+            }
+            (PortDirection::Input, IMAGE_INPUT_PORT)
+                if port.data_type == crate::model::project::PortDataType::Image =>
+            {
+                image_inputs += 1;
             }
             (PortDirection::Input, TIME_PORT)
                 if port.data_type == crate::model::project::PortDataType::Number => {}
@@ -319,15 +337,14 @@ pub fn appearance_direct_contract_is_compatible(
             {
                 image_outputs += 1;
             }
-            (PortDirection::Output, STYLE_OUTPUT_PORT)
-                if port.data_type == crate::model::project::PortDataType::Style =>
-            {
-                style_outputs += 1;
-            }
-            _ => return false,
+            _ => return None,
         }
     }
-    shape_inputs == 1 && image_outputs == 1 && style_outputs == 1
+    match (shape_inputs, image_inputs, image_outputs) {
+        (1, 0, 1) => Some(AppearanceInputKind::Shape),
+        (0, 1, 1) => Some(AppearanceInputKind::Image),
+        _ => None,
+    }
 }
 
 /// Whether a descriptor can run as an inline Text Ensemble operation.

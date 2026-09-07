@@ -261,7 +261,11 @@ fn legacy_raster_clip_is_absorbed_once_into_transform_and_image_opacity() -> Res
     );
     let opacity = find_group(&frame.items, opacity_id).context("Image Style group")?;
     assert_eq!(opacity.kind, FrameGroupKind::ImageStyle);
-    assert_eq!(opacity.transform.opacity, 0.5);
+    assert_eq!(opacity.transform.opacity, 1.0);
+    assert!(
+        matches!(opacity.effects.as_slice(), [library::model::frame::effect::ImageEffect::LayerStyle(style)]
+        if style.style == library::model::frame::draw_type::DrawStyle::Opacity { opacity: 0.5 })
+    );
     Ok(())
 }
 

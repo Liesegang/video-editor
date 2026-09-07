@@ -14,7 +14,6 @@ use crate::model::frame::draw_type::{
     BevelDirection, BevelRenderGeometry, BevelStyle, BevelTechnique, DrawStyle, GradientStyle,
     PatternStyle,
 };
-use crate::model::frame::entity::StyleConfig;
 use crate::model::property::{GradientGeometry, GradientSpread, PatternKind};
 use crate::rendering::blend::BlendRuntime;
 use crate::rendering::skia_working_surface::{self, SkiaSurfaceContract};
@@ -22,25 +21,6 @@ use crate::rendering::skia_working_surface::{self, SkiaSurfaceContract};
 pub(super) use mask::LayerMask;
 
 pub(super) use crate::model::frame::appearance::CompositePhase;
-
-pub(super) fn has_mask_styles(styles: &[StyleConfig]) -> bool {
-    styles
-        .iter()
-        .any(|config| config.style.composite_phase() != CompositePhase::Body)
-}
-
-pub(super) fn visit_phase(
-    styles: &[StyleConfig],
-    phase: CompositePhase,
-    mut visit: impl FnMut(&StyleConfig) -> Result<(), LibraryError>,
-) -> Result<(), LibraryError> {
-    for config in styles {
-        if config.style.composite_phase() == phase {
-            visit(config)?;
-        }
-    }
-    Ok(())
-}
 
 struct EdgeSpec<'a> {
     color: &'a Color,
@@ -55,17 +35,58 @@ struct EdgeSpec<'a> {
 pub(super) struct LayerStyleRenderer<'a> {
     surface_contract: &'a SkiaSurfaceContract,
     blend_runtime: &'a mut BlendRuntime,
+    render_scale: f64,
 }
 
 impl<'a> LayerStyleRenderer<'a> {
     pub(super) const fn new(
         surface_contract: &'a SkiaSurfaceContract,
         blend_runtime: &'a mut BlendRuntime,
+        render_scale: f64,
     ) -> Self {
         Self {
             surface_contract,
             blend_runtime,
+            render_scale,
         }
+    }
+
+    /// Apply one Image -> Image style to the complete upstream alpha image.
+    /// This is the single authored-order compositor used by both direct
+    /// Shape/Text appearance and Module image-style groups.
+    pub(super) fn compose(
+        &mut self,
+        canvas: &Canvas,
+        style: &DrawStyle,
+        mask: &LayerMask,
+    ) -> Result<(), LibraryError> {
+        if let DrawStyle::Opacity { opacity } = style {
+            if !opacity.is_finite() || !(0.0..=1.0).contains(opacity) {
+                return Err(LibraryError::Render(
+                    "Image Opacity must be finite and between 0 and 1".to_string(),
+                ));
+            }
+            canvas.save_layer_alpha_f(Some(mask.visual_bounds()), *opacity as f32);
+            mask.draw_content(canvas);
+            canvas.restore();
+            return Ok(());
+        }
+        match style.composite_phase() {
+            CompositePhase::Underlay => {
+                self.draw(canvas, style, mask)?;
+                mask.draw_content(canvas);
+            }
+            CompositePhase::Overlay => {
+                mask.draw_content(canvas);
+                self.draw(canvas, style, mask)?;
+            }
+            CompositePhase::Body => {
+                return Err(LibraryError::Render(
+                    "Fill and Stroke require a Shape input, not an Image".to_string(),
+                ));
+            }
+        }
+        Ok(())
     }
 
     pub(super) fn draw(
@@ -75,9 +96,12 @@ impl<'a> LayerStyleRenderer<'a> {
         mask: &LayerMask,
     ) -> Result<(), LibraryError> {
         match style {
-            DrawStyle::Fill { .. } | DrawStyle::Stroke { .. } => Err(LibraryError::Render(
-                "Fill and Stroke belong to the vector layer body".to_string(),
-            )),
+            DrawStyle::Fill { .. } | DrawStyle::Stroke { .. } | DrawStyle::Opacity { .. } => {
+                Err(LibraryError::Render(
+                    "Fill, Stroke, and Image Opacity are handled outside alpha-mask layer styles"
+                        .to_string(),
+                ))
+            }
             DrawStyle::ColorOverlay {
                 color,
                 opacity,
@@ -114,8 +138,8 @@ impl<'a> LayerStyleRenderer<'a> {
                 spread,
                 size,
             } => {
-                let filter = mask.expanded_blur(*size, *spread)?;
-                let filter = mask.offset(filter, shadow_offset(*angle, *distance))?;
+                let filter = mask.expanded_blur(self.scaled(*size), *spread)?;
+                let filter = mask.offset(filter, shadow_offset(*angle, self.scaled(*distance)))?;
                 let filter =
                     mask.solid_tint(self.surface_contract, filter, color, *opacity as f32)?;
                 self.composited(canvas, mask, *blend_mode, filter)
@@ -127,7 +151,7 @@ impl<'a> LayerStyleRenderer<'a> {
                 spread,
                 size,
             } => {
-                let filter = mask.outside(mask.expanded_blur(*size, *spread)?)?;
+                let filter = mask.outside(mask.expanded_blur(self.scaled(*size), *spread)?)?;
                 let filter =
                     mask.solid_tint(self.surface_contract, filter, color, *opacity as f32)?;
                 self.composited(canvas, mask, *blend_mode, filter)
@@ -147,8 +171,8 @@ impl<'a> LayerStyleRenderer<'a> {
                     color,
                     opacity: *opacity as f32,
                     blend_mode: *blend_mode,
-                    offset: shadow_offset(*angle, *distance),
-                    size: *size,
+                    offset: shadow_offset(*angle, self.scaled(*distance)),
+                    size: self.scaled(*size),
                     spread: *spread,
                     inside: true,
                 },
@@ -167,7 +191,7 @@ impl<'a> LayerStyleRenderer<'a> {
                     opacity: *opacity as f32,
                     blend_mode: *blend_mode,
                     offset: (0.0, 0.0),
-                    size: *size,
+                    size: self.scaled(*size),
                     spread: *spread,
                     inside: true,
                 },
@@ -181,13 +205,15 @@ impl<'a> LayerStyleRenderer<'a> {
                 size,
                 invert,
             } => {
-                let mut offset = shadow_offset(*angle, *distance);
+                let mut offset = shadow_offset(*angle, self.scaled(*distance));
                 if *invert {
                     offset = (-offset.0, -offset.1);
                 }
-                let first = mask.offset(mask.expanded_blur(*size, 0.0)?, offset)?;
-                let second =
-                    mask.offset(mask.expanded_blur(*size, 0.0)?, (-offset.0, -offset.1))?;
+                let first = mask.offset(mask.expanded_blur(self.scaled(*size), 0.0)?, offset)?;
+                let second = mask.offset(
+                    mask.expanded_blur(self.scaled(*size), 0.0)?,
+                    (-offset.0, -offset.1),
+                )?;
                 let filter = mask.subtract(mask.source(), first)?;
                 let filter = mask.subtract(filter, second)?;
                 let filter =
@@ -217,8 +243,8 @@ impl<'a> LayerStyleRenderer<'a> {
                     technique: *technique,
                     depth: *depth,
                     direction: *direction,
-                    size: *size,
-                    soften: *soften,
+                    size: self.scaled(*size),
+                    soften: self.scaled(*soften),
                     angle: *angle,
                     altitude: *altitude,
                     highlight_color,
@@ -230,6 +256,10 @@ impl<'a> LayerStyleRenderer<'a> {
                 },
             ),
         }
+    }
+
+    fn scaled(&self, value: f64) -> f64 {
+        value * self.render_scale
     }
 
     fn edge(
@@ -376,8 +406,8 @@ impl<'a> LayerStyleRenderer<'a> {
     }
 
     fn pattern_shader(&self, pattern: &PatternStyle, opacity: f32) -> Result<Shader, LibraryError> {
-        let width = pattern.scale.x.into_inner() as f32;
-        let height = pattern.scale.y.into_inner() as f32;
+        let width = (pattern.scale.x.into_inner() * self.render_scale) as f32;
+        let height = (pattern.scale.y.into_inner() * self.render_scale) as f32;
         let bounds = Rect::from_wh(width, height);
         let mut recorder = PictureRecorder::new();
         let tile = recorder.begin_recording(bounds, false);
@@ -411,8 +441,8 @@ impl<'a> LayerStyleRenderer<'a> {
             .finish_recording_as_picture(Some(&bounds))
             .ok_or_else(|| LibraryError::Render("Cannot record Pattern Overlay".to_string()))?;
         let mut matrix = Matrix::translate((
-            pattern.phase.x.into_inner() as f32,
-            pattern.phase.y.into_inner() as f32,
+            (pattern.phase.x.into_inner() * self.render_scale) as f32,
+            (pattern.phase.y.into_inner() * self.render_scale) as f32,
         ));
         matrix.pre_rotate(pattern.angle.into_inner() as f32, None);
         Ok(picture.to_shader(

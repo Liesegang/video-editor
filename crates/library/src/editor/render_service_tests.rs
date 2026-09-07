@@ -67,6 +67,8 @@ struct TexturePathRenderer {
     direct_sksl_draws: usize,
     direct_particle_draws: usize,
     particle_rasterizations: usize,
+    image_style_composites: Vec<(f64, Affine2D)>,
+    last_direct_shape_transform: Option<Affine2D>,
 }
 
 impl Renderer for TexturePathRenderer {
@@ -105,6 +107,19 @@ impl Renderer for TexturePathRenderer {
         _blend_mode: BlendMode,
     ) -> Result<(), LibraryError> {
         self.native_group_composites += 1;
+        Ok(())
+    }
+
+    fn end_group_with_image_style_and_draw(
+        &mut self,
+        _style: &crate::model::frame::entity::StyleConfig,
+        context: ImageStyleContext,
+        transform: &Affine2D,
+        _opacity: f64,
+        _blend_mode: BlendMode,
+    ) -> Result<(), LibraryError> {
+        self.image_style_composites
+            .push((context.render_scale, *transform));
         Ok(())
     }
 
@@ -152,11 +167,12 @@ impl Renderer for TexturePathRenderer {
 
     fn draw_shape_layer(
         &mut self,
-        _request: ShapeRasterRequest<'_>,
+        request: ShapeRasterRequest<'_>,
         _opacity: f64,
         _blend_mode: BlendMode,
     ) -> Result<(), LibraryError> {
         self.direct_shape_draws += 1;
+        self.last_direct_shape_transform = Some(request.transform);
         Ok(())
     }
 
@@ -516,6 +532,8 @@ fn hierarchical_rendering_preserves_texture_layers_and_root_texture_output() {
         direct_sksl_draws: 0,
         direct_particle_draws: 0,
         particle_rasterizations: 0,
+        image_style_composites: Vec::new(),
+        last_direct_shape_transform: None,
     };
     let mut service = RenderService::new(renderer, plugin_manager, Arc::new(CacheManager::new()));
 
@@ -614,6 +632,8 @@ fn particle_without_effects_uses_the_backend_native_draw_boundary() {
         direct_sksl_draws: 0,
         direct_particle_draws: 0,
         particle_rasterizations: 0,
+        image_style_composites: Vec::new(),
+        last_direct_shape_transform: None,
     };
     let mut service = RenderService::new(
         renderer,

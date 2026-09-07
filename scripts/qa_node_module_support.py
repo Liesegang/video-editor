@@ -345,6 +345,73 @@ def disconnect_node_connection(client, expected_host, connection_id, description
     return client.wait_until(description + " disconnected", disconnected)
 
 
+def publish_node_input_parameter(
+    client,
+    expected_host,
+    node_id,
+    port_key,
+    trigger_component_id,
+    expected_name,
+    expected_default,
+):
+    """Publish one exact Node input through the production interface menu."""
+
+    before = client.state()
+    definition_id, definition = active_definition(before, expected_host)
+    before_parameters = definition["interface"]["parameters"]
+    if any(
+        candidate.get("target") == {"node_id": node_id, "port": port_key}
+        for candidate in before_parameters
+    ):
+        raise QaFailure("Node input is already a Published parameter")
+    client.click_component(trigger_component_id, button="secondary")
+    action_id = (
+        "node_editor.interface_action.node:{}.input:{}:publish_parameter".format(
+            node_id, port_key
+        )
+    )
+    _, action = client.wait_component_settled(action_id)
+    metadata = action.get("metadata") or {}
+    if (
+        metadata.get("action") != "publish_parameter"
+        or metadata.get("node_id") != node_id
+        or metadata.get("port") != port_key
+        or metadata.get("label") != expected_name
+        or action.get("enabled") is not True
+    ):
+        raise QaFailure("Publish action lost its exact Node input identity")
+    client.click_component(action_id)
+    before_ids = {candidate["id"] for candidate in before_parameters}
+
+    def published():
+        state = client.state()
+        candidate = state["project"]["module_definitions"].get(definition_id)
+        if candidate is None:
+            return None
+        added = [
+            parameter
+            for parameter in candidate["interface"]["parameters"]
+            if parameter["id"] not in before_ids
+        ]
+        return (
+            (state, added[0])
+            if state["history"]["revision"] == before["history"]["revision"] + 1
+            and len(added) == 1
+            else None
+        )
+
+    state, parameter = client.wait_until(
+        "publish exact {} Node input".format(expected_name), published
+    )
+    if (
+        parameter.get("name") != expected_name
+        or parameter.get("default_value") != expected_default
+        or parameter.get("target") != {"node_id": node_id, "port": port_key}
+    ):
+        raise QaFailure("Published parameter changed its Node input contract")
+    return state, parameter
+
+
 def unpublish_node_input_parameter(
     client,
     definition_id,
@@ -548,6 +615,97 @@ def place_created_node(client, node_id, horizontal_fraction, vertical_offset=26.
     if abs(float(moved["rect_points"]["center_x"]) - target["x"]) > 3.0:
         raise QaFailure("created Node did not follow its production header drag")
     return moved
+
+
+def _node_editor_layout_violations(canvas_rect, rects):
+    clipped = []
+    for node_id, rect in rects.items():
+        if (
+            float(rect["min_x"]) < float(canvas_rect["min_x"]) - 0.5
+            or float(rect["max_x"]) > float(canvas_rect["max_x"]) + 0.5
+            or float(rect["min_y"]) < float(canvas_rect["min_y"]) - 0.5
+            or float(rect["max_y"]) > float(canvas_rect["max_y"]) + 0.5
+        ):
+            clipped.append(node_id)
+
+    overlaps = []
+    ordered_ids = list(rects)
+    for index, left_id in enumerate(ordered_ids):
+        left = rects[left_id]
+        for right_id in ordered_ids[index + 1 :]:
+            right = rects[right_id]
+            overlap_x = min(float(left["max_x"]), float(right["max_x"])) - max(
+                float(left["min_x"]), float(right["min_x"])
+            )
+            overlap_y = min(float(left["max_y"]), float(right["max_y"])) - max(
+                float(left["min_y"]), float(right["min_y"])
+            )
+            if overlap_x > 0.5 and overlap_y > 0.5:
+                overlaps.append(
+                    {
+                        "left": left_id,
+                        "right": right_id,
+                        "width": overlap_x,
+                        "height": overlap_y,
+                    }
+                )
+    return {"clipped": clipped, "overlaps": overlaps}
+
+
+def assert_node_editor_nodes_do_not_overlap(client, node_ids, description):
+    """Assert fit-rendered Node bodies are complete and have disjoint interiors."""
+
+    _, canvas = client.wait_component_settled("node_editor.canvas")
+    snapshot = client.component_snapshot()
+    components = {entry["id"]: entry for entry in snapshot["components"]}
+    rects = {}
+    for node_id in dict.fromkeys(node_ids):
+        component_id = "node_editor.node:" + node_id
+        node_component = components.get(component_id)
+        if not node_component or not node_component.get("visible"):
+            raise QaFailure("{} Node is not visibly rendered: {}".format(description, node_id))
+        bounds = ((node_component.get("metadata") or {}).get("screen_bounds") or {})
+        try:
+            x = float(bounds["x"])
+            y = float(bounds["y"])
+            width = float(bounds["width"])
+            height = float(bounds["height"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise QaFailure(
+                "{} Node omitted authoritative unclipped screen bounds: {}".format(
+                    description, node_id
+                )
+            ) from error
+        if width <= 0.0 or height <= 0.0:
+            raise QaFailure("{} Node has no rendered body: {}".format(description, node_id))
+        rect = {
+            "min_x": x,
+            "min_y": y,
+            "max_x": x + width,
+            "max_y": y + height,
+            "width": width,
+            "height": height,
+        }
+        rects[node_id] = rect
+
+    violations = _node_editor_layout_violations(canvas["rect_points"], rects)
+    if violations["clipped"]:
+        raise QaFailure(
+            "{} rendered Nodes are clipped outside the fitted canvas: {!r}".format(
+                description, violations["clipped"]
+            )
+        )
+    if violations["overlaps"]:
+        raise QaFailure(
+            "{} rendered Node bodies overlap: {!r}".format(
+                description, violations["overlaps"]
+            )
+        )
+    return {
+        "frame": snapshot.get("frame"),
+        "canvas_rect": canvas["rect_points"],
+        "node_rects": rects,
+    }
 
 
 def _bring_node_header_into_view(client, node_id):

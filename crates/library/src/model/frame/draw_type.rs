@@ -150,6 +150,9 @@ pub enum DrawStyle {
         #[serde(default)]
         dash_offset: f64,
     },
+    /// Image -> Image alpha multiplication. Unlike Fill and Stroke, this
+    /// operates on the complete upstream image produced by earlier stages.
+    Opacity { opacity: f64 },
     ColorOverlay {
         color: Color,
         opacity: f64,
@@ -254,6 +257,7 @@ impl Hash for DrawStyle {
                 }
                 OrderedFloat(*dash_offset).hash(state);
             }
+            DrawStyle::Opacity { opacity } => OrderedFloat(*opacity).hash(state),
             DrawStyle::ColorOverlay {
                 color,
                 opacity,
@@ -396,6 +400,10 @@ impl Default for DrawStyle {
 impl PartialEq for DrawStyle {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
+            (
+                DrawStyle::Opacity { opacity: opacity1 },
+                DrawStyle::Opacity { opacity: opacity2 },
+            ) => OrderedFloat(*opacity1) == OrderedFloat(*opacity2),
             (
                 DrawStyle::Stroke {
                     width: w1,
@@ -663,6 +671,7 @@ impl DrawStyle {
                 ..
             } if *width > 0.0 => stroke_visual_outset(*width, *offset, cap, join, *miter),
             Self::Stroke { .. }
+            | Self::Opacity { .. }
             | Self::ColorOverlay { .. }
             | Self::GradientOverlay { .. }
             | Self::PatternOverlay { .. }

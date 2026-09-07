@@ -268,13 +268,6 @@ impl OperationDescriptor {
                     PortSide::Right,
                     PortExposure::Graph,
                 ),
-                PortDefinition::output(
-                    crate::model::project::STYLE_OUTPUT_PORT,
-                    "Style",
-                    PortDataType::Style,
-                    PortSide::Right,
-                    PortExposure::Graph,
-                ),
             ],
         )
     }
@@ -284,11 +277,25 @@ impl OperationDescriptor {
     pub fn image_opacity_style(
         properties: Vec<PropertyDefinition>,
     ) -> Result<Self, OperationDescriptorError> {
+        Self::image_style(
+            IMAGE_OPACITY_STYLE_COMPONENT_ID,
+            "Image Opacity",
+            properties,
+        )
+    }
+
+    /// An ordinary unary image operation. Its input is the complete image
+    /// produced by the preceding node, never an aggregate list of styles.
+    pub fn image_style(
+        component_id: impl Into<String>,
+        label: impl Into<String>,
+        properties: Vec<PropertyDefinition>,
+    ) -> Result<Self, OperationDescriptorError> {
         Self::new(
             STYLE_CATEGORY,
-            IMAGE_OPACITY_STYLE_COMPONENT_ID,
+            component_id,
             STYLE_APPLY_OPERATION,
-            "Image Opacity",
+            label,
             properties,
             [
                 PortDefinition::input(TIME_PORT, "Time", PortDataType::Number),

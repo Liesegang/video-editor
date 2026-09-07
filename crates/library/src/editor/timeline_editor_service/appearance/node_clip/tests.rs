@@ -196,6 +196,33 @@ fn instance_edit_copy_on_write_preserves_the_sibling_appearance() {
 }
 
 #[test]
+fn last_shape_raster_cannot_be_removed_from_the_structured_facade() {
+    let (service, plugins, item_id, _) = converted_shape();
+    let initial = service
+        .node_clip_appearance_stack(item_id)
+        .expect("stack")
+        .expect("structured Appearance");
+    let fill_id = initial.operations[0].node_id;
+    let stroke_id = initial.operations[1].node_id;
+    service
+        .add_node_clip_appearance_operation(&plugins, item_id, "drop_shadow", 0)
+        .expect("leading Image effect");
+    service
+        .remove_node_clip_appearance_operation(item_id, fill_id)
+        .expect("Stroke remains as the Shape raster");
+    let before = service.snapshot().expect("before rejected removal");
+    let error = service
+        .remove_node_clip_appearance_operation(item_id, stroke_id)
+        .expect_err("an all-Image graph loses the authoritative Shape source");
+    assert!(error.to_string().contains("at least one Fill or Stroke"));
+    assert_eq!(
+        service.snapshot().expect("after rejected removal").as_ref(),
+        before.as_ref(),
+        "validation must precede copy-on-write and history mutation"
+    );
+}
+
+#[test]
 fn arbitrary_style_topology_hides_the_facade_without_projecting_fake_state() {
     let (service, _, item_id, instance_id) = converted_shape();
     let stack = service
@@ -204,27 +231,15 @@ fn arbitrary_style_topology_hides_the_facade_without_projecting_fake_state() {
         .expect("structured");
     let project = service.snapshot().expect("project");
     let definition = &project.module_definitions[&stack.definition_id];
-    let stack_node_id = definition
-        .graph
-        .nodes
-        .values()
-        .find_map(|node| match node.content() {
-            NodeContent::NativeOperation(operation)
-                if operation.catalog_id == crate::model::node::APPEARANCE_STACK_CATALOG_ID =>
-            {
-                Some(node.id)
-            }
-            _ => None,
-        })
-        .expect("Appearance Stack Node");
+    let fill_id = stack.operations[0].node_id;
     let connection_id = definition
         .graph
         .connections
         .iter()
         .find(|connection| {
-            connection.to.node_id == stack_node_id && connection.to.port == SHAPE_INPUT_PORT
+            connection.to.node_id == fill_id && connection.to.port == SHAPE_INPUT_PORT
         })
-        .expect("Shape input")
+        .expect("Fill Shape input")
         .id;
     drop(project);
 
@@ -274,11 +289,18 @@ fn shared_style_consumer_hides_facade_before_a_structured_remove_can_delete_it()
             .is_none(),
         "a Style shared with arbitrary Image topology must not expose destructive structured controls"
     );
+    let before_failed_remove = service.snapshot().expect("before rejected remove");
+    let before_revision = service.revision().expect("before revision");
     assert!(
         service
             .remove_node_clip_appearance_operation(item_id, style_id)
             .is_err(),
         "structured removal must refuse a shared Style Node"
+    );
+    assert_eq!(service.revision().expect("after revision"), before_revision);
+    assert_eq!(
+        service.snapshot().expect("after rejected remove").as_ref(),
+        before_failed_remove.as_ref()
     );
     let project = service.snapshot().expect("project");
     let definition_id = project.module_instances[&instance_id].definition_id;
@@ -287,5 +309,43 @@ fn shared_style_consumer_hides_facade_before_a_structured_remove_can_delete_it()
             .graph
             .nodes
             .contains_key(&style_id)
+    );
+}
+
+#[test]
+fn interface_owned_merge_is_not_claimed_as_a_generated_appearance_merge() {
+    let (service, _, item_id, _) = converted_shape();
+    let project = service.snapshot().expect("project");
+    let SourceRef::Module(invocation) = &project.items[&item_id].source else {
+        panic!("converted Shape must remain a Node Clip");
+    };
+    let mut definition = project.module_definitions
+        [&project.module_instances[&invocation.instance_id].definition_id]
+        .clone();
+    let merge_id = definition
+        .graph
+        .nodes
+        .values()
+        .find(|node| matches!(node.content(), NodeContent::Merge))
+        .expect("Fill and Stroke use a canonical Merge")
+        .id;
+    definition
+        .interface
+        .parameters
+        .push(crate::model::authoring::PublishedParameter {
+            id: PublishedParameterId::new(),
+            name: "Externally owned Merge time".to_string(),
+            data_type: PortDataType::Number,
+            default_value: PropertyValue::from(0.0),
+            target: ModulePortAddress {
+                node_id: merge_id,
+                port: crate::model::project::TIME_PORT.to_string(),
+            },
+        });
+    assert!(
+        recognize(&definition, invocation.output_id)
+            .expect("recognition")
+            .is_none(),
+        "structured rewiring must never delete an interface-owned Merge"
     );
 }

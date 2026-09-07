@@ -9,6 +9,7 @@ use std::collections::HashSet;
 use library::model::authoring::TimelineItemId;
 use library::model::frame::entity::{FrameContent, FrameGroupKind, FrameItem, FrameObject};
 use library::model::frame::frame::FrameInfo;
+use library::model::frame::image_bounds::frame_image_bounds;
 use library::model::frame::transform::Transform;
 use library::rendering::renderer::Affine2D;
 
@@ -202,7 +203,12 @@ fn find_item_geometry(
                 .iter()
                 .flat_map(|outline| outline.iter().copied())
                 .collect::<Vec<_>>();
-            let local_bounds = egui::Rect::from_points(&local_points);
+            let local_bounds = frame_image_bounds(&group.items, group.effect_time.into_inner())
+                .and_then(|bounds| {
+                    let (x, y, width, height) = bounds.visual.as_tuple();
+                    positive_rect(x, y, width, height)
+                })
+                .unwrap_or_else(|| egui::Rect::from_points(&local_points));
             if !local_bounds.is_positive() {
                 return None;
             }

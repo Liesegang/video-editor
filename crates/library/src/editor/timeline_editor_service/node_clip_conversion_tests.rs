@@ -75,48 +75,6 @@ pub(super) fn small_service(name: &str) -> (TimelineEditorService, TimelineTrack
     (TimelineEditorService::new(project).unwrap(), track_id)
 }
 
-pub(super) fn rendered_pixels(
-    project: &AuthoringProject,
-    plugins: Arc<PluginManager>,
-    frame_number: u64,
-) -> Vec<u8> {
-    let timeline = &project.timelines[&project.root_timeline_id];
-    let plan = RenderPlanCompiler::compile(project).expect("RenderPlan");
-    let frame =
-        evaluate_render_plan_frame(project, &plan, plugins.as_ref(), frame_number, 1.0, None)
-            .expect("evaluated frame");
-    assert!(contains_visible_content(&frame.items));
-    let cache = Arc::new(CacheManager::new());
-    let renderer = SkiaRenderer::new(
-        u32::try_from(timeline.width).unwrap(),
-        u32::try_from(timeline.height).unwrap(),
-        timeline.background_color.clone(),
-        false,
-        None,
-        Some(Arc::clone(&cache)),
-    )
-    .expect("CPU renderer");
-    let mut render_service = RenderService::new(renderer, plugins, cache);
-    let RenderOutput::Image(image) = render_service
-        .render_authoring_frame(project, &frame, RenderDestination::Preview)
-        .expect("authoring frame")
-    else {
-        panic!("Preview must be an Image");
-    };
-    image.data
-}
-
-fn contains_visible_content(items: &[FrameItem]) -> bool {
-    items.iter().any(|item| match item {
-        FrameItem::Object(_) => true,
-        FrameItem::Group(group) => contains_visible_content(&group.items),
-        FrameItem::Transition(transition) => {
-            contains_visible_content(std::slice::from_ref(&transition.from.item))
-                || contains_visible_content(std::slice::from_ref(&transition.to.item))
-        }
-    })
-}
-
 struct ShapeFrameView<'a> {
     object: &'a FrameObject,
     path: &'a str,
@@ -631,7 +589,7 @@ fn shape_and_image_sources_keep_raster_parity() {
 }
 
 #[test]
-fn multiple_appearance_branches_convert_to_one_ordered_appearance_stack_with_pixel_parity() {
+fn multiple_appearance_branches_convert_to_one_ordered_image_chain_with_pixel_parity() {
     let plugins = Arc::new(PluginManager::default());
     let (service, track_id) = small_service("Appearance conversion");
     let fill = fill(plugins.as_ref(), color(30, 70, 210, 255));
@@ -681,63 +639,58 @@ fn multiple_appearance_branches_convert_to_one_ordered_appearance_stack_with_pix
             .iter()
             .all(|id| definition.graph.nodes.contains_key(id))
     );
-    let stack = definition
+    let merges = definition
         .graph
         .nodes
         .values()
-        .find(|node| {
-            matches!(
-                node.content(),
-                NodeContent::NativeOperation(operation)
-                    if operation.catalog_id
-                        == crate::model::node::APPEARANCE_STACK_CATALOG_ID
-            )
-        })
-        .expect("parallel Appearance values share one Appearance Stack");
-    let mut inputs = definition
+        .filter(|node| matches!(node.content(), NodeContent::Merge))
+        .map(|node| node.id)
+        .collect::<Vec<_>>();
+    assert_eq!(merges.len(), 2, "each later raster adds one Image Merge");
+    assert!(
+        !definition.graph.connections.iter().any(|connection| {
+            connection.to.node_id == appearance_ids[0]
+                && connection.to.port == crate::model::project::IMAGE_INPUT_PORT
+        }),
+        "an Image effect before the first raster consumes transparent input"
+    );
+    let shape_inputs = definition
         .graph
         .connections
         .iter()
         .filter(|connection| {
-            connection.to.node_id == stack.id
-                && connection.to.port == crate::model::project::APPEARANCE_STYLES_PORT
+            [appearance_ids[1], appearance_ids[2]].contains(&connection.to.node_id)
+                && connection.to.port == SHAPE_INPUT_PORT
         })
-        .map(|connection| (connection.order, connection.from.node_id))
         .collect::<Vec<_>>();
-    inputs.sort_by_key(|(order, _)| *order);
-    assert_eq!(
-        inputs,
-        vec![
-            (0, appearance_ids[0]),
-            (1, appearance_ids[1]),
-            (2, appearance_ids[2]),
-        ]
-    );
-    assert!(inputs.iter().all(|(_, node_id)| {
-        definition.graph.connections.iter().any(|connection| {
-            connection.from.node_id == *node_id
-                && connection.from.port == crate::model::project::STYLE_OUTPUT_PORT
-                && connection.to.node_id == stack.id
-        })
-    }));
-    assert_eq!(
+    assert_eq!(shape_inputs.len(), 2);
+    assert_eq!(shape_inputs[0].from, shape_inputs[1].from);
+    let merge_for_raster = |raster_id| {
         definition
             .graph
             .connections
             .iter()
-            .filter(|connection| {
-                connection.to.node_id == stack.id
-                    && connection.to.port == crate::model::project::SHAPE_INPUT_PORT
+            .find(|connection| {
+                connection.from.node_id == raster_id
+                    && connection.to.port == crate::model::project::MERGE_IMAGES_PORT
+                    && connection.order == 1
             })
-            .count(),
-        1,
-        "Appearance Stack owns the only Shape dependency"
-    );
-    assert!(appearance_ids.iter().all(|node_id| {
-        !definition.graph.connections.iter().any(|connection| {
-            connection.to.node_id == *node_id
-                && connection.to.port == crate::model::project::SHAPE_INPUT_PORT
-        })
+            .expect("later raster is the foreground Merge input")
+            .to
+            .node_id
+    };
+    let first_merge = merge_for_raster(appearance_ids[1]);
+    let second_merge = merge_for_raster(appearance_ids[2]);
+    assert_ne!(first_merge, second_merge);
+    assert!(definition.graph.connections.iter().any(|connection| {
+        connection.from.node_id == appearance_ids[0]
+            && connection.to.node_id == first_merge
+            && connection.order == 0
+    }));
+    assert!(definition.graph.connections.iter().any(|connection| {
+        connection.from.node_id == first_merge
+            && connection.to.node_id == second_merge
+            && connection.order == 0
     }));
     assert!(appearance_ids.iter().all(|node_id| {
         definition
@@ -789,15 +742,15 @@ fn node_clip_shape_catalog_operations_execute_path_effect_and_xy_transform() {
         })
         .unwrap()
         .id;
-    let appearance_stack_id = definition
+    let fill_id = definition
         .graph
         .nodes
         .values()
         .find(|node| {
             matches!(
                 node.content(),
-                NodeContent::NativeOperation(operation)
-                    if operation.catalog_id == crate::model::node::APPEARANCE_STACK_CATALOG_ID
+                NodeContent::PluginOperation(operation)
+                    if operation.component_id == "fill"
             )
         })
         .unwrap()
@@ -808,7 +761,7 @@ fn node_clip_shape_catalog_operations_execute_path_effect_and_xy_transform() {
         .iter()
         .find(|connection| {
             connection.from.node_id == source_id
-                && connection.to.node_id == appearance_stack_id
+                && connection.to.node_id == fill_id
                 && connection.to.port == SHAPE_INPUT_PORT
         })
         .unwrap()
@@ -878,7 +831,7 @@ fn node_clip_shape_catalog_operations_execute_path_effect_and_xy_transform() {
                 port: SHAPE_OUTPUT_PORT.to_string(),
             },
             ModulePortAddress {
-                node_id: appearance_stack_id,
+                node_id: fill_id,
                 port: SHAPE_INPUT_PORT.to_string(),
             },
         ),
@@ -997,3 +950,8 @@ fn unsupported_source_or_processor_fails_without_any_project_mutation() {
 mod appearance_parity;
 #[path = "node_clip_conversion_tests/graph_runtime.rs"]
 mod graph_runtime;
+mod image_domain;
+mod layout;
+#[path = "node_clip_conversion_tests/rendering.rs"]
+mod rendering;
+pub(super) use rendering::{rendered_pixels, rendered_pixels_at_scale};

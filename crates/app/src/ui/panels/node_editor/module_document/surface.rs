@@ -34,13 +34,20 @@ impl ViewportState for NodeEditorState {
 pub(super) fn fit_module_document_canvas(
     definition: &ModuleDefinition,
     viewport: egui::Rect,
+    measured: Option<&HashMap<uuid::Uuid, egui::Rect>>,
 ) -> Option<pan_zoom_ui::CanvasState> {
     let bounds = definition.graph.nodes.values().fold(None, |bounds, node| {
         let size = super::layout::sanitized_size(node.ui_size);
-        let node_rect = egui::Rect::from_min_size(
-            egui::pos2(node.ui_position[0], node.ui_position[1]),
-            egui::vec2(size[0], size[1]),
-        );
+        let node_rect = measured
+            .and_then(|rects| rects.get(&node.id))
+            .filter(|rect| rect.is_finite() && rect.is_positive())
+            .copied()
+            .unwrap_or_else(|| {
+                egui::Rect::from_min_size(
+                    egui::pos2(node.ui_position[0], node.ui_position[1]),
+                    egui::vec2(size[0], size[1]),
+                )
+            });
         Some(bounds.map_or(node_rect, |bounds: egui::Rect| bounds.union(node_rect)))
     })?;
     let mut fitted = pan_zoom_ui::fit_canvas(
@@ -130,6 +137,18 @@ pub(super) fn show_module_document(
         .lock()
         .map(|mut capture| std::mem::take(&mut *capture))
         .unwrap_or_default();
+    // Refine the initial factory-hint fit once, from Snarl's actual body
+    // geometry. This changes only the shared camera, never authored positions
+    // or history, and does not keep refitting after user navigation.
+    if state.fit_requested {
+        if let Some(canvas) =
+            fit_module_document_canvas(definition, viewport, Some(&capture.node_rects))
+        {
+            state.canvas = canvas;
+            state.fit_requested = false;
+            ui.ctx().request_repaint();
+        }
+    }
     let wire_paint_slot = capture.wire_paint_slot.take();
     let projection = ModuleSurfaceProjection::new(
         definition,

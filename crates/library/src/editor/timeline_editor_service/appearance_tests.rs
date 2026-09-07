@@ -131,18 +131,26 @@ fn appearance_property_uses_the_operation_property_owner_and_preserves_stack_ide
 }
 
 #[test]
-fn appearance_factory_rejects_image_only_style_from_direct_shape_contract() {
+fn appearance_factory_accepts_image_stages_without_inventing_a_raster_input() {
     let plugins = PluginManager::default();
     let service = TimelineEditorService::create_default("Appearance contract").expect("service");
     let item_id = text_item(&service);
-    let error = service
+    let (operation_id, _) = service
         .add_appearance_operation(
             &plugins,
             item_id,
             crate::plugin::IMAGE_OPACITY_STYLE_COMPONENT_ID,
             0,
         )
-        .expect_err("Image -> Image style cannot consume direct Shape");
-    assert!(error.to_string().contains("cannot run inline"));
+        .expect("Image -> Image is an ordered appearance stage");
+    let snapshot = service.snapshot().expect("snapshot");
+    let authored = operations(&snapshot, item_id);
+    assert_eq!(authored.len(), 1);
+    assert_eq!(authored[0].id, operation_id);
+    assert_eq!(
+        crate::model::authoring::appearance_input_kind(&authored[0].declared_ports),
+        Some(crate::model::authoring::AppearanceInputKind::Image),
+    );
+    service.undo().expect("one undo");
     assert!(operations(&service.snapshot().expect("snapshot"), item_id).is_empty());
 }

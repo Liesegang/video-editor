@@ -73,7 +73,18 @@ fn render_text_gradient(
     dimensions: (u32, u32),
     ensemble: Option<&crate::core::ensemble::EnsembleData>,
 ) -> Vec<[f32; 4]> {
-    render_text_styles(dimensions, "MMMM", &[normalized_gradient()], ensemble)
+    render_text_styles(
+        dimensions,
+        "MMMM",
+        &[
+            DrawStyle::Fill {
+                color: Color::white(),
+                offset: 0.0,
+            },
+            normalized_gradient(),
+        ],
+        ensemble,
+    )
 }
 
 fn render_text_styles(
@@ -128,7 +139,13 @@ fn render_shape_gradient(dimensions: (u32, u32)) -> Vec<[f32; 4]> {
     render_shape_styles(
         dimensions,
         "M 0 0 L 72 0 L 72 38 L 0 38 Z",
-        &[normalized_gradient()],
+        &[
+            DrawStyle::Fill {
+                color: Color::white(),
+                offset: 0.0,
+            },
+            normalized_gradient(),
+        ],
     )
     .expect("render normalized Shape Gradient Overlay")
 }

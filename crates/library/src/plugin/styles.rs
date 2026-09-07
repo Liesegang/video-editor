@@ -117,11 +117,17 @@ impl StylePlugin for ImageOpacityStylePlugin {
 
     fn evaluate_values(
         &self,
-        _context: &EvaluatedOperation<'_>,
-        _source_id: Uuid,
+        context: &EvaluatedOperation<'_>,
+        source_id: Uuid,
     ) -> Option<StyleConfig> {
-        // Image Opacity is evaluated by the typed Image -> Image frame path.
-        None
+        let opacity = context.number("opacity")?;
+        if !opacity.is_finite() || !(0.0..=1.0).contains(&opacity) {
+            return None;
+        }
+        Some(StyleConfig {
+            id: source_id,
+            style: DrawStyle::Opacity { opacity },
+        })
     }
 }
 
@@ -434,5 +440,40 @@ impl StylePlugin for StrokeStylePlugin {
         source_id: Uuid,
     ) -> Option<StyleConfig> {
         builtin_style_from_values(self.id(), source_id, context.properties())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn image_opacity_materializes_the_shared_image_style() {
+        let properties = HashMap::from([("opacity".to_string(), PropertyValue::from(0.375))]);
+        let context = EvaluatedOperation::new(&properties, 0.0, 60.0, (1920, 1080));
+        let source_id = Uuid::new_v4();
+
+        assert_eq!(
+            ImageOpacityStylePlugin.evaluate_values(&context, source_id),
+            Some(StyleConfig {
+                id: source_id,
+                style: DrawStyle::Opacity { opacity: 0.375 },
+            })
+        );
+    }
+
+    #[test]
+    fn image_opacity_rejects_non_finite_and_out_of_range_values() {
+        for opacity in [f64::NAN, f64::NEG_INFINITY, -0.1, 1.1, f64::INFINITY] {
+            let properties = HashMap::from([("opacity".to_string(), PropertyValue::from(opacity))]);
+            let context = EvaluatedOperation::new(&properties, 0.0, 60.0, (1920, 1080));
+            assert!(
+                ImageOpacityStylePlugin
+                    .evaluate_values(&context, Uuid::new_v4())
+                    .is_none(),
+                "accepted opacity {opacity}"
+            );
+        }
     }
 }

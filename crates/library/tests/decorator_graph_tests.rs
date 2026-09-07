@@ -593,7 +593,7 @@ fn background_pending_configs_fail_closed_but_root_state_remains_supported() -> 
     assert!(error.to_string().contains("pending Decorator configs"));
 
     let mut background = runtime_path_shape("M 0 0 L 10 0 L 5 10 Z", &[])?;
-    let effect = ImageEffect {
+    let effect = ImageEffect::Plugin {
         effect_type: "blur".to_string(),
         properties: std::collections::HashMap::new(),
     };
@@ -736,7 +736,7 @@ fn legacy_v1_backplate_keeps_one_shape_paint_time_appearance() -> Result<()> {
 fn target_part_opacity_survives_until_style_rasterization() -> Result<()> {
     let plugins = Arc::new(PluginManager::default());
     let (mut text, mut background) = runtime_shapes(&plugins)?;
-    background.effects.push(ImageEffect {
+    background.effects.push(ImageEffect::Plugin {
         effect_type: "grouped-opacity-fixture".to_string(),
         properties: Default::default(),
     });

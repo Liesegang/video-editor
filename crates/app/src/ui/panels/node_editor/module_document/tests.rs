@@ -427,7 +427,7 @@ fn opening_a_module_fits_every_node_inside_the_visible_canvas() {
         .ui_position = [980.0, 420.0];
     let viewport = egui::Rect::from_min_size(egui::pos2(140.0, 90.0), egui::vec2(760.0, 460.0));
 
-    let canvas = surface::fit_module_document_canvas(&definition, viewport)
+    let canvas = surface::fit_module_document_canvas(&definition, viewport, None)
         .expect("finite module layout fits the viewport");
     let transform = pan_zoom_ui::CanvasTransform::new(viewport.min, canvas);
 
@@ -446,6 +446,33 @@ fn opening_a_module_fits_every_node_inside_the_visible_canvas() {
             node_id = node.id,
         );
     }
+}
+
+#[test]
+fn opening_uses_measured_body_extents_without_rewriting_node_presentations() {
+    let plugins = PluginManager::default();
+    let (definition, source_id, output_id) = fixture(&plugins);
+    let before = definition.clone();
+    let body = |id, size| {
+        let position = definition.graph.nodes[&id].ui_position;
+        egui::Rect::from_min_size(egui::pos2(position[0], position[1]), size)
+    };
+    let measured = HashMap::from([
+        (source_id, body(source_id, egui::vec2(620.0, 780.0))),
+        (output_id, body(output_id, egui::vec2(360.0, 240.0))),
+    ]);
+    let viewport = egui::Rect::from_min_size(egui::pos2(100.0, 70.0), egui::vec2(760.0, 460.0));
+    let hint =
+        surface::fit_module_document_canvas(&definition, viewport, None).expect("factory hint fit");
+    let fitted = surface::fit_module_document_canvas(&definition, viewport, Some(&measured))
+        .expect("measured body fit");
+    let transform = pan_zoom_ui::CanvasTransform::new(viewport.min, fitted);
+
+    assert!(fitted.zoom.x < hint.zoom.x);
+    for rect in measured.values() {
+        assert!(viewport.contains_rect(transform.world_rect_to_screen(*rect).expect("finite body")));
+    }
+    assert_eq!(definition, before);
 }
 
 #[test]

@@ -9,12 +9,13 @@ use super::super::module_structure::{
 use super::*;
 use crate::editor::AppearanceOperationFactory;
 use crate::model::authoring::{
-    ModuleConnection, ModuleNodePortContract, ModulePortAddress, PublishedParameter,
+    AppearanceInputKind, ModuleConnection, ModuleNodePortContract, ModulePortAddress,
+    PublishedParameter, appearance_input_kind,
 };
 use crate::model::node::NodeContent;
 use crate::model::project::{
-    APPEARANCE_STYLES_PORT, IMAGE_OUTPUT_PORT, PortDataType, PortDirection, PortMultiplicity,
-    SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT, STYLE_OUTPUT_PORT,
+    IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, PortDataType, PortDirection,
+    PortMultiplicity, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT,
 };
 use crate::plugin::{PROPERTY_PORT_PREFIX, STYLE_APPLY_OPERATION, STYLE_CATEGORY};
 
@@ -25,7 +26,7 @@ pub struct NodeClipAppearanceEntry {
     pub parameter_ids: Vec<PublishedParameterId>,
 }
 
-/// Derived facade over one unambiguous Shape-to-Appearance Stack. It is never
+/// Derived facade over one unambiguous Shape/Image appearance chain. It is never
 /// persisted and disappears as soon as arbitrary Node edits make the chain
 /// ambiguous.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -40,7 +41,137 @@ pub struct NodeClipAppearanceStack {
 pub(in crate::editor::timeline_editor_service) struct RecognizedAppearance {
     pub(in crate::editor::timeline_editor_service) shape_links: Vec<ModuleConnectionId>,
     pub(in crate::editor::timeline_editor_service) entries: Vec<NodeClipAppearanceEntry>,
-    stack_node_id: uuid::Uuid,
+    shape_source: ModulePortAddress,
+    merge_node_ids: Vec<uuid::Uuid>,
+    topology_link_ids: Vec<ModuleConnectionId>,
+    downstream_link: ModuleConnection,
+}
+
+/// Materializes the one canonical graph representation used by conversion and
+/// structured Appearance edits. Raster operations always read the original
+/// Shape. Image operations consume the preceding accumulated Image, while an
+/// Image operation at the beginning deliberately has no input and therefore
+/// evaluates as transparent.
+pub(in crate::editor::timeline_editor_service) fn build_appearance_chain(
+    definition: &mut ModuleDefinition,
+    shape_source: &ModulePortAddress,
+    operation_ids: &[uuid::Uuid],
+    first_column: f32,
+) -> Result<(ModulePortAddress, f32), String> {
+    let mut accumulated = None;
+    let mut column = first_column;
+    for node_id in operation_ids.iter().copied() {
+        let kind = appearance_node_kind(definition, node_id)?;
+        let node = definition
+            .graph
+            .nodes
+            .get_mut(&node_id)
+            .ok_or_else(|| format!("Missing Appearance Node {node_id}"))?;
+        node.ui_size[0] = node.ui_size[0].max(crate::model::node::PROPERTY_NODE_UI_WIDTH);
+        node.ui_position = [column, 40.0];
+        column += node.ui_size[0] + crate::model::node::NODE_LAYOUT_COLUMN_GAP;
+        let output = ModulePortAddress {
+            node_id,
+            port: IMAGE_OUTPUT_PORT.to_string(),
+        };
+        match kind {
+            AppearanceInputKind::Shape => {
+                definition.graph.connections.push(ModuleConnection {
+                    id: ModuleConnectionId::new(),
+                    from: shape_source.clone(),
+                    to: ModulePortAddress {
+                        node_id,
+                        port: SHAPE_INPUT_PORT.to_string(),
+                    },
+                    order: 0,
+                    blend_mode: BlendMode::Normal,
+                });
+                accumulated = Some(if let Some(previous) = accumulated {
+                    let (output, next_column) =
+                        append_appearance_merge(definition, previous, output, column)?;
+                    column = next_column;
+                    output
+                } else {
+                    output
+                });
+            }
+            AppearanceInputKind::Image => {
+                if let Some(previous) = accumulated {
+                    definition.graph.connections.push(ModuleConnection {
+                        id: ModuleConnectionId::new(),
+                        from: previous,
+                        to: ModulePortAddress {
+                            node_id,
+                            port: IMAGE_INPUT_PORT.to_string(),
+                        },
+                        order: 0,
+                        blend_mode: BlendMode::Normal,
+                    });
+                }
+                accumulated = Some(output);
+            }
+        }
+    }
+    accumulated
+        .map(|output| (output, column))
+        .ok_or_else(|| "An Appearance needs at least one operation".to_string())
+}
+
+fn append_appearance_merge(
+    definition: &mut ModuleDefinition,
+    previous: ModulePortAddress,
+    raster: ModulePortAddress,
+    column: f32,
+) -> Result<(ModulePortAddress, f32), String> {
+    let mut merge = Node::new_merge("Appearance Merge");
+    merge.ui_position = [column, 220.0];
+    let merge_id = merge.id;
+    let merge_width = merge.ui_size[0];
+    if definition.graph.nodes.insert(merge_id, merge).is_some() {
+        return Err(format!("Appearance Merge {merge_id} already exists"));
+    }
+    for (order, from) in [previous, raster].into_iter().enumerate() {
+        definition.graph.connections.push(ModuleConnection {
+            id: ModuleConnectionId::new(),
+            from,
+            to: ModulePortAddress {
+                node_id: merge_id,
+                port: MERGE_IMAGES_PORT.to_string(),
+            },
+            order: order as i64,
+            blend_mode: BlendMode::Normal,
+        });
+    }
+    Ok((
+        ModulePortAddress {
+            node_id: merge_id,
+            port: IMAGE_OUTPUT_PORT.to_string(),
+        },
+        column + merge_width + crate::model::node::NODE_LAYOUT_COLUMN_GAP,
+    ))
+}
+
+fn appearance_node_kind(
+    definition: &ModuleDefinition,
+    node_id: uuid::Uuid,
+) -> Result<AppearanceInputKind, String> {
+    let node = definition
+        .graph
+        .nodes
+        .get(&node_id)
+        .ok_or_else(|| format!("Missing Appearance Node {node_id}"))?;
+    let NodeContent::PluginOperation(content) = node.content() else {
+        return Err(format!(
+            "Module Node {node_id} is not an Appearance operation"
+        ));
+    };
+    if content.category != STYLE_CATEGORY || content.operation != STYLE_APPLY_OPERATION {
+        return Err(format!(
+            "Module Node {node_id} is not an Appearance operation"
+        ));
+    }
+    appearance_input_kind(&content.declared_ports)
+        .ok_or_else(|| format!("Appearance Node {node_id} has an incompatible Image contract"))
 }
 
 impl TimelineEditorService {
@@ -141,12 +272,9 @@ impl TimelineEditorService {
                             "Appearance index {index} is outside Node Clip {item_id}"
                         ));
                     }
-                    let first = definition.graph.nodes[&stack.entries[0].node_id].ui_position;
-                    node.ui_position = [first[0], first[1] + index as f32 * 80.0 + 80.0];
                     if definition.graph.nodes.insert(operation_id, node).is_some() {
                         return Err(format!("Module Node {operation_id} already exists"));
                     }
-                    insert_style_output(definition, &stack, operation_id, index)?;
 
                     let appearance_nodes = stack
                         .entries
@@ -186,6 +314,7 @@ impl TimelineEditorService {
                         .map(|entry| entry.node_id)
                         .collect::<Vec<_>>();
                     order.insert(index, operation_id);
+                    rebuild_appearance_chain(definition, &stack, &order)?;
                     reorder_published_operation_groups(definition, &order);
                     super::super::module::bump_topology_revision(definition)?;
                     super::super::module::bump_interface_version(definition)?;
@@ -240,7 +369,7 @@ impl TimelineEditorService {
                         .collect::<Vec<_>>();
                     let moved = order.remove(old_index);
                     order.insert(new_index, moved);
-                    reorder_style_outputs(definition, stack.stack_node_id, &order)?;
+                    rebuild_appearance_chain(definition, &stack, &order)?;
                     reorder_published_operation_groups(definition, &order);
                     super::super::module::bump_topology_revision(definition)?;
                     super::super::module::bump_interface_version(definition)?;
@@ -293,11 +422,26 @@ impl TimelineEditorService {
                             .iter()
                             .position(|entry| entry.node_id == operation_id)
                             .ok_or_else(|| format!("Missing Appearance Node {operation_id}"))?;
-                        collapse_removed_style(definition, &stack, index)?;
+                        let mut order = stack
+                            .entries
+                            .iter()
+                            .map(|entry| entry.node_id)
+                            .collect::<Vec<_>>();
+                        order.remove(index);
+                        if !order.iter().any(|node_id| {
+                            appearance_node_kind(definition, *node_id)
+                                == Ok(AppearanceInputKind::Shape)
+                        }) {
+                            return Err(
+                                "A structured Appearance needs at least one Fill or Stroke; edit an all-Image graph in the Node Editor"
+                                    .to_string(),
+                            );
+                        }
                         let removed = super::super::module::removal::remove_nodes_from_definition(
                             definition,
                             &[operation_id],
                         )?;
+                        rebuild_appearance_chain(definition, &stack, &order)?;
                         definition.validate()?;
                         removed
                     };
@@ -315,67 +459,40 @@ impl TimelineEditorService {
     }
 }
 
-fn insert_style_output(
+fn rebuild_appearance_chain(
     definition: &mut ModuleDefinition,
     stack: &RecognizedAppearance,
-    node_id: uuid::Uuid,
-    index: usize,
-) -> Result<(), String> {
-    definition.graph.connections.push(ModuleConnection {
-        id: ModuleConnectionId::new(),
-        from: ModulePortAddress {
-            node_id,
-            port: STYLE_OUTPUT_PORT.to_string(),
-        },
-        to: ModulePortAddress {
-            node_id: stack.stack_node_id,
-            port: APPEARANCE_STYLES_PORT.to_string(),
-        },
-        order: index as i64,
-        blend_mode: BlendMode::Normal,
-    });
-    let mut order = stack
-        .entries
-        .iter()
-        .map(|entry| entry.node_id)
-        .collect::<Vec<_>>();
-    order.insert(index, node_id);
-    reorder_style_outputs(definition, stack.stack_node_id, &order)?;
-    Ok(())
-}
-
-fn collapse_removed_style(
-    definition: &mut ModuleDefinition,
-    stack: &RecognizedAppearance,
-    removed_index: usize,
-) -> Result<(), String> {
-    let mut order = stack
-        .entries
-        .iter()
-        .map(|entry| entry.node_id)
-        .collect::<Vec<_>>();
-    order.remove(removed_index);
-    reorder_style_outputs(definition, stack.stack_node_id, &order)
-}
-
-fn reorder_style_outputs(
-    definition: &mut ModuleDefinition,
-    stack_node_id: uuid::Uuid,
     order: &[uuid::Uuid],
 ) -> Result<(), String> {
-    for (index, source_id) in order.iter().enumerate() {
-        let connection = definition
-            .graph
-            .connections
-            .iter_mut()
-            .find(|connection| {
-                connection.from.node_id == *source_id
-                    && connection.from.port == STYLE_OUTPUT_PORT
-                    && connection.to.node_id == stack_node_id
-                    && connection.to.port == APPEARANCE_STYLES_PORT
-            })
-            .ok_or_else(|| format!("Missing Appearance Stack input for {source_id}"))?;
-        connection.order = index as i64;
+    let topology_links = stack
+        .topology_link_ids
+        .iter()
+        .copied()
+        .collect::<HashSet<_>>();
+    definition.graph.connections.retain(|connection| {
+        connection.id == stack.downstream_link.id || !topology_links.contains(&connection.id)
+    });
+    for merge_id in &stack.merge_node_ids {
+        definition.graph.nodes.remove(merge_id);
+    }
+    let first_column = order
+        .iter()
+        .filter_map(|node_id| definition.graph.nodes.get(node_id))
+        .map(|node| node.ui_position[0])
+        .reduce(f32::min)
+        .unwrap_or(40.0);
+    let (image, _) = build_appearance_chain(definition, &stack.shape_source, order, first_column)?;
+    if let Some(downstream) = definition
+        .graph
+        .connections
+        .iter_mut()
+        .find(|connection| connection.id == stack.downstream_link.id)
+    {
+        downstream.from = image;
+    } else {
+        let mut downstream = stack.downstream_link.clone();
+        downstream.from = image;
+        definition.graph.connections.push(downstream);
     }
     Ok(())
 }
@@ -407,12 +524,28 @@ pub(in crate::editor::timeline_editor_service) fn recognize(
         if !visited.insert(node.id) || downstream.from.port != IMAGE_OUTPUT_PORT {
             return Ok(None);
         }
-        if matches!(
-            node.content(),
-            NodeContent::NativeOperation(operation)
-                if operation.catalog_id == crate::model::node::APPEARANCE_STACK_CATALOG_ID
-        ) {
-            return recognize_stack(definition, node.id, downstream.id);
+        if is_appearance_node(node) || matches!(node.content(), NodeContent::Merge) {
+            let mut chain_visited = HashSet::new();
+            let Some(parsed) = parse_appearance_source(
+                definition,
+                &downstream.from,
+                downstream.id,
+                &mut chain_visited,
+            )?
+            else {
+                return Ok(None);
+            };
+            let Some(shape_source) = parsed.shape_source else {
+                return Ok(None);
+            };
+            return Ok(Some(RecognizedAppearance {
+                shape_links: parsed.shape_links,
+                entries: parsed.entries,
+                shape_source,
+                merge_node_ids: parsed.merge_node_ids,
+                topology_link_ids: parsed.topology_link_ids,
+                downstream_link: downstream.clone(),
+            }));
         }
         let contract = ModuleNodePortContract::resolve(node).map_err(LibraryError::Validation)?;
         let image_inputs = contract
@@ -434,29 +567,106 @@ pub(in crate::editor::timeline_editor_service) fn recognize(
     }
 }
 
-fn recognize_stack(
+#[derive(Default)]
+struct ParsedAppearance {
+    shape_source: Option<ModulePortAddress>,
+    shape_links: Vec<ModuleConnectionId>,
+    entries: Vec<NodeClipAppearanceEntry>,
+    merge_node_ids: Vec<uuid::Uuid>,
+    topology_link_ids: Vec<ModuleConnectionId>,
+}
+
+fn parse_appearance_source(
     definition: &ModuleDefinition,
-    stack_node_id: uuid::Uuid,
-    downstream_link: ModuleConnectionId,
-) -> Result<Option<RecognizedAppearance>, LibraryError> {
-    let mut stack_consumers = definition
-        .graph
-        .connections
-        .iter()
-        .filter(|connection| connection.from.node_id == stack_node_id);
-    if stack_consumers.next().map(|connection| connection.id) != Some(downstream_link)
-        || stack_consumers.next().is_some()
-    {
+    source: &ModulePortAddress,
+    consumer_link: ModuleConnectionId,
+    visited: &mut HashSet<uuid::Uuid>,
+) -> Result<Option<ParsedAppearance>, LibraryError> {
+    if source.port != IMAGE_OUTPUT_PORT || !visited.insert(source.node_id) {
         return Ok(None);
     }
-    let shape_target = ModulePortAddress {
-        node_id: stack_node_id,
-        port: SHAPE_INPUT_PORT.to_string(),
-    };
-    let Some(shape_connection) = unique_incoming(definition, &shape_target) else {
+    let Some(node) = definition.graph.nodes.get(&source.node_id) else {
         return Ok(None);
     };
-    if shape_connection.from.port != SHAPE_OUTPUT_PORT {
+    if !has_only_image_consumer(definition, node.id, consumer_link) {
+        return Ok(None);
+    }
+
+    if let Some((entry, kind)) = style_entry(definition, node) {
+        let mut parsed = match kind {
+            AppearanceInputKind::Shape => {
+                let target = ModulePortAddress {
+                    node_id: node.id,
+                    port: SHAPE_INPUT_PORT.to_string(),
+                };
+                let Some(shape_link) = unique_incoming(definition, &target) else {
+                    return Ok(None);
+                };
+                if shape_link.from.port != SHAPE_OUTPUT_PORT {
+                    return Ok(None);
+                }
+                ParsedAppearance {
+                    shape_source: Some(shape_link.from.clone()),
+                    shape_links: vec![shape_link.id],
+                    topology_link_ids: vec![shape_link.id],
+                    ..ParsedAppearance::default()
+                }
+            }
+            AppearanceInputKind::Image => {
+                let target = ModulePortAddress {
+                    node_id: node.id,
+                    port: IMAGE_INPUT_PORT.to_string(),
+                };
+                let inputs = definition
+                    .graph
+                    .connections
+                    .iter()
+                    .filter(|connection| connection.to == target)
+                    .collect::<Vec<_>>();
+                if inputs.len() > 1 {
+                    return Ok(None);
+                }
+                if let Some(input) = inputs.first() {
+                    let Some(parsed) =
+                        parse_appearance_source(definition, &input.from, input.id, visited)?
+                    else {
+                        return Ok(None);
+                    };
+                    parsed
+                } else {
+                    ParsedAppearance::default()
+                }
+            }
+        };
+        parsed.entries.push(entry);
+        parsed.topology_link_ids.push(consumer_link);
+        return Ok(Some(parsed));
+    }
+
+    if !matches!(node.content(), NodeContent::Merge) {
+        return Ok(None);
+    }
+    if definition
+        .interface
+        .parameters
+        .iter()
+        .any(|entry| entry.target.node_id == node.id)
+        || definition
+            .interface
+            .media_inputs
+            .iter()
+            .any(|entry| entry.target.node_id == node.id)
+        || definition
+            .interface
+            .signals
+            .iter()
+            .any(|entry| entry.source.node_id == node.id)
+        || definition
+            .interface
+            .actions
+            .iter()
+            .any(|entry| entry.target.node_id == node.id)
+    {
         return Ok(None);
     }
     let mut inputs = definition
@@ -464,44 +674,87 @@ fn recognize_stack(
         .connections
         .iter()
         .filter(|connection| {
-            connection.to.node_id == stack_node_id && connection.to.port == APPEARANCE_STYLES_PORT
+            connection.to.node_id == node.id && connection.to.port == MERGE_IMAGES_PORT
         })
         .collect::<Vec<_>>();
     inputs.sort_by_key(|connection| (connection.order, connection.id));
-    if inputs.is_empty() {
+    if definition
+        .graph
+        .connections
+        .iter()
+        .filter(|connection| connection.to.node_id == node.id)
+        .count()
+        != 2
+        || inputs.len() != 2
+        || inputs[0].order != 0
+        || inputs[1].order != 1
+        || inputs
+            .iter()
+            .any(|connection| connection.blend_mode != BlendMode::Normal)
+    {
         return Ok(None);
     }
-    let mut entries = Vec::with_capacity(inputs.len());
-    for connection in &inputs {
-        if connection.from.port != STYLE_OUTPUT_PORT {
-            return Ok(None);
-        }
-        let Some(node) = definition.graph.nodes.get(&connection.from.node_id) else {
-            return Ok(None);
-        };
-        let Some(entry) = style_entry(definition, node) else {
-            return Ok(None);
-        };
-        let mut consumers = definition
-            .graph
-            .connections
-            .iter()
-            .filter(|candidate| candidate.from.node_id == node.id);
-        if consumers.next().map(|candidate| candidate.id) != Some(connection.id)
-            || consumers.next().is_some()
-        {
-            return Ok(None);
-        }
-        entries.push(entry);
+    let Some(mut prior) =
+        parse_appearance_source(definition, &inputs[0].from, inputs[0].id, visited)?
+    else {
+        return Ok(None);
+    };
+    let mut raster_visited = HashSet::new();
+    let Some(raster) = parse_appearance_source(
+        definition,
+        &inputs[1].from,
+        inputs[1].id,
+        &mut raster_visited,
+    )?
+    else {
+        return Ok(None);
+    };
+    if raster.entries.len() != 1 || raster.shape_source.is_none() {
+        return Ok(None);
     }
-    Ok(Some(RecognizedAppearance {
-        shape_links: vec![shape_connection.id],
-        entries,
-        stack_node_id,
-    }))
+    if let (Some(prior_source), Some(raster_source)) =
+        (prior.shape_source.as_ref(), raster.shape_source.as_ref())
+        && prior_source != raster_source
+    {
+        return Ok(None);
+    }
+    if prior.shape_source.is_none() {
+        prior.shape_source = raster.shape_source;
+    }
+    prior.shape_links.extend(raster.shape_links);
+    prior.entries.extend(raster.entries);
+    prior.merge_node_ids.extend(raster.merge_node_ids);
+    prior.merge_node_ids.push(node.id);
+    prior.topology_link_ids.extend(raster.topology_link_ids);
+    prior.topology_link_ids.push(consumer_link);
+    Ok(Some(prior))
 }
 
-fn style_entry(definition: &ModuleDefinition, node: &Node) -> Option<NodeClipAppearanceEntry> {
+fn is_appearance_node(node: &Node) -> bool {
+    matches!(
+        node.content(),
+        NodeContent::PluginOperation(content)
+            if content.category == STYLE_CATEGORY && content.operation == STYLE_APPLY_OPERATION
+    )
+}
+
+fn has_only_image_consumer(
+    definition: &ModuleDefinition,
+    node_id: uuid::Uuid,
+    expected: ModuleConnectionId,
+) -> bool {
+    let mut consumers = definition
+        .graph
+        .connections
+        .iter()
+        .filter(|connection| connection.from.node_id == node_id);
+    consumers.next().map(|connection| connection.id) == Some(expected) && consumers.next().is_none()
+}
+
+fn style_entry(
+    definition: &ModuleDefinition,
+    node: &Node,
+) -> Option<(NodeClipAppearanceEntry, AppearanceInputKind)> {
     let NodeContent::PluginOperation(content) = node.content() else {
         return None;
     };
@@ -509,17 +762,18 @@ fn style_entry(definition: &ModuleDefinition, node: &Node) -> Option<NodeClipApp
         || node.bypassed
         || content.category != STYLE_CATEGORY
         || content.operation != STYLE_APPLY_OPERATION
-        || !crate::model::authoring::appearance_direct_contract_is_compatible(
-            &content.declared_ports,
-        )
     {
         return None;
     }
-    Some(NodeClipAppearanceEntry {
-        node_id: node.id,
-        component_id: content.component_id.clone(),
-        parameter_ids: operation_parameter_ids(definition, node.id, content)?,
-    })
+    let kind = appearance_input_kind(&content.declared_ports)?;
+    Some((
+        NodeClipAppearanceEntry {
+            node_id: node.id,
+            component_id: content.component_id.clone(),
+            parameter_ids: operation_parameter_ids(definition, node.id, content)?,
+        },
+        kind,
+    ))
 }
 
 fn unique_incoming<'a>(

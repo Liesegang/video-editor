@@ -8,7 +8,8 @@ use super::frame_values::{
 use super::*;
 use crate::core::render_plan::CompiledParticleSource;
 use crate::model::frame::particle::{
-    ParticleCollider, ParticleEmitterShape, ParticleForce, ParticleSceneParameters,
+    ParticleCollider, ParticleCollisionMode, ParticleEmitterShape, ParticleForce,
+    ParticleSceneParameters,
 };
 use crate::model::frame::point::PointSceneSource;
 use crate::model::node::ParticleNodeRole;
@@ -180,6 +181,7 @@ fn particle_force(
         | ParticleNodeRole::ShapeLocation
         | ParticleNodeRole::Initialize
         | ParticleNodeRole::CollisionPlane
+        | ParticleNodeRole::CollisionSphere
         | ParticleNodeRole::SpriteRenderer => Err(LibraryError::Validation(format!(
             "Particle executable contains non-force role {role:?} in its force list"
         ))),
@@ -190,16 +192,20 @@ fn particle_collision(
     role: ParticleNodeRole,
     values: &HashMap<String, PropertyValue>,
 ) -> Result<Option<ParticleCollider>, LibraryError> {
-    if role != ParticleNodeRole::CollisionPlane {
-        return Err(LibraryError::Validation(format!(
-            "Particle executable contains non-collision role {role:?} in its collision list"
-        )));
-    }
+    let node = match role {
+        ParticleNodeRole::CollisionPlane => "Collision Plane",
+        ParticleNodeRole::CollisionSphere => "Collision Sphere",
+        _ => {
+            return Err(LibraryError::Validation(format!(
+                "Particle executable contains non-collision role {role:?} in its collision list"
+            )));
+        }
+    };
     let active = match values.get("active") {
         Some(PropertyValue::Boolean(value)) => *value,
         _ => {
             return Err(frame_values::type_error(
-                "Collision Plane active",
+                &format!("{node} active"),
                 "Boolean",
             ));
         }
@@ -207,13 +213,42 @@ fn particle_collision(
     if !active {
         return Ok(None);
     }
-    Ok(Some(ParticleCollider::Plane {
-        plane_point: required_vec3(values, "plane_point", "Collision Plane")?,
-        plane_normal: required_vec3(values, "plane_normal", "Collision Plane")?,
-        radius: required_f32(values, "radius", "Collision Plane", "collision radius")?,
-        bounce: required_f32(values, "bounce", "Collision Plane", "collision bounce")?,
-        friction: required_f32(values, "friction", "Collision Plane", "collision friction")?,
-    }))
+    let collider = match role {
+        ParticleNodeRole::CollisionPlane => ParticleCollider::Plane {
+            plane_point: required_vec3(values, "plane_point", node)?,
+            plane_normal: required_vec3(values, "plane_normal", node)?,
+            radius: required_f32(values, "radius", node, "collision radius")?,
+            bounce: required_f32(values, "bounce", node, "collision bounce")?,
+            friction: required_f32(values, "friction", node, "collision friction")?,
+        },
+        ParticleNodeRole::CollisionSphere => ParticleCollider::Sphere {
+            center: required_vec3(values, "center", node)?,
+            radius: required_f32(values, "radius", node, "collision sphere radius")?,
+            particle_radius: required_f32(
+                values,
+                "particle_radius",
+                node,
+                "collision sphere particle radius",
+            )?,
+            mode: match required_string(values, "mode", node)?.as_str() {
+                "Solid" => ParticleCollisionMode::Solid,
+                "Container" => ParticleCollisionMode::Container,
+                value => {
+                    return Err(LibraryError::Validation(format!(
+                        "{node} has unknown mode '{value}'"
+                    )));
+                }
+            },
+            bounce: required_f32(values, "bounce", node, "collision bounce")?,
+            friction: required_f32(values, "friction", node, "collision friction")?,
+        },
+        _ => {
+            return Err(LibraryError::Validation(format!(
+                "Particle executable contains non-collision role {role:?} in its collision list"
+            )));
+        }
+    };
+    Ok(Some(collider))
 }
 
 fn optional_emitter_shape(

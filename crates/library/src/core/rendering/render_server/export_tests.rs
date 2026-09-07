@@ -18,7 +18,6 @@ use crate::model::project::{IMAGE_INPUT_PORT, PortDataType};
 use crate::plugin::{
     ExportDestination, ExportFrame, ExportPlugin, ExportSettings, Plugin, PluginManager,
 };
-#[cfg(all(feature = "gl", target_os = "windows"))]
 use crate::rendering::renderer::RenderOutput;
 use std::collections::HashMap;
 use std::fs;
@@ -30,8 +29,12 @@ use uuid::Uuid;
 
 #[path = "export_capability_tests.rs"]
 mod capability_tests;
+#[path = "export_image_style_tests.rs"]
+mod image_style_tests;
 #[path = "export_particle_collision_tests.rs"]
 mod particle_collision_tests;
+#[path = "export_particle_sphere_collision_tests.rs"]
+mod particle_sphere_collision_tests;
 #[path = "export_point_tests.rs"]
 mod point_tests;
 
@@ -274,7 +277,6 @@ fn export_gpu_preflight_resolves_inactive_nested_time_range_without_false_positi
     );
 }
 
-#[cfg(all(feature = "gl", target_os = "windows"))]
 fn read_rgba8_png(path: &std::path::Path) -> Vec<u8> {
     let decoder = png::Decoder::new(std::io::BufReader::new(fs::File::open(path).unwrap()));
     let mut reader = decoder.read_info().unwrap();
@@ -297,15 +299,22 @@ fn authoring_particle_png_export_matches_preview_and_is_nontransparent() {
 
 #[cfg(all(feature = "gl", target_os = "windows"))]
 fn assert_point_png_export_matches_preview(project: Arc<AuthoringProject>) {
-    let timeline_id = project.root_timeline_id;
-    let plan = Arc::new(RenderPlanCompiler::compile(project.as_ref()).unwrap());
-    let output = TemporaryPng::new();
-    let output_path = output.0.to_string_lossy().into_owned();
     let server = RenderServer::new(
         Arc::new(PluginManager::default()),
         Arc::new(CacheManager::new()),
     );
-    let frame_number = 60;
+    assert_authoring_png_matches_preview(server, project, 60);
+}
+
+fn assert_authoring_png_matches_preview(
+    server: RenderServer,
+    project: Arc<AuthoringProject>,
+    frame_number: i64,
+) -> Vec<u8> {
+    let timeline_id = project.root_timeline_id;
+    let plan = Arc::new(RenderPlanCompiler::compile(project.as_ref()).unwrap());
+    let output = TemporaryPng::new();
+    let output_path = output.0.to_string_lossy().into_owned();
 
     assert!(server.send_authoring_request(
         RenderRequestId::new(80),
@@ -335,19 +344,20 @@ fn assert_point_png_export_matches_preview(project: Arc<AuthoringProject>) {
         .unwrap();
     exported
         .output
-        .unwrap_or_else(|error| panic!("Point export preflight/render failed: {error}"));
+        .unwrap_or_else(|error| panic!("PNG export preflight/render failed: {error}"));
     assert_eq!(exported.frames_exported, 1);
     let preview_image = match preview.output {
         Ok(RenderOutput::Image(image)) => image,
         Ok(other) => panic!("expected terminal Preview image, got {other:?}"),
-        Err(error) => panic!("Point Preview failed while export succeeded: {error}"),
+        Err(error) => panic!("Preview failed while PNG export succeeded: {error}"),
     };
     let exported_pixels = read_rgba8_png(&output.0);
     assert_eq!(exported_pixels, preview_image.data);
     assert!(
         exported_pixels.chunks_exact(4).any(|pixel| pixel[3] != 0),
-        "Point PNG must contain at least one nontransparent pixel"
+        "PNG must contain at least one nontransparent pixel"
     );
+    exported_pixels
 }
 
 #[cfg(not(all(feature = "gl", target_os = "windows")))]

@@ -71,9 +71,16 @@ fn node_effect_graph_can_process_the_implicit_host_before_the_output_terminal() 
         items.iter().any(|item| match item {
             FrameItem::Group(group) => {
                 group.effects.iter().any(|effect| {
-                    effect.effect_type == "blur"
+                    let library::model::frame::effect::ImageEffect::Plugin {
+                        effect_type,
+                        properties,
+                    } = effect
+                    else {
+                        return false;
+                    };
+                    effect_type == "blur"
                         && matches!(
-                            effect.properties.get("sigma_x"),
+                            properties.get("sigma_x"),
                             Some(PropertyValue::Number(value)) if value.into_inner() > 0.0
                         )
                 }) || contains_nonzero_blur(&group.items)

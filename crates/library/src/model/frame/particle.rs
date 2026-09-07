@@ -9,8 +9,10 @@ use crate::model::property::Vec3;
 use serde::{Deserialize, Serialize};
 
 mod collision;
-use collision::PARTICLE_COLLISION_WORK_UNITS_PER_STAGE;
-pub use collision::{PARTICLE_MAX_COLLIDERS, PARTICLE_MAX_COLLISION_CONTACTS, ParticleCollider};
+pub use collision::{
+    PARTICLE_MAX_COLLIDERS, PARTICLE_MAX_COLLISION_CONTACTS, ParticleCollider,
+    ParticleCollisionMode,
+};
 
 pub const PARTICLE_FIXED_STEP_HZ: i64 = 120;
 pub const PARTICLE_MAX_CAPACITY: u32 = 100_000;
@@ -263,8 +265,9 @@ fn validate_particle_modifier_replay_budget(
         })
     });
     let base_work = u64::from(capacity).saturating_mul(lifetime_steps);
-    let collision_cost =
-        (collisions.len() as u64).saturating_mul(PARTICLE_COLLISION_WORK_UNITS_PER_STAGE);
+    let collision_cost = collisions.iter().fold(0_u64, |cost, collision| {
+        cost.saturating_add(collision.work_units())
+    });
     let modifier_cost = force_cost.saturating_add(collision_cost);
     let modifier_work = active_bound
         .saturating_mul(lifetime_steps)
@@ -437,6 +440,17 @@ mod tests {
         }
     }
 
+    fn sphere_collision() -> ParticleCollider {
+        ParticleCollider::Sphere {
+            center: vec3(0.0, 120.0, 0.0),
+            radius: OrderedFloat(100.0),
+            particle_radius: OrderedFloat(0.0),
+            mode: ParticleCollisionMode::Solid,
+            bounce: OrderedFloat(0.5),
+            friction: OrderedFloat(0.1),
+        }
+    }
+
     #[test]
     fn exact_media_time_maps_to_fixed_step_without_float_rounding() {
         assert_eq!(
@@ -572,6 +586,26 @@ mod tests {
         parameters
             .validate()
             .expect("collisions add no active-particle work without emission");
+    }
+
+    #[test]
+    fn scene_collision_budget_charges_sphere_contact_work_per_kind() {
+        let mut parameters = valid_parameters();
+        parameters.capacity = 8_192;
+        parameters.emission_rate = OrderedFloat(120.0);
+        parameters.lifetime_seconds = OrderedFloat(4.0);
+        parameters.collisions = vec![sphere_collision()];
+        parameters
+            .validate()
+            .expect("one Sphere fits the default Particle workload");
+
+        parameters.collisions = vec![sphere_collision(); PARTICLE_MAX_COLLIDERS];
+        assert!(parameters.validate().unwrap_err().contains("work budget"));
+
+        parameters.emission_rate = OrderedFloat(0.0);
+        parameters
+            .validate()
+            .expect("inactive Sphere stages add no active-particle work without emission");
     }
 
     #[test]

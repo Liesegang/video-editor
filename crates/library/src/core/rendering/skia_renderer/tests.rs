@@ -36,6 +36,8 @@ mod gpu_terminal;
 #[cfg(all(feature = "gl", target_os = "windows"))]
 #[path = "tests/gpu_terminal_hdr.rs"]
 mod gpu_terminal_hdr;
+#[path = "tests/image_style_bounds.rs"]
+mod image_style_bounds;
 #[path = "tests/layer_style_bounds.rs"]
 mod layer_style_bounds;
 #[path = "tests/layer_styles.rs"]
@@ -46,8 +48,14 @@ mod neutral_ensemble_text;
 #[path = "tests/particle_collision_gpu.rs"]
 mod particle_collision_gpu;
 #[cfg(all(feature = "gl", target_os = "windows"))]
+#[path = "tests/particle_collision_support.rs"]
+mod particle_collision_support;
+#[cfg(all(feature = "gl", target_os = "windows"))]
 #[path = "tests/particle_gpu.rs"]
 mod particle_gpu;
+#[cfg(all(feature = "gl", target_os = "windows"))]
+#[path = "tests/particle_sphere_collision_gpu.rs"]
+mod particle_sphere_collision_gpu;
 #[cfg(all(feature = "gl", target_os = "windows"))]
 #[path = "tests/point_attribute_gpu.rs"]
 mod point_attribute_gpu;

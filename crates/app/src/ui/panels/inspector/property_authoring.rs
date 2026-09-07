@@ -20,7 +20,9 @@ use crate::ui::widgets::property_mode::{
     property_for_mode, property_mode_control_for_state, PropertyAuthoringMode, PropertyModeAction,
     PropertyModeState,
 };
-use crate::ui::widgets::property_value_editor::{property_value_editor, PropertyValueEditorSpec};
+use crate::ui::widgets::property_value_editor::{
+    property_value_context_menu, property_value_editor, PropertyValueEditorSpec,
+};
 
 const PROPERTY_LABEL_WIDTH: f32 = 112.0;
 
@@ -508,7 +510,7 @@ pub(super) fn published_parameter_row(
                 },
             );
             let mut reset_to_default = false;
-            result.response.context_menu(|ui| {
+            property_value_context_menu(&result.response, |ui| {
                 let reset = ui
                     .add_enabled(
                         row.has_resettable_override,
@@ -634,7 +636,7 @@ mod tests {
                         },
                     );
                     response_rect = Some(result.response.rect);
-                    result.response.context_menu(|ui| {
+                    property_value_context_menu(&result.response, |ui| {
                         *menu_opened = true;
                         ui.label("Reset to default");
                     });

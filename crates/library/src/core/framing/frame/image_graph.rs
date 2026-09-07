@@ -22,9 +22,8 @@ use crate::model::{
     CompositionInstanceContent, GeneratorContent, Node, NodeContent, PluginOperationContent,
 };
 use crate::plugin::{
-    EFFECT_APPLY_OPERATION, EFFECT_CATEGORY, IMAGE_OPACITY_STYLE_COMPONENT_ID,
-    IMAGE_TRANSFORM_COMPONENT_ID, ResolvedNodeInputs, STYLE_APPLY_OPERATION, STYLE_CATEGORY,
-    TRANSFORM_APPLY_OPERATION, TRANSFORM_CATEGORY,
+    EFFECT_APPLY_OPERATION, EFFECT_CATEGORY, IMAGE_TRANSFORM_COMPONENT_ID, ResolvedNodeInputs,
+    STYLE_APPLY_OPERATION, STYLE_CATEGORY, TRANSFORM_APPLY_OPERATION, TRANSFORM_CATEGORY,
 };
 
 impl FrameEvaluator<'_> {
@@ -62,16 +61,11 @@ impl FrameEvaluator<'_> {
             {
                 self.collect_effect_operation(node, operation, scope, global_time, path)?
             } else if operation.category == STYLE_CATEGORY
-                && operation.component_id == IMAGE_OPACITY_STYLE_COMPONENT_ID
                 && operation.operation == STYLE_APPLY_OPERATION
+                && crate::model::authoring::appearance_input_kind(&operation.declared_ports)
+                    == Some(crate::model::authoring::AppearanceInputKind::Image)
             {
-                self.collect_image_opacity_style_operation(
-                    node,
-                    operation,
-                    scope,
-                    global_time,
-                    path,
-                )?
+                self.collect_image_style_operation(node, operation, scope, global_time, path)?
             } else if operation.category == STYLE_CATEGORY
                 && operation.operation == STYLE_APPLY_OPERATION
             {
@@ -221,10 +215,9 @@ impl FrameEvaluator<'_> {
         })))
     }
 
-    /// Native Image Opacity is a Style-owned raster boundary, not a spatial
-    /// Transform. It preserves the upstream Image subtree and applies alpha
-    /// exactly once after isolating that subtree.
-    fn collect_image_opacity_style_operation(
+    /// Image operations consume the complete immediate upstream raster
+    /// subtree. Their order is the authored image dependency order.
+    fn collect_image_style_operation(
         &self,
         node: &Node,
         operation: &PluginOperationContent,
@@ -240,7 +233,7 @@ impl FrameEvaluator<'_> {
             Ok(descriptor) => descriptor,
             Err(error) => {
                 log::warn!(
-                    "Unavailable Image Opacity operation on Node {}: {}; producing NoOutput",
+                    "Unavailable Image Style operation on Node {}: {}; producing NoOutput",
                     node.id,
                     error
                 );
@@ -249,7 +242,7 @@ impl FrameEvaluator<'_> {
         };
         if !descriptor.is_execution_compatible_with_ports(&operation.declared_ports) {
             log::warn!(
-                "Image Opacity operation contract mismatch on Node {}; producing NoOutput",
+                "Image Style operation contract mismatch on Node {}; producing NoOutput",
                 node.id
             );
             return Ok(EvalOutput::NoOutput);
@@ -267,12 +260,14 @@ impl FrameEvaluator<'_> {
             .composition_for_owner(PortOwner::Node(node.id))
             .ok_or_else(|| missing_error(PortOwner::Node(node.id)))?;
         let context = self.context(composition, Some(&inputs));
-        let opacity = match self.plugin_manager.evaluate_image_opacity_style_operation(
+        let style = match self.plugin_manager.evaluate_style_operation(
             &context,
+            descriptor.component_id(),
+            node.id,
             node.properties(),
             scope.time,
         ) {
-            EvalOutput::Produced(opacity) => opacity,
+            EvalOutput::Produced(style) => style,
             EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),
         };
 
@@ -292,20 +287,16 @@ impl FrameEvaluator<'_> {
                 EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),
             };
         neutralize_root_blend(&mut source);
-        let transform = crate::model::frame::transform::Transform {
-            opacity,
-            ..Default::default()
-        };
         Ok(EvalOutput::Produced(FrameItem::Group(FrameGroup {
             source_id: node.id,
             kind: FrameGroupKind::ImageStyle,
             width: source_scope.width,
             height: source_scope.height,
             background_color: transparent_background(),
-            transform,
+            transform: Default::default(),
             blend_mode: node.blend_mode,
             effect_time: OrderedFloat(scope.time),
-            effects: Vec::new(),
+            effects: vec![crate::model::frame::effect::ImageEffect::LayerStyle(style)],
             items: vec![source],
         })))
     }
