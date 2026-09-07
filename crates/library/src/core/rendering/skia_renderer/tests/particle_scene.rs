@@ -20,7 +20,6 @@ pub(super) fn particle_scene(target_step: u64) -> PointSceneFrame {
             output_id: ModuleOutputId::from_uuid(Uuid::from_u128(4)),
         },
         source_node_id: Uuid::from_u128(5),
-        executable_hash: [17; 32],
         color: Color {
             r: 100,
             g: 190,

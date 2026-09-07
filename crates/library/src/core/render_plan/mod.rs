@@ -27,6 +27,8 @@ mod module_property_tests;
 #[cfg(test)]
 mod particle_force_tests;
 #[cfg(test)]
+mod particle_invalidation_tests;
+#[cfg(test)]
 mod particle_tests;
 #[cfg(test)]
 mod point_conditional_tests;

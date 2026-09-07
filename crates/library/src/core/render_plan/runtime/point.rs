@@ -71,7 +71,6 @@ impl ModuleImageRuntime<'_> {
                 output_id,
             },
             source_node_id,
-            executable_hash: self.definition.fingerprint,
             logical_width,
             logical_height,
             source,

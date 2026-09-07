@@ -14,7 +14,6 @@ fn grid_scene() -> PointSceneFrame {
             output_id: ModuleOutputId::from_uuid(Uuid::from_u128(704)),
         },
         source_node_id: Uuid::from_u128(705),
-        executable_hash: [70; 32],
         logical_width: 256,
         logical_height: 144,
         source: PointSceneSource::Grid(PointGridParameters {
@@ -151,7 +150,6 @@ fn gpu_particle_position_is_render_only_and_replays_from_unchanged_simulation() 
     };
     let mut renderer = SkiaRenderer::new(256, 144, transparent, true, None, None).unwrap();
     let mut scene = particle_scene(180);
-    scene.executable_hash = [71; 32];
     scene.point_program = Some(position_program([30.0, -4.0, 0.0]));
     let first_pixels = render_point_test_scene(&mut renderer, &scene).unwrap();
     let first = renderer

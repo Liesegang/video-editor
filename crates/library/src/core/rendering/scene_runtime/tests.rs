@@ -51,7 +51,6 @@ fn scene(target_step: u64) -> PointSceneFrame {
             output_id: crate::model::authoring::ModuleOutputId::new(),
         },
         source_node_id: uuid::Uuid::from_u128(2),
-        executable_hash: [7; 32],
         logical_width: 1920,
         logical_height: 1080,
         source: PointSceneSource::Particle {
@@ -69,29 +68,35 @@ fn scene(target_step: u64) -> PointSceneFrame {
 }
 
 #[test]
-fn render_only_color_does_not_invalidate_simulation_history() {
+fn simulation_identity_includes_exact_parameters_and_source_node() {
     let first = parameters();
+    let source_node_id = uuid::Uuid::from_u128(2);
+    let identity = |parameters| invocation::ParticleSimulationIdentity {
+        source_node_id,
+        parameters,
+    };
     let mut changed_force = first.clone();
     changed_force.forces[0] = ParticleForce::Gravity {
         acceleration: vec3(0.0, 200.0, 0.0),
     };
-    assert_ne!(
-        stable_parameter_hash(&first),
-        stable_parameter_hash(&changed_force)
-    );
+    assert_ne!(identity(first.clone()), identity(changed_force));
     let mut reordered = first.clone();
     reordered.forces.reverse();
-    assert_ne!(
-        stable_parameter_hash(&first),
-        stable_parameter_hash(&reordered)
-    );
+    assert_ne!(identity(first.clone()), identity(reordered));
 
     let mut changed_emitter_shape = first.clone();
     changed_emitter_shape.emitter_shape = ParticleEmitterShape::Sphere;
     assert_ne!(
-        stable_parameter_hash(&first),
-        stable_parameter_hash(&changed_emitter_shape),
+        identity(first.clone()),
+        identity(changed_emitter_shape),
         "birth-position changes must restart derived simulation state"
+    );
+    assert_ne!(
+        identity(first.clone()),
+        invocation::ParticleSimulationIdentity {
+            source_node_id: uuid::Uuid::from_u128(3),
+            parameters: first,
+        }
     );
 }
 

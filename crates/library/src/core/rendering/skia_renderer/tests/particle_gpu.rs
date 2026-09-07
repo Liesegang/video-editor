@@ -218,7 +218,6 @@ fn gpu_point_fields_store_math_random_ramp_and_checkpoint_exactly() {
         position_register: None,
     };
     let mut scene = particle_scene(180);
-    scene.executable_hash = [81; 32];
     scene.point_program = Some(program);
     let first = render_point_test_scene(&mut renderer, &scene).unwrap();
     let first_fields = renderer

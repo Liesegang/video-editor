@@ -545,7 +545,6 @@ fn particle_without_effects_uses_the_backend_native_draw_boundary() {
             output_id: ModuleOutputId::new(),
         },
         source_node_id: uuid::Uuid::new_v4(),
-        executable_hash: [1; 32],
         color: Color::white(),
         logical_width: 1,
         logical_height: 1,

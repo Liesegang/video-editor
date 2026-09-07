@@ -1,8 +1,13 @@
 //! Stateful GPU execution boundary shared by preview and export renderers.
 
+#[cfg(test)]
+mod diagnostics;
 mod forces;
 mod gl_backend;
+mod invocation;
 mod point_fields;
+#[cfg(test)]
+pub(crate) use diagnostics::PointInvocationStats;
 #[cfg(test)]
 mod readback;
 #[cfg(test)]
@@ -13,7 +18,8 @@ mod simulation;
 mod source;
 
 use crate::rendering::gl_resources::SavedGlState;
-use std::collections::{HashMap, VecDeque};
+use invocation::PointInvocation;
+use std::collections::HashMap;
 
 use crate::error::LibraryError;
 use crate::model::frame::particle::{
@@ -31,8 +37,8 @@ use gl_backend::{
 pub(crate) use render::invocation_seed;
 use render::{
     PointDrawRequest, bounded_replay_origin, drain_gl_errors, draw_points, gl_operation_result,
-    point_source_binding, stable_parameter_hash, validate_color, validate_replay, validate_target,
-    validate_transform, vec3_f32,
+    point_source_binding, validate_color, validate_replay, validate_target, validate_transform,
+    vec3_f32,
 };
 use simulation::{
     ParticleSimulationRequest, allocate_particle_buffer, copy_particle_buffer,
@@ -70,66 +76,10 @@ pub(crate) struct SceneTexture {
     pub format: SceneTextureFormat,
 }
 
-struct ParticleCheckpoint {
-    step: u64,
-    buffer: glow::Buffer,
-}
-
-struct ParticleState {
-    buffer: glow::Buffer,
-    parameter_hash: u64,
-    current_step: u64,
-    checkpoints: VecDeque<ParticleCheckpoint>,
-}
-
-struct PointInvocation {
-    particle: Option<ParticleState>,
-    point_fields: Option<point_fields::PointFieldBuffers>,
-    capacity: u32,
-    executable_hash: [u8; 32],
-    last_used: u64,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct PointPipelineKey {
     source_kind: PointSourceKind,
     field_source_hash: Option<[u8; 32]>,
-}
-
-impl PointInvocation {
-    fn allocated_bytes(&self) -> u64 {
-        let simulation = self.particle.as_ref().map_or(0, |particle| {
-            u64::from(self.capacity)
-                * PARTICLE_STRIDE_BYTES
-                * (1 + particle.checkpoints.len() as u64)
-        });
-        simulation.saturating_add(
-            self.point_fields
-                .as_ref()
-                .map_or(0, point_fields::PointFieldBuffers::byte_len),
-        )
-    }
-
-    fn point_layout_matches(
-        &self,
-        program: Option<&crate::model::point::PointRenderProgram>,
-    ) -> bool {
-        match (&self.point_fields, program) {
-            (None, None) => true,
-            (Some(buffers), Some(program)) => buffers.matches(program),
-            _ => false,
-        }
-    }
-
-    fn source_matches(&self, source: &PointSceneSource) -> bool {
-        match (&self.particle, source) {
-            (Some(particle), PointSceneSource::Particle { parameters, .. }) => {
-                particle.parameter_hash == stable_parameter_hash(parameters)
-            }
-            (None, PointSceneSource::Grid(_)) => true,
-            _ => false,
-        }
-    }
 }
 
 /// Owns every mutable Particle buffer and every raw-GL object created beside
@@ -142,6 +92,8 @@ pub(crate) struct SceneRuntime {
     target: Option<SceneTarget>,
     use_tick: u64,
     limits: SceneRuntimeLimits,
+    #[cfg(test)]
+    fail_next_field_evaluation: bool,
 }
 
 impl SceneRuntime {
@@ -159,6 +111,8 @@ impl SceneRuntime {
             target: None,
             use_tick: 0,
             limits,
+            #[cfg(test)]
+            fail_next_field_evaluation: false,
         }
     }
 
@@ -269,18 +223,6 @@ impl SceneRuntime {
                 LibraryError::Render("GPU Point preflight lost its Particle pipeline".to_string())
             })?;
             reset_particles(&self.gl, particle_pipeline, buffer, 1)?;
-            let invocation = PointInvocation {
-                particle: Some(ParticleState {
-                    buffer,
-                    parameter_hash: 0,
-                    current_step: 0,
-                    checkpoints: VecDeque::new(),
-                }),
-                point_fields: None,
-                capacity: 1,
-                executable_hash: [0; 32],
-                last_used: use_tick,
-            };
             let target = self.target.as_ref().ok_or_else(|| {
                 LibraryError::Render("GPU Particle preflight target disappeared".to_string())
             })?;
@@ -289,7 +231,8 @@ impl SceneRuntime {
                 &self.gl,
                 &pipeline,
                 PointDrawRequest {
-                    invocation: &invocation,
+                    capacity: 1,
+                    point_fields: None,
                     point_source: &point_source,
                     target,
                     transform: &Affine2D::IDENTITY,
@@ -327,15 +270,12 @@ impl SceneRuntime {
         let capacity = scene.source.capacity();
         let mut invocation = match self.invocations.remove(&scene.invocation) {
             Some(invocation)
-                if invocation.capacity == capacity
-                    && invocation.executable_hash == scene.executable_hash
-                    && invocation.source_matches(&scene.source)
-                    && invocation.point_layout_matches(scene.point_program.as_ref()) =>
+                if invocation.capacity == capacity && invocation.source_matches(scene) =>
             {
                 invocation
             }
             Some(invocation) => {
-                self.destroy_invocation(invocation);
+                invocation.destroy(&self.gl);
                 self.reserve_invocation(&scene.source, scene.point_program.as_ref())?;
                 self.create_invocation(scene, &pipeline, use_tick)?
             }
@@ -345,36 +285,52 @@ impl SceneRuntime {
             }
         };
 
+        if let Err(error) = self.reconcile_fields(&mut invocation, scene.point_program.as_ref()) {
+            self.invocations
+                .insert(scene.invocation.clone(), invocation);
+            return Err(error);
+        }
         if let Err(error) = self.seek_invocation(&mut invocation, scene, &pipeline) {
             // Compute/reset/copy errors can leave the SSBO partially updated
             // without advancing `current_step`. Discard derived state so a
             // retry starts from a known cold buffer rather than compounding
             // the failed step.
-            self.destroy_invocation(invocation);
+            invocation.destroy(&self.gl);
             return Err(error);
         }
-        let field_evaluation = if let (Some(program), Some(buffers), Some(point_pipeline)) = (
-            scene.point_program.as_ref(),
-            invocation.point_fields.as_ref(),
-            pipeline.point_fields.as_ref(),
-        ) {
-            let point_source = point_source_binding(&invocation, &scene.source)?;
-            point_pipeline.evaluate(
-                &self.gl,
-                program,
-                buffers,
-                &point_source,
-                invocation_seed(scene),
-            )
-        } else {
+        let field_evaluation = (|| {
+            if let (Some(program), Some(buffers), Some(point_pipeline)) = (
+                scene.point_program.as_ref(),
+                invocation.point_fields.as_ref(),
+                pipeline.point_fields.as_ref(),
+            ) {
+                let point_source = point_source_binding(&invocation, &scene.source)?;
+                point_pipeline.evaluate(
+                    &self.gl,
+                    program,
+                    buffers,
+                    &point_source,
+                    invocation_seed(scene),
+                )?;
+                #[cfg(test)]
+                if std::mem::take(&mut self.fail_next_field_evaluation) {
+                    return Err(LibraryError::Render(
+                        "injected Point field evaluation failure".to_string(),
+                    ));
+                }
+            }
             Ok(())
-        };
+        })();
         if let Err(error) = field_evaluation {
-            self.destroy_invocation(invocation);
+            // Render fields never mutate the simulation buffer. Retire only
+            // their potentially partial results and preserve valid history.
+            invocation.discard_fields(&self.gl);
+            self.invocations
+                .insert(scene.invocation.clone(), invocation);
             return Err(error);
         }
-        let point_source = point_source_binding(&invocation, &scene.source)?;
         let evaluation = (|| {
+            let point_source = point_source_binding(&invocation, &scene.source)?;
             let target = self.target.as_ref().ok_or_else(|| {
                 LibraryError::Render("GPU Particle target disappeared before draw".to_string())
             })?;
@@ -382,7 +338,8 @@ impl SceneRuntime {
                 &self.gl,
                 &pipeline,
                 PointDrawRequest {
-                    invocation: &invocation,
+                    capacity: invocation.capacity,
+                    point_fields: invocation.point_fields.as_ref(),
                     point_source: &point_source,
                     target,
                     transform,
@@ -453,242 +410,12 @@ impl SceneRuntime {
         }
         Ok(())
     }
-
-    fn create_invocation(
-        &self,
-        scene: &PointSceneFrame,
-        pipeline: &PointPipeline,
-        last_used: u64,
-    ) -> Result<PointInvocation, LibraryError> {
-        let capacity = scene.source.capacity();
-        let particle = match &scene.source {
-            PointSceneSource::Particle { parameters, .. } => {
-                let simulation = pipeline.particle.as_ref().ok_or_else(|| {
-                    LibraryError::Render(
-                        "GPU Point Particle source lost its simulation pipeline".to_string(),
-                    )
-                })?;
-                let buffer = allocate_particle_buffer(&self.gl, capacity)?;
-                if let Err(error) = reset_particles(&self.gl, simulation, buffer, capacity) {
-                    delete_particle_buffer(&self.gl, buffer);
-                    return Err(error);
-                }
-                Some(ParticleState {
-                    buffer,
-                    parameter_hash: stable_parameter_hash(parameters),
-                    current_step: 0,
-                    checkpoints: VecDeque::new(),
-                })
-            }
-            PointSceneSource::Grid(_) => None,
-        };
-        let point_fields = match scene
-            .point_program
-            .as_ref()
-            .map(|program| point_fields::PointFieldBuffers::create(&self.gl, program, capacity))
-        {
-            Some(Ok(buffers)) => Some(buffers),
-            Some(Err(error)) => {
-                if let Some(particle) = particle {
-                    delete_particle_buffer(&self.gl, particle.buffer);
-                }
-                return Err(error);
-            }
-            None => None,
-        };
-        Ok(PointInvocation {
-            particle,
-            point_fields,
-            capacity,
-            executable_hash: scene.executable_hash,
-            last_used,
-        })
-    }
-
-    fn seek_invocation(
-        &self,
-        invocation: &mut PointInvocation,
-        scene: &PointSceneFrame,
-        pipeline: &PointPipeline,
-    ) -> Result<(), LibraryError> {
-        let PointSceneSource::Particle {
-            target_step,
-            parameters,
-        } = &scene.source
-        else {
-            return Ok(());
-        };
-        let particle = invocation.particle.as_mut().ok_or_else(|| {
-            LibraryError::Validation(
-                "Particle source changed without rebuilding its invocation state".to_string(),
-            )
-        })?;
-        let simulation = pipeline.particle.as_ref().ok_or_else(|| {
-            LibraryError::Render("Particle source has no simulation pipeline".to_string())
-        })?;
-        if *target_step < particle.current_step {
-            if let Some(checkpoint) = particle
-                .checkpoints
-                .iter()
-                .rev()
-                .find(|checkpoint| checkpoint.step <= *target_step)
-            {
-                copy_particle_buffer(
-                    &self.gl,
-                    checkpoint.buffer,
-                    particle.buffer,
-                    invocation.capacity,
-                )?;
-                particle.current_step = checkpoint.step;
-            } else {
-                reset_particles(&self.gl, simulation, particle.buffer, invocation.capacity)?;
-                particle.current_step = 0;
-            }
-        }
-        if target_step.saturating_sub(particle.current_step) > PARTICLE_MAX_REPLAY_STEPS {
-            // The executable slice has no persistent emitter state: a live
-            // particle depends only on emissions within its maximum lifetime.
-            // Reconstruct that bounded suffix with absolute step numbers so a
-            // cold start or distant seek does not replay the entire Clip.
-            reset_particles(&self.gl, simulation, particle.buffer, invocation.capacity)?;
-            particle.current_step = bounded_replay_origin(parameters, *target_step);
-        }
-        validate_replay(particle.current_step, *target_step)?;
-        while particle.current_step < *target_step {
-            let until_checkpoint = PARTICLE_CHECKPOINT_INTERVAL_STEPS
-                - particle.current_step % PARTICLE_CHECKPOINT_INTERVAL_STEPS;
-            let count = (*target_step - particle.current_step).min(until_checkpoint);
-            simulate_particles(
-                &self.gl,
-                simulation,
-                ParticleSimulationRequest {
-                    buffer: particle.buffer,
-                    capacity: invocation.capacity,
-                    seed: invocation_seed(scene),
-                    start_step: particle.current_step,
-                    step_count: count,
-                    parameters,
-                },
-            )?;
-            particle.current_step += count;
-            if particle
-                .current_step
-                .is_multiple_of(PARTICLE_CHECKPOINT_INTERVAL_STEPS)
-            {
-                self.store_checkpoint(particle, invocation.capacity)?;
-            }
-        }
-        Ok(())
-    }
-
-    fn store_checkpoint(
-        &self,
-        particle: &mut ParticleState,
-        capacity: u32,
-    ) -> Result<(), LibraryError> {
-        while particle.checkpoints.len() >= PARTICLE_MAX_CHECKPOINTS {
-            if let Some(checkpoint) = particle.checkpoints.pop_front() {
-                delete_particle_buffer(&self.gl, checkpoint.buffer);
-            }
-        }
-        let checkpoint_bytes = u64::from(capacity) * PARTICLE_STRIDE_BYTES;
-        let resident_bytes = self
-            .invocations
-            .values()
-            .map(PointInvocation::allocated_bytes)
-            .sum::<u64>()
-            .saturating_add(
-                u64::from(capacity)
-                    * PARTICLE_STRIDE_BYTES
-                    * (1 + particle.checkpoints.len() as u64),
-            );
-        if resident_bytes.saturating_add(checkpoint_bytes) > self.limits.max_state_bytes {
-            // Checkpoints are derived cache data. Skipping one preserves exact
-            // forward simulation while respecting the hard memory budget.
-            return Ok(());
-        }
-        let buffer = allocate_particle_buffer(&self.gl, capacity)?;
-        if let Err(error) = copy_particle_buffer(&self.gl, particle.buffer, buffer, capacity) {
-            delete_particle_buffer(&self.gl, buffer);
-            return Err(error);
-        }
-        particle.checkpoints.push_back(ParticleCheckpoint {
-            step: particle.current_step,
-            buffer,
-        });
-        Ok(())
-    }
-
-    fn reserve_invocation(
-        &mut self,
-        source: &PointSceneSource,
-        point_program: Option<&crate::model::point::PointRenderProgram>,
-    ) -> Result<(), LibraryError> {
-        let capacity = source.capacity();
-        let required_bytes = point_fields::required_invocation_bytes(
-            matches!(source, PointSceneSource::Particle { .. }),
-            point_program,
-            capacity,
-        )?;
-        if required_bytes > self.limits.max_state_bytes {
-            return Err(LibraryError::Render(format!(
-                "GPU Particle invocation requires {required_bytes} bytes, exceeding the configured {}-byte state budget",
-                self.limits.max_state_bytes
-            )));
-        }
-        while self.invocations.len() >= self.limits.max_live_invocations.max(1)
-            || self.resident_state_bytes().saturating_add(required_bytes)
-                > self.limits.max_state_bytes
-        {
-            let Some(key) = self
-                .invocations
-                .iter()
-                .min_by_key(|(_, invocation)| invocation.last_used)
-                .map(|(key, _)| key.clone())
-            else {
-                return Err(LibraryError::Render(
-                    "GPU Particle state budget cannot admit a new invocation".to_string(),
-                ));
-            };
-            if let Some(invocation) = self.invocations.remove(&key) {
-                self.destroy_invocation(invocation);
-            }
-        }
-        Ok(())
-    }
-
-    fn resident_state_bytes(&self) -> u64 {
-        self.invocations
-            .values()
-            .map(PointInvocation::allocated_bytes)
-            .sum()
-    }
-
-    fn destroy_invocation(&self, invocation: PointInvocation) {
-        if let Some(particle) = invocation.particle {
-            delete_particle_buffer(&self.gl, particle.buffer);
-            for checkpoint in particle.checkpoints {
-                delete_particle_buffer(&self.gl, checkpoint.buffer);
-            }
-        }
-        if let Some(point_fields) = invocation.point_fields {
-            point_fields.destroy(&self.gl);
-        }
-    }
 }
 
 impl Drop for SceneRuntime {
     fn drop(&mut self) {
         for (_, invocation) in self.invocations.drain() {
-            if let Some(particle) = invocation.particle {
-                delete_particle_buffer(&self.gl, particle.buffer);
-                for checkpoint in particle.checkpoints {
-                    delete_particle_buffer(&self.gl, checkpoint.buffer);
-                }
-            }
-            if let Some(point_fields) = invocation.point_fields {
-                point_fields.destroy(&self.gl);
-            }
+            invocation.destroy(&self.gl);
         }
         for (_, pipeline) in self.pipelines.drain() {
             pipeline.destroy(&self.gl);

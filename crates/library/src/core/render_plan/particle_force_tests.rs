@@ -374,7 +374,6 @@ fn instance_force_overrides_share_one_compiled_executable() {
     .expect("evaluated instance overrides");
     let scenes = particle_scenes(&frame.items);
     assert_eq!(scenes.len(), 2);
-    assert_eq!(scenes[0].executable_hash, scenes[1].executable_hash);
     assert_eq!(
         scenes
             .iter()

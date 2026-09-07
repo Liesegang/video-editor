@@ -140,7 +140,6 @@ pub struct PointSceneFrame {
     pub invocation: SceneInvocationKey,
     /// Producer identity scopes random streams; Sprite branches do not reseed it.
     pub source_node_id: Uuid,
-    pub executable_hash: [u8; 32],
     pub logical_width: u32,
     pub logical_height: u32,
     pub source: PointSceneSource,

@@ -93,7 +93,6 @@ fn point_frame_rejects_particle_builtins_on_grid_before_gpu_dispatch() {
             output_id: ModuleOutputId::new(),
         },
         source_node_id: Uuid::new_v4(),
-        executable_hash: [0; 32],
         logical_width: 640,
         logical_height: 480,
         source: PointSceneSource::Grid(grid()),

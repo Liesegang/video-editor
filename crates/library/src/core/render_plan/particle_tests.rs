@@ -260,7 +260,8 @@ fn repeated_particle_items_share_compiled_definition_but_not_invocation_state_ke
     .unwrap();
     let scenes = particle_scenes(&frame.items);
     assert_eq!(scenes.len(), 2);
-    assert_eq!(scenes[0].executable_hash, scenes[1].executable_hash);
+    assert_eq!(scenes[0].source_node_id, scenes[1].source_node_id);
+    assert_eq!(scenes[0].source, scenes[1].source);
     assert_ne!(scenes[0].invocation, scenes[1].invocation);
     assert_ne!(
         scenes[0].invocation.module_instance_id,

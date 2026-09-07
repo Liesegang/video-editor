@@ -285,7 +285,6 @@ fn gpu_point_select_covers_every_type_cache_warmth_and_particle_grid_sources() {
     );
 
     let mut particle = particle_scene(180);
-    particle.executable_hash = changed_grid.executable_hash;
     particle.point_program = Some(changed_program);
     render_point_test_scene(&mut renderer, &particle).unwrap();
     let particle_fields = renderer

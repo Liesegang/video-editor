@@ -315,7 +315,6 @@ fn gpu_point_vector_arithmetic_and_length_match_shared_numeric_rules() {
     );
 
     let mut particle = particle_scene(180);
-    particle.executable_hash = warm.executable_hash;
     particle.point_program = warm.point_program;
     render_point_test_scene(&mut renderer, &particle).unwrap();
     let particle_fields = renderer

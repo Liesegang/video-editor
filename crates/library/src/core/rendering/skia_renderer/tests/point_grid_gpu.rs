@@ -17,7 +17,6 @@ fn grid_scene() -> PointSceneFrame {
             output_id: ModuleOutputId::from_uuid(Uuid::from_u128(4)),
         },
         source_node_id: Uuid::from_u128(7),
-        executable_hash: [90; 32],
         logical_width: 256,
         logical_height: 144,
         source: PointSceneSource::Grid(PointGridParameters {
@@ -89,7 +88,6 @@ fn gpu_grid_uses_shared_sprite_fields_and_retains_stable_point_attributes() {
         GradientSpread::Pad,
         &[(0.0, Color::black()), (1.0, Color::white())],
     );
-    scene.executable_hash = [91; 32];
     scene.point_program = Some(PointRenderProgram {
         schema: PointAttributeSchema::new(vec![
             PointAttributeDefinition::new(
@@ -209,9 +207,7 @@ fn gpu_grid_uses_shared_sprite_fields_and_retains_stable_point_attributes() {
 
     // Switching producer kind at the same invocation cannot reuse stale state.
     let mut particle = particle_scene(240);
-    // Different Sprite endpoints in one authored Module share its fingerprint.
     // GPU pipelines must distinguish the producer and field program shape.
-    particle.executable_hash = scene.executable_hash;
     particle.invocation = scene.invocation.clone();
     let particle_pixels = render_point_test_scene(&mut renderer, &particle).unwrap();
     assert_eq!(

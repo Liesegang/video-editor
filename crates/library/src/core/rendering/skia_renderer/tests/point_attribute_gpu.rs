@@ -195,7 +195,6 @@ fn copy_program(kind: PointAttributeElementType, value: PropertyValue) -> PointR
 
 pub(super) fn one_point_grid(program: PointRenderProgram) -> PointSceneFrame {
     let mut scene = particle_scene(0);
-    scene.executable_hash = [102; 32];
     scene.source = PointSceneSource::Grid(PointGridParameters {
         counts: [1, 1, 1],
         spacing: particle_vec3(1.0, 1.0, 1.0),
@@ -225,7 +224,6 @@ fn gpu_point_attributes_preserve_all_types_integer_bits_and_position_on_grid_and
     );
 
     let mut grid = particle_scene(0);
-    grid.executable_hash = [101; 32];
     grid.source = PointSceneSource::Grid(PointGridParameters {
         counts: [3, 2, 1],
         spacing: particle_vec3(12.0, 20.0, 1.0),
@@ -273,7 +271,6 @@ fn gpu_point_attributes_preserve_all_types_integer_bits_and_position_on_grid_and
     );
 
     let mut particle = particle_scene(180);
-    particle.executable_hash = grid.executable_hash;
     particle.point_program = Some(program);
     let particle_pixels = render_point_test_scene(&mut renderer, &particle).unwrap();
     let particle_fields = renderer

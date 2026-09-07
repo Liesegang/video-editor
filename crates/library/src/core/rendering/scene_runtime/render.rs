@@ -1,7 +1,5 @@
 //! Shared Point validation, deterministic identity, and Sprite drawing.
 
-use std::hash::{Hash, Hasher};
-
 use glow::HasContext;
 use sha2::{Digest, Sha256};
 
@@ -61,25 +59,6 @@ pub(super) fn validate_target(
     Ok(())
 }
 
-pub(super) fn stable_parameter_hash(parameters: &ParticleSceneParameters) -> u64 {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    parameters.capacity.hash(&mut hasher);
-    parameters.emission_rate.hash(&mut hasher);
-    parameters.lifetime_seconds.hash(&mut hasher);
-    parameters.seed.hash(&mut hasher);
-    parameters.emitter_shape.hash(&mut hasher);
-    parameters.emitter_position.hash(&mut hasher);
-    parameters.emitter_radius.hash(&mut hasher);
-    parameters.emitter_size.hash(&mut hasher);
-    parameters.emitter_surface_only.hash(&mut hasher);
-    parameters.velocity_min.hash(&mut hasher);
-    parameters.velocity_max.hash(&mut hasher);
-    parameters.forces.hash(&mut hasher);
-    parameters.size_min.hash(&mut hasher);
-    parameters.size_max.hash(&mut hasher);
-    hasher.finish()
-}
-
 pub(super) fn validate_replay(current_step: u64, target_step: u64) -> Result<u64, LibraryError> {
     let replay_steps = target_step.checked_sub(current_step).ok_or_else(|| {
         LibraryError::Render("GPU Particle replay origin is after its target".to_string())
@@ -134,7 +113,8 @@ pub(super) fn point_source_binding<'a>(
 }
 
 pub(super) struct PointDrawRequest<'a> {
-    pub invocation: &'a PointInvocation,
+    pub capacity: u32,
+    pub point_fields: Option<&'a point_fields::PointFieldBuffers>,
     pub point_source: &'a PointSourceBinding<'a>,
     pub target: &'a SceneTarget,
     pub transform: &'a Affine2D,
@@ -174,7 +154,7 @@ pub(super) fn draw_points(
         gl.use_program(Some(pipeline.render_program));
         gl.bind_vertex_array(Some(pipeline.vertex_array));
         request.point_source.bind(gl, &pipeline.source)?;
-        if let Some(point_fields) = &request.invocation.point_fields {
+        if let Some(point_fields) = request.point_fields {
             gl.bind_buffer_base(glow::SHADER_STORAGE_BUFFER, 2, Some(point_fields.colors));
             if let Some(positions) = point_fields.positions {
                 gl.bind_buffer_base(glow::SHADER_STORAGE_BUFFER, 4, Some(positions));
@@ -222,7 +202,6 @@ pub(super) fn draw_points(
             );
         }
         let vertex_count = request
-            .invocation
             .capacity
             .checked_mul(PARTICLE_VERTICES_PER_SPRITE)
             .and_then(|count| i32::try_from(count).ok())
