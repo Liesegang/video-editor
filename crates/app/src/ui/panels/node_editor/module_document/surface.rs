@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use egui_snarl::{InPinId, OutPinId, Snarl};
+use egui_snarl::Snarl;
 use node_editor_ui::{
     AuthoritativeSelection, CubicBezier, Editor, GraphFrame, InteractionOptions, ItemId,
     NodeDescriptor, PortDescriptor, PortDirection as SurfacePortDirection, PortOwner,
@@ -15,8 +15,9 @@ use super::interface::port_interface_actions;
 use super::viewer::{ModuleNodeViewer, ModuleSurfaceCapture};
 use super::*;
 use crate::ui::panels::node_editor::{
-    NODE_EDITOR_MAX_SCALE, NODE_EDITOR_MIN_SCALE, PORT_ROW_HEIGHT, node_editor_details_visible,
-    node_editor_navigation_config, node_editor_snarl_style_for, node_palette_for_node, pin_color,
+    node_editor_details_visible, node_editor_navigation_config, node_editor_snarl_style_for,
+    node_palette_for_node, pin_color, NODE_EDITOR_MAX_SCALE, NODE_EDITOR_MIN_SCALE,
+    PORT_ROW_HEIGHT,
 };
 use crate::ui::viewport::{ViewportController, ViewportState};
 
@@ -364,71 +365,22 @@ pub(super) fn build_module_snarl(
     definition: &ModuleDefinition,
     offsets: &HashMap<Uuid, egui::Vec2>,
 ) -> Snarl<Uuid> {
+    // Snarl owns node and pin layout only. Even zero-width Snarl wires retain
+    // a native hit target, while node-editor-ui is the authoritative wire
+    // paint and interaction owner.
     let mut snarl = Snarl::new();
-    let mut ids = HashMap::new();
     let mut nodes = definition.graph.nodes.values().collect::<Vec<_>>();
     nodes.sort_by_key(|node| node.id);
     for node in nodes {
         let position = egui::pos2(node.ui_position[0], node.ui_position[1])
             + offsets.get(&node.id).copied().unwrap_or_default();
-        let id = if node.ui_collapsed {
+        if node.ui_collapsed {
             snarl.insert_node_collapsed(position, node.id)
         } else {
             snarl.insert_node(position, node.id)
         };
-        ids.insert(node.id, id);
-    }
-
-    for connection in &definition.graph.connections {
-        let (Some(&from_node), Some(&to_node)) = (
-            ids.get(&connection.from.node_id),
-            ids.get(&connection.to.node_id),
-        ) else {
-            continue;
-        };
-        let Some(from_index) = port_index(
-            definition,
-            connection.from.node_id,
-            PortDirection::Output,
-            &connection.from.port,
-        ) else {
-            continue;
-        };
-        let Some(to_index) = port_index(
-            definition,
-            connection.to.node_id,
-            PortDirection::Input,
-            &connection.to.port,
-        ) else {
-            continue;
-        };
-        snarl.connect(
-            OutPinId {
-                node: from_node,
-                output: from_index,
-            },
-            InPinId {
-                node: to_node,
-                input: to_index,
-            },
-        );
     }
     snarl
-}
-
-pub(super) fn port_index(
-    definition: &ModuleDefinition,
-    node_id: Uuid,
-    direction: PortDirection,
-    key: &str,
-) -> Option<usize> {
-    let node = definition.graph.nodes.get(&node_id)?;
-    document_port_contract(definition, node)
-        .ok()?
-        .ports
-        .iter()
-        .filter(|port| port.direction == direction)
-        .position(|port| port.key == key)
 }
 
 struct ModuleSurfaceProjection<'a> {

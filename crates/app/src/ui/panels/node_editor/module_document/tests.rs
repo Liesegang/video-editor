@@ -14,8 +14,23 @@ use library::model::project::{
 use library::model::DataContent;
 use std::sync::{Arc, Mutex};
 
-use super::viewer::{ModuleNodeViewer, ModuleSurfaceCapture};
+use super::viewer::{definition_port_is_connected, ModuleNodeViewer, ModuleSurfaceCapture};
 use super::*;
+
+fn port_index(
+    definition: &ModuleDefinition,
+    node_id: Uuid,
+    direction: PortDirection,
+    key: &str,
+) -> Option<usize> {
+    let node = definition.graph.nodes.get(&node_id)?;
+    document_port_contract(definition, node)
+        .ok()?
+        .ports
+        .iter()
+        .filter(|port| port.direction == direction)
+        .position(|port| port.key == key)
+}
 
 const fn property_context() -> ModulePropertyContext {
     ModulePropertyContext {
@@ -131,8 +146,47 @@ fn module_definition_builds_the_production_snarl_without_container_nodes() {
     let mut expected = vec![source_id, target_id];
     expected.sort_unstable();
     assert_eq!(values, expected);
-    assert_eq!(snarl.wires().count(), 1);
+    assert_eq!(snarl.wires().count(), 0);
     assert_eq!(snarl.nodes().count(), definition.graph.nodes.len());
+}
+
+#[test]
+fn pin_connection_state_comes_from_the_authoritative_definition() {
+    let plugins = PluginManager::default();
+    let (mut definition, source_id, target_id) = fixture(&plugins);
+
+    assert!(definition_port_is_connected(
+        &definition,
+        source_id,
+        IMAGE_OUTPUT_PORT,
+        PortDirection::Output,
+    ));
+    assert!(definition_port_is_connected(
+        &definition,
+        target_id,
+        IMAGE_INPUT_PORT,
+        PortDirection::Input,
+    ));
+    assert!(!definition_port_is_connected(
+        &definition,
+        target_id,
+        IMAGE_INPUT_PORT,
+        PortDirection::Output,
+    ));
+
+    definition.graph.connections.clear();
+    assert!(!definition_port_is_connected(
+        &definition,
+        source_id,
+        IMAGE_OUTPUT_PORT,
+        PortDirection::Output,
+    ));
+    assert!(!definition_port_is_connected(
+        &definition,
+        target_id,
+        IMAGE_INPUT_PORT,
+        PortDirection::Input,
+    ));
 }
 
 #[test]
@@ -411,7 +465,7 @@ fn snarl_is_layout_and_paint_only_for_connection_gestures() {
         .expect("target Snarl node");
     let from = snarl.out_pin(OutPinId {
         node: source,
-        output: surface::port_index(
+        output: port_index(
             &definition,
             source_id,
             PortDirection::Output,
@@ -421,7 +475,7 @@ fn snarl_is_layout_and_paint_only_for_connection_gestures() {
     });
     let to = snarl.in_pin(InPinId {
         node: target,
-        input: surface::port_index(
+        input: port_index(
             &definition,
             target_id,
             PortDirection::Input,
@@ -693,7 +747,7 @@ fn transition_document_shows_only_its_typed_output_boundary() {
         assert_eq!(presented.ports.len(), 1);
         assert_eq!(presented.ports[0].key, visible_port);
         assert_eq!(
-            surface::port_index(
+            port_index(
                 &definition,
                 output.node_id,
                 PortDirection::Input,
@@ -702,7 +756,7 @@ fn transition_document_shows_only_its_typed_output_boundary() {
             Some(0)
         );
         assert_eq!(
-            surface::port_index(
+            port_index(
                 &definition,
                 output.node_id,
                 PortDirection::Input,

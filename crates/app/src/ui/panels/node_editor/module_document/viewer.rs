@@ -13,9 +13,9 @@ use node_editor_ui::{Editor, HeaderGlyph, NodeBodyResponse, NodeHeader, PortLabe
 
 use super::*;
 use crate::ui::panels::node_editor::{
-    NODE_HEADER_WIDTH, PORT_LABEL_WIDTH, PORT_ROW_HEIGHT, measured_label_width,
-    node_editor_details_visible, node_editor_port_interactions_enabled, node_icon_for_node,
-    node_palette_for_node, paint_node_editor_canvas_grid, pin_info,
+    measured_label_width, node_editor_details_visible, node_editor_port_interactions_enabled,
+    node_icon_for_node, node_palette_for_node, paint_node_editor_canvas_grid, pin_info,
+    NODE_HEADER_WIDTH, PORT_LABEL_WIDTH, PORT_ROW_HEIGHT,
 };
 use crate::ui::property_metadata::node_property_definition;
 
@@ -330,7 +330,17 @@ impl SnarlViewer<Uuid> for ModuleNodeViewer<'_, '_> {
                 })
             },
         );
-        let graph_connected = !pin.remotes.is_empty();
+        let graph_connected = node
+            .as_ref()
+            .zip(port.as_ref())
+            .is_some_and(|(node, port)| {
+                definition_port_is_connected(
+                    self.definition,
+                    node.id,
+                    &port.key,
+                    PortDirection::Input,
+                )
+            });
         let connection_disabled_reason = node
             .as_ref()
             .zip(port.as_ref())
@@ -480,6 +490,9 @@ impl SnarlViewer<Uuid> for ModuleNodeViewer<'_, '_> {
     ) -> impl SnarlPin + 'static {
         let node = self.node(snarl, pin.id.node);
         let port = self.port(snarl, pin.id.node, PortDirection::Output, pin.id.output);
+        let graph_connected = node.zip(port.as_ref()).is_some_and(|(node, port)| {
+            definition_port_is_connected(self.definition, node.id, &port.key, PortDirection::Output)
+        });
         if let Some(port) = port.as_ref() {
             let label_width = measured_label_width(ui, &port.label, PORT_LABEL_WIDTH);
             Editor::show_port_label(
@@ -497,7 +510,7 @@ impl SnarlViewer<Uuid> for ModuleNodeViewer<'_, '_> {
             node_id: node.map(|node| node.id),
             port,
             direction: PortDirection::Output,
-            connected: !pin.remotes.is_empty(),
+            connected: graph_connected,
             connectable: true,
             connection_disabled_reason: None,
             ownership: ModuleInputPortOwnership::Internal,
@@ -591,6 +604,21 @@ impl SnarlViewer<Uuid> for ModuleNodeViewer<'_, '_> {
         *to_global = self.canvas_transform;
         *self.to_global = self.canvas_transform;
     }
+}
+
+pub(super) fn definition_port_is_connected(
+    definition: &ModuleDefinition,
+    node_id: Uuid,
+    port: &str,
+    direction: PortDirection,
+) -> bool {
+    definition.graph.connections.iter().any(|connection| {
+        let endpoint = match direction {
+            PortDirection::Input => &connection.to,
+            PortDirection::Output => &connection.from,
+        };
+        endpoint.node_id == node_id && endpoint.port == port
+    })
 }
 
 pub(super) const fn next_header_node_state(
