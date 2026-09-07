@@ -12,10 +12,14 @@ use crate::core::render_plan::{
 };
 use crate::model::authoring::ModuleOutputId;
 use crate::model::frame::point::{
-    PointGridParameters, PointSceneFrame, PointSceneSource, SceneInvocationKey,
+    PointGridParameters, PointSceneFrame, PointSceneSource, SceneInvocationKey, SpriteSelection,
+};
+use crate::model::node::{
+    SPRITE_COLLECTION_INPUT_PORT, SPRITE_COLOR_INPUT_PORT, SPRITE_SELECTION_INPUT_PORT,
+    SPRITE_SELECTION_MODE_INPUT_PORT, SPRITE_SELECTION_MODE_RANDOM, SPRITE_SELECTION_MODE_VALUE,
 };
 use crate::model::point::{PointAttributeElementType, PointInstruction, PointRenderProgram};
-use crate::model::property::ColorValue;
+use crate::model::property::{ColorValue, ImageCollectionValue};
 
 impl ModuleImageRuntime<'_> {
     pub(super) fn evaluate_point_renderer(
@@ -44,12 +48,23 @@ impl ModuleImageRuntime<'_> {
             // branch through the ordinary frame-uniform property evaluator.
             crate::model::frame::color::Color::white()
         } else {
+            let color = self
+                .value_input(renderer.renderer_node_id, SPRITE_COLOR_INPUT_PORT)?
+                .ok_or_else(|| {
+                    LibraryError::Validation("Sprite Renderer requires a Color".into())
+                })?;
             required_color(
-                &self.node_values(&renderer_node)?,
-                "color",
+                &std::collections::HashMap::from([(SPRITE_COLOR_INPUT_PORT.to_string(), color)]),
+                SPRITE_COLOR_INPUT_PORT,
                 "Sprite Renderer",
             )?
         };
+        let (sprites, sprite_selection) = self.sample_sprite_appearance(
+            renderer.renderer_node_id,
+            point_program
+                .as_ref()
+                .is_some_and(|program| program.sprite_selection_register.is_some()),
+        )?;
         let (source_node_id, source) = match &renderer.source {
             CompiledPointSource::Particle(particle) => (
                 particle.emitter_node_id,
@@ -75,6 +90,8 @@ impl ModuleImageRuntime<'_> {
             logical_height,
             source,
             color,
+            sprites,
+            sprite_selection,
             point_program,
         };
         scene.validate().map_err(LibraryError::Validation)?;
@@ -106,6 +123,48 @@ impl ModuleImageRuntime<'_> {
             effects: Vec::new(),
             items: vec![object],
         }))
+    }
+
+    fn sample_sprite_appearance(
+        &mut self,
+        node_id: uuid::Uuid,
+        has_selection_field: bool,
+    ) -> Result<(ImageCollectionValue, SpriteSelection), LibraryError> {
+        let Some(PropertyValue::ImageCollection(sprites)) =
+            self.value_input(node_id, SPRITE_COLLECTION_INPUT_PORT)?
+        else {
+            return Err(LibraryError::Validation(
+                "Sprite Renderer requires an Image Collection".into(),
+            ));
+        };
+        let selection = match self.value_input(node_id, SPRITE_SELECTION_MODE_INPUT_PORT)? {
+            Some(PropertyValue::String(mode)) if mode == SPRITE_SELECTION_MODE_RANDOM => {
+                SpriteSelection::Random
+            }
+            Some(PropertyValue::String(mode)) if mode == SPRITE_SELECTION_MODE_VALUE => {
+                // The varying branch is sampled by the typed Point program,
+                // never by the ordinary frame-wide property evaluator.
+                let factor = if has_selection_field {
+                    OrderedFloat(0.0)
+                } else {
+                    let Some(PropertyValue::Number(value)) =
+                        self.value_input(node_id, SPRITE_SELECTION_INPUT_PORT)?
+                    else {
+                        return Err(LibraryError::Validation(
+                            "Sprite image selection requires a Number".into(),
+                        ));
+                    };
+                    value
+                };
+                SpriteSelection::Value(factor)
+            }
+            _ => {
+                return Err(LibraryError::Validation(
+                    "Sprite image selection mode must be random or value".into(),
+                ));
+            }
+        };
+        Ok((sprites, selection))
     }
 
     fn sample_point_grid(&mut self, node_id: uuid::Uuid) -> Result<PointSceneSource, LibraryError> {
@@ -247,6 +306,7 @@ impl ModuleImageRuntime<'_> {
             color_register: compiled.color_register,
             position_register: compiled.position_register,
             size_register: compiled.size_register,
+            sprite_selection_register: compiled.sprite_selection_register,
         };
         program.validate().map_err(LibraryError::Validation)?;
         Ok(program)

@@ -62,6 +62,7 @@ pub(super) fn audio_section(
                         keyframe_disabled_reason: None,
                         allow_expression: true,
                         pending_keyframe,
+                        image_collection: None,
                     },
                 );
                 (

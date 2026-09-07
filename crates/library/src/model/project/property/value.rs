@@ -8,7 +8,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use crate::model::frame::color::Color;
 use crate::model::path::{FillRule, PathPoint, PathSegment, PathValue};
 
-use super::{ColorValue, GradientValue, Paint, PatternValue, PropertyUiType};
+use super::{ColorValue, GradientValue, ImageCollectionValue, Paint, PatternValue, PropertyUiType};
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
 #[serde(deny_unknown_fields)]
@@ -77,6 +77,7 @@ pub enum PropertyValue {
     Color(Color),
     /// Lossless authored sum type for Solid, Gradient, or Pattern paint.
     Paint(Paint),
+    ImageCollection(ImageCollectionValue),
     // Tagged structured scalars stay distinct from arbitrary authored maps.
     Path(PathValue),
     Gradient(GradientValue),
@@ -166,6 +167,12 @@ impl<'de> Deserialize<'de> for PropertyValue {
             }
             return Ok(Self::OpaqueJson(value));
         }
+        if super::image_collection::has_image_collection_value_tag_json(&value) {
+            if let Ok(collection) = serde_json::from_value(value.clone()) {
+                return Ok(Self::ImageCollection(collection));
+            }
+            return Ok(Self::OpaqueJson(value));
+        }
         serde_json::from_value::<UntaggedPropertyValue>(value)
             .map(Self::from)
             .map_err(D::Error::custom)
@@ -186,6 +193,7 @@ impl Hash for PropertyValue {
             PropertyValue::ColorValue(c) => c.hash(state),
             PropertyValue::Color(c) => c.hash(state),
             PropertyValue::Paint(paint) => paint.hash(state),
+            PropertyValue::ImageCollection(collection) => collection.hash(state),
             PropertyValue::Path(path) => path.hash(state),
             PropertyValue::Gradient(gradient) => gradient.hash(state),
             PropertyValue::Pattern(pattern) => pattern.hash(state),
@@ -218,6 +226,7 @@ impl PropertyValue {
             Self::ColorValue(_)
                 | Self::Path(_)
                 | Self::Paint(_)
+                | Self::ImageCollection(_)
                 | Self::Gradient(_)
                 | Self::Pattern(_)
                 | Self::Array(_)
@@ -241,6 +250,9 @@ impl PropertyValue {
             PropertyValue::ColorValue(_) => matches!(ui_type, PropertyUiType::ColorValue),
             PropertyValue::Color(_) => matches!(ui_type, PropertyUiType::Color),
             PropertyValue::Paint(_) => matches!(ui_type, PropertyUiType::Paint),
+            PropertyValue::ImageCollection(_) => {
+                matches!(ui_type, PropertyUiType::ImageCollection)
+            }
             PropertyValue::Vec2(_) => matches!(ui_type, PropertyUiType::Vec2 { .. }),
             PropertyValue::Vec3(_) => matches!(ui_type, PropertyUiType::Vec3 { .. }),
             PropertyValue::Vec4(_) => matches!(ui_type, PropertyUiType::Vec4 { .. }),
@@ -322,9 +334,14 @@ impl From<serde_json::Value> for PropertyValue {
                     return PropertyValue::Gradient(gradient);
                 }
                 if super::paint::has_pattern_value_tag_json(&object)
-                    && let Ok(pattern) = serde_json::from_value(object)
+                    && let Ok(pattern) = serde_json::from_value(object.clone())
                 {
                     return PropertyValue::Pattern(pattern);
+                }
+                if super::image_collection::has_image_collection_value_tag_json(&object) {
+                    return serde_json::from_value(object.clone())
+                        .map(PropertyValue::ImageCollection)
+                        .unwrap_or(PropertyValue::OpaqueJson(object));
                 }
 
                 // Try to infer specific types
@@ -443,6 +460,8 @@ impl From<&PropertyValue> for serde_json::Value {
             PropertyValue::Paint(paint) => {
                 serde_json::to_value(paint).expect("Paint serialization is infallible")
             }
+            PropertyValue::ImageCollection(collection) => serde_json::to_value(collection)
+                .expect("ImageCollectionValue serialization is infallible"),
             PropertyValue::Path(path) => path_json_value(path),
             PropertyValue::Gradient(gradient) => {
                 serde_json::to_value(gradient).expect("GradientValue serialization is infallible")
@@ -697,9 +716,46 @@ impl TryGetProperty<Paint> for Paint {
     }
 }
 
+impl TryGetProperty<ImageCollectionValue> for ImageCollectionValue {
+    fn try_get(p: &PropertyValue) -> Option<ImageCollectionValue> {
+        match p {
+            PropertyValue::ImageCollection(value) => Some(value.clone()),
+            _ => None,
+        }
+    }
+}
+
 impl PropertyValue {
     pub fn get_as<T: TryGetProperty<T>>(&self) -> Option<T> {
         T::try_get(self)
+    }
+
+    /// Visit every imported Image Asset referenced by this serializable value.
+    /// Recursive evaluator payloads use Array/Map, so defaults, overrides, and
+    /// Keyframes can share this one reference authority.
+    pub fn visit_image_asset_ids(&self, visitor: &mut impl FnMut(uuid::Uuid)) {
+        self.visit_image_collections(&mut |collection| {
+            for asset_id in &collection.assets {
+                visitor(*asset_id);
+            }
+        });
+    }
+
+    pub fn visit_image_collections(&self, visitor: &mut impl FnMut(&ImageCollectionValue)) {
+        match self {
+            Self::ImageCollection(collection) => visitor(collection),
+            Self::Array(values) => {
+                for value in values {
+                    value.visit_image_collections(visitor);
+                }
+            }
+            Self::Map(values) => {
+                for value in values.values() {
+                    value.visit_image_collections(visitor);
+                }
+            }
+            _ => {}
+        }
     }
 }
 

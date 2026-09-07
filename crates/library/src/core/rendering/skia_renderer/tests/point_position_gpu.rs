@@ -24,6 +24,8 @@ fn grid_scene() -> PointSceneFrame {
             seed: 17,
         }),
         color: Color::white(),
+        sprites: Default::default(),
+        sprite_selection: crate::model::frame::point::SpriteSelection::Random,
         point_program: None,
     }
 }
@@ -51,6 +53,7 @@ fn position_program(offset: [f64; 3]) -> PointRenderProgram {
         color_register: 3,
         position_register: Some(2),
         size_register: None,
+        sprite_selection_register: None,
     }
 }
 
@@ -234,6 +237,7 @@ fn gpu_invalid_position_is_zeroed_and_makes_the_point_transparent() {
         color_register: 3,
         position_register: Some(2),
         size_register: None,
+        sprite_selection_register: None,
     });
     let transparent = Color {
         r: 0,

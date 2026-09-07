@@ -37,6 +37,8 @@ mod particle_collision_tests;
 mod particle_sphere_collision_tests;
 #[path = "export_point_tests.rs"]
 mod point_tests;
+#[path = "export_sprite_collection_tests.rs"]
+mod sprite_collection_tests;
 
 struct TemporaryPng(PathBuf);
 

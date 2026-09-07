@@ -16,6 +16,9 @@ use crate::model::project::{
 };
 use ordered_float::OrderedFloat;
 
+use crate::model::project::asset::{Asset, AssetKind};
+use crate::model::property::ImageCollectionValue;
+
 fn seconds(value: i64) -> MediaTime {
     MediaTime::new(value, 1).expect("whole seconds")
 }
@@ -26,7 +29,7 @@ fn factory_builds_one_private_typed_chain_and_mandatory_output() {
     assert_eq!(result.definition.graph.nodes.len(), 9);
     assert_eq!(result.definition.graph.connections.len(), 8);
     assert_eq!(result.definition.outputs().count(), 1);
-    assert_eq!(result.definition.interface.parameters.len(), 27);
+    assert_eq!(result.definition.interface.parameters.len(), 30);
     assert_eq!(result.definition.sharing, ModuleDefinitionSharing::Private);
     for connection in &result.definition.graph.connections {
         let from = &result.definition.graph.nodes[&connection.from.node_id];
@@ -43,6 +46,90 @@ fn factory_builds_one_private_typed_chain_and_mandatory_output() {
         .definition
         .validate()
         .expect("valid particle topology");
+    let published = |id| {
+        result
+            .definition
+            .interface
+            .parameters
+            .iter()
+            .find(|parameter| parameter.id == id)
+            .expect("published Sprite parameter")
+    };
+    assert_eq!(
+        &published(result.parameters.sprites).default_value,
+        &PropertyValue::ImageCollection(Default::default())
+    );
+    assert_eq!(
+        &published(result.parameters.selection_mode).default_value,
+        &PropertyValue::String("random".into())
+    );
+    assert_eq!(
+        &published(result.parameters.selection).default_value,
+        &PropertyValue::Number(OrderedFloat(0.0))
+    );
+}
+
+#[test]
+fn sprite_collection_asset_removal_is_atomic_and_collection_entry_removal_is_not() {
+    let service = TimelineEditorService::create_default("Sprite assets").expect("service");
+    let project = service.snapshot().expect("project");
+    let track_id = project.timelines[&project.root_timeline_id].track_order[0];
+    drop(project);
+    let created = service
+        .create_particle_node_clip(ParticleNodeClipPlacement {
+            track_id,
+            name: "Sprites".into(),
+            interval: TimelineInterval::new(MediaTime::zero(), seconds(5)).unwrap(),
+            layer: 0,
+        })
+        .unwrap();
+    let asset = Asset::new("sprite", "sprite.png", AssetKind::Image);
+    let asset_id = asset.id;
+    service.add_asset(asset).unwrap();
+    service
+        .set_module_parameter(
+            created.instance_id,
+            created.parameters.sprites,
+            PropertyValue::ImageCollection(ImageCollectionValue::new(vec![asset_id]).unwrap()),
+        )
+        .unwrap();
+
+    let revision = service.revision().unwrap();
+    assert!(service.remove_asset(asset_id).is_err());
+    assert_eq!(service.revision().unwrap(), revision);
+    assert!(
+        service
+            .snapshot()
+            .unwrap()
+            .assets
+            .iter()
+            .any(|asset| asset.id == asset_id)
+    );
+
+    service
+        .set_module_parameter(
+            created.instance_id,
+            created.parameters.sprites,
+            PropertyValue::ImageCollection(ImageCollectionValue::default()),
+        )
+        .unwrap();
+    assert!(
+        service
+            .snapshot()
+            .unwrap()
+            .assets
+            .iter()
+            .any(|asset| asset.id == asset_id)
+    );
+    service.remove_asset(asset_id).unwrap();
+    assert!(
+        !service
+            .snapshot()
+            .unwrap()
+            .assets
+            .iter()
+            .any(|asset| asset.id == asset_id)
+    );
 }
 
 #[test]

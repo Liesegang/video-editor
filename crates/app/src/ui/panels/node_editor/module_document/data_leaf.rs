@@ -61,6 +61,13 @@ pub(super) fn show_value(
         viewer.palette,
         key,
         TIMELINE_AUTHORING,
+        viewer.image_collection.as_mut().map(|context| {
+            crate::ui::widgets::image_collection_editor::ImageCollectionEditorContext {
+                project: context.project,
+                media_previews: &mut *context.media_previews,
+                library_drag: &mut *context.library_drag,
+            }
+        }),
     );
     viewer.capture_response(&response);
     if let Some(action) = action {

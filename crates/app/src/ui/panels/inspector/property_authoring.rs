@@ -16,6 +16,7 @@ use crate::ui::module_parameter_editor::{
 };
 use library::model::authoring::PublishedParameter;
 
+use crate::ui::widgets::image_collection_editor::ImageCollectionEditorContext;
 use crate::ui::widgets::property_mode::{
     property_for_mode, property_mode_control_for_state, PropertyAuthoringMode, PropertyModeAction,
     PropertyModeState,
@@ -37,6 +38,7 @@ pub(super) struct PropertyRowSpec<'a> {
     pub(super) keyframe_disabled_reason: Option<&'a str>,
     pub(super) allow_expression: bool,
     pub(super) pending_keyframe: Option<PendingKeyframeMetadata>,
+    pub(super) image_collection: Option<ImageCollectionEditorContext<'a>>,
 }
 
 #[derive(Clone, Copy)]
@@ -83,6 +85,7 @@ pub(super) fn property_row(
                 fallback_suffix: spec.suffix,
                 fallback_speed: spec.speed,
                 palette,
+                image_collection: spec.image_collection,
             },
         );
         changed = value_edit.changed;
@@ -207,6 +210,7 @@ pub(super) fn property_control(
             fallback_suffix: suffix,
             fallback_speed: speed,
             palette,
+            image_collection: None,
         },
     )
     .finished
@@ -463,6 +467,8 @@ pub(super) fn published_parameter_row(
     state: &mut AuthoringUiState,
     context: &ModuleParameterContext<'_>,
     parameter: &PublishedParameter,
+    project_snapshot: Option<&std::sync::Arc<library::model::authoring::AuthoringProject>>,
+    media_previews: Option<&mut crate::ui::media_preview::AuthoringMediaPreviewService>,
 ) -> egui::Response {
     let local_time = crate::ui::module_parameter_editor::parameter_local_time(context, state);
     let control_id = match &context.owner {
@@ -484,6 +490,13 @@ pub(super) fn published_parameter_row(
     };
     let mut has_automation = false;
     let mut has_resettable_override = false;
+    let image_collection = project_snapshot
+        .zip(media_previews)
+        .map(|(project, media_previews)| ImageCollectionEditorContext {
+            project,
+            media_previews,
+            library_drag: &mut state.library_drag,
+        });
     let outcome = edit_module_parameter(
         &mut state.inspector,
         context,
@@ -507,6 +520,7 @@ pub(super) fn published_parameter_row(
                     keyframe_disabled_reason: row.keyframe_disabled_reason,
                     allow_expression: false,
                     pending_keyframe: row.pending_keyframe,
+                    image_collection,
                 },
             );
             let mut reset_to_default = false;
@@ -633,6 +647,7 @@ mod tests {
                             keyframe_disabled_reason: None,
                             allow_expression: false,
                             pending_keyframe: None,
+                            image_collection: None,
                         },
                     );
                     response_rect = Some(result.response.rect);
@@ -675,6 +690,7 @@ mod tests {
                             keyframe_disabled_reason: None,
                             allow_expression: true,
                             pending_keyframe: None,
+                            image_collection: None,
                         },
                     );
                 });

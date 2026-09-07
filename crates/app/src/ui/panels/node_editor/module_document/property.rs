@@ -6,6 +6,7 @@ use library::plugin::EvaluationContext;
 
 use super::*;
 use crate::ui::panels::node_editor::property_label;
+use crate::ui::widgets::image_collection_editor::ImageCollectionEditorContext;
 use crate::ui::widgets::property_mode::{
     property_for_mode, property_mode_control_for_state, toggled_keyframe_property,
     PropertyModeAction, PropertyModeState,
@@ -31,6 +32,7 @@ pub(super) fn show_property_input(
     palette: &library::model::authoring::ProjectPalette,
     port_key: &str,
     timeline_authoring: Result<(), &str>,
+    image_collection: Option<ImageCollectionEditorContext<'_>>,
 ) -> (egui::Response, Option<ModuleEditorAction>) {
     let evaluator_context =
         EvaluationContext::new(node.properties(), context.fps, context.resolution);
@@ -140,6 +142,7 @@ pub(super) fn show_property_input(
                 fallback_suffix: "",
                 fallback_speed: 0.05,
                 palette,
+                image_collection,
             },
         );
         if edit.changed {

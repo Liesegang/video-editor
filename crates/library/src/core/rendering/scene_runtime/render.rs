@@ -3,7 +3,9 @@
 use glow::HasContext;
 use sha2::{Digest, Sha256};
 
+use super::sprites::SpriteAtlas;
 use super::*;
+use crate::model::frame::point::SpriteSelection;
 
 pub(super) fn validate_transform(transform: &Affine2D) -> Result<(), LibraryError> {
     [
@@ -119,6 +121,9 @@ pub(super) struct PointDrawRequest<'a> {
     pub transform: &'a Affine2D,
     pub logical_size: (u32, u32),
     pub premultiplied_color: [f32; 4],
+    pub sprite_atlas: Option<&'a SpriteAtlas>,
+    pub sprite_selection: &'a SpriteSelection,
+    pub sprite_seed: u32,
 }
 
 pub(super) fn draw_points(
@@ -157,6 +162,9 @@ pub(super) fn draw_points(
             gl.bind_buffer_base(glow::SHADER_STORAGE_BUFFER, 2, Some(point_fields.colors));
             if let Some(geometry) = point_fields.geometry {
                 gl.bind_buffer_base(glow::SHADER_STORAGE_BUFFER, 4, Some(geometry));
+            }
+            if let Some(sprite_selection) = point_fields.sprite_selection {
+                gl.bind_buffer_base(glow::SHADER_STORAGE_BUFFER, 5, Some(sprite_selection));
             }
         }
         gl.uniform_2_f32(
@@ -199,6 +207,56 @@ pub(super) fn draw_points(
                 Some(location),
                 i32::from(request.target.format == SceneTextureFormat::Srgba8),
             );
+        }
+        match (&pipeline.render.sprite, request.sprite_atlas) {
+            (Some(uniforms), Some(atlas)) => {
+                let count = u32::try_from(atlas.entries.len()).map_err(|_| {
+                    LibraryError::Render("Sprite atlas entry count exceeds GPU range".into())
+                })?;
+                if count == 0 {
+                    return Err(LibraryError::Validation(
+                        "GPU Sprite atlas must contain at least one image".into(),
+                    ));
+                }
+                let rects = atlas
+                    .entries
+                    .iter()
+                    .flat_map(|entry| entry.uv)
+                    .collect::<Vec<_>>();
+                let aspects = atlas
+                    .entries
+                    .iter()
+                    .flat_map(|entry| entry.aspect)
+                    .collect::<Vec<_>>();
+                gl.active_texture(glow::TEXTURE0);
+                gl.bind_texture(glow::TEXTURE_2D, Some(atlas.texture));
+                gl.uniform_1_i32(Some(&uniforms.atlas), 0);
+                gl.uniform_1_u32(Some(&uniforms.count), count);
+                if let Some(location) = &uniforms.seed {
+                    gl.uniform_1_u32(Some(location), request.sprite_seed);
+                }
+                if let Some(location) = &uniforms.random {
+                    gl.uniform_1_i32(
+                        Some(location),
+                        i32::from(matches!(request.sprite_selection, SpriteSelection::Random)),
+                    );
+                }
+                if let Some(location) = &uniforms.selection {
+                    let value = match request.sprite_selection {
+                        SpriteSelection::Random => 0.0,
+                        SpriteSelection::Value(value) => value.into_inner() as f32,
+                    };
+                    gl.uniform_1_f32(Some(location), value);
+                }
+                gl.uniform_4_f32_slice(Some(&uniforms.rects), &rects);
+                gl.uniform_2_f32_slice(Some(&uniforms.aspects), &aspects);
+            }
+            (None, None) => {}
+            _ => {
+                return Err(LibraryError::Validation(
+                    "Point Sprite resources changed without rebuilding the GPU pipeline".into(),
+                ));
+            }
         }
         let vertex_count = request
             .capacity

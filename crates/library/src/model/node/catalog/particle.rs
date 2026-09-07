@@ -14,12 +14,18 @@ use crate::model::frame::particle::{
 };
 use crate::model::project::{IMAGE_OUTPUT_PORT, PortDataType};
 use crate::model::property::{
-    PropertyDefinition, PropertyMap, PropertyUiType, PropertyValue, Vec3,
+    ImageCollectionValue, PropertyDefinition, PropertyMap, PropertyUiType, PropertyValue, Vec3,
 };
 
 pub(crate) const PARTICLE_SYSTEM_PORT: &str = "particles";
 pub(crate) const PARTICLE_SPRITE_RENDERER_CATALOG_ID: &str =
     ParticleNodeRole::SpriteRenderer.catalog_id();
+pub(crate) const SPRITE_COLOR_INPUT_PORT: &str = "color";
+pub(crate) const SPRITE_COLLECTION_INPUT_PORT: &str = "sprites";
+pub(crate) const SPRITE_SELECTION_MODE_INPUT_PORT: &str = "selection_mode";
+pub(crate) const SPRITE_SELECTION_INPUT_PORT: &str = "selection";
+pub(crate) const SPRITE_SELECTION_MODE_RANDOM: &str = "random";
+pub(crate) const SPRITE_SELECTION_MODE_VALUE: &str = "value";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ParticleNodeRole {
@@ -201,7 +207,22 @@ const COLLISION_DEPTH_INPUTS: &[PortSpec] = &[
 ];
 const SPRITE_RENDERER_INPUTS: &[PortSpec] = &[
     PortSpec::single(PARTICLE_SYSTEM_PORT, "Points", PortDataType::PointSource),
-    PortSpec::single("color", "Color", PortDataType::Color),
+    PortSpec::single("color", "Tint", PortDataType::Color),
+    PortSpec::single(
+        SPRITE_COLLECTION_INPUT_PORT,
+        "Sprites",
+        PortDataType::ImageCollection,
+    ),
+    PortSpec::single(
+        SPRITE_SELECTION_MODE_INPUT_PORT,
+        "Selection Mode",
+        PortDataType::String,
+    ),
+    PortSpec::single(
+        SPRITE_SELECTION_INPUT_PORT,
+        "Selection",
+        PortDataType::Number,
+    ),
 ];
 const PARTICLE_FIXED_STEP_REASON: &str = "deterministic Particle simulation needs a fixed-step parameter schedule, which is not implemented yet";
 const EMITTER_CONSTANT_ONLY_INPUTS: &[&str] = &["capacity", "rate", "lifetime", "seed"];
@@ -783,17 +804,44 @@ fn required_vec3(properties: &PropertyMap, node: &str, key: &str) -> Result<Vec3
 }
 
 fn sprite_properties() -> Vec<PropertyDefinition> {
-    vec![PropertyDefinition::new(
-        "color",
-        PropertyUiType::Color,
-        "Color",
-        PropertyValue::Color(Color {
-            r: 115,
-            g: 205,
-            b: 255,
-            a: 220,
-        }),
-    )]
+    vec![
+        PropertyDefinition::new(
+            "color",
+            PropertyUiType::Color,
+            "Tint",
+            PropertyValue::Color(Color::white()),
+        ),
+        PropertyDefinition::new(
+            SPRITE_COLLECTION_INPUT_PORT,
+            PropertyUiType::ImageCollection,
+            "Sprites",
+            PropertyValue::ImageCollection(ImageCollectionValue::default()),
+        ),
+        PropertyDefinition::new(
+            SPRITE_SELECTION_MODE_INPUT_PORT,
+            PropertyUiType::Dropdown {
+                options: vec![
+                    SPRITE_SELECTION_MODE_RANDOM.to_string(),
+                    SPRITE_SELECTION_MODE_VALUE.to_string(),
+                ],
+            },
+            "Selection Mode",
+            PropertyValue::String(SPRITE_SELECTION_MODE_RANDOM.to_string()),
+        ),
+        PropertyDefinition::new(
+            SPRITE_SELECTION_INPUT_PORT,
+            PropertyUiType::Float {
+                min: 0.0,
+                max: 1.0,
+                step: 0.01,
+                suffix: String::new(),
+                min_hard_limit: true,
+                max_hard_limit: true,
+            },
+            "Selection",
+            PropertyValue::Number(OrderedFloat(0.0)),
+        ),
+    ]
 }
 
 fn integer_property(

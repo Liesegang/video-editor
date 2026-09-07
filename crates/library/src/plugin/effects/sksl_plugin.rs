@@ -589,6 +589,9 @@ impl EffectPlugin for SkslEffectPlugin {
                         | PropertyUiType::Gradient
                         | PropertyUiType::Pattern => PropertyValue::String(String::new()),
                         PropertyUiType::Paint => PropertyValue::String(String::new()),
+                        PropertyUiType::ImageCollection => PropertyValue::ImageCollection(
+                            crate::model::property::ImageCollectionValue::default(),
+                        ),
                     },
                 };
 

@@ -7,11 +7,51 @@ use super::SkiaRenderer;
 use crate::error::LibraryError;
 #[cfg(feature = "gl")]
 use crate::rendering::renderer::Affine2D;
+use crate::rendering::renderer::ManagedImageResource;
 use crate::rendering::renderer::{PointRasterRequest, RenderOutput};
 #[cfg(feature = "gl")]
 use crate::rendering::skia_working_surface;
+use std::sync::Arc;
 
 impl SkiaRenderer {
+    pub(super) fn preflight_sprite_output(
+        &mut self,
+        sprites: &[Arc<ManagedImageResource>],
+    ) -> Result<(), LibraryError> {
+        if sprites.is_empty() {
+            return Ok(());
+        }
+        #[cfg(not(feature = "gl"))]
+        {
+            let _ = sprites;
+            Err(LibraryError::Render(
+                "GPU Sprite collections require the OpenGL backend".to_string(),
+            ))
+        }
+        #[cfg(feature = "gl")]
+        {
+            self.activate_graphics_context()?;
+            self.validate_sprite_images(sprites)?;
+            let (gpu_context, scene_runtime) = (
+                self.gpu_context.as_mut().ok_or_else(|| {
+                    LibraryError::Render(
+                        "GPU Sprite preflight has no active Ganesh context".to_string(),
+                    )
+                })?,
+                self.scene_runtime.as_mut().ok_or_else(|| {
+                    LibraryError::Render(
+                        "GPU Sprite preflight has no SceneRuntime for the active context"
+                            .to_string(),
+                    )
+                })?,
+            );
+            gpu_context.direct_context.flush_and_submit();
+            let result = scene_runtime.preflight_sprites(sprites);
+            gpu_context.direct_context.reset(None);
+            result
+        }
+    }
+
     pub(super) fn preflight_point_output(
         &mut self,
         target_sizes: &[(u32, u32)],
@@ -170,6 +210,7 @@ impl SkiaRenderer {
         request: PointRasterRequest<'_>,
     ) -> Result<SkImage, LibraryError> {
         self.activate_graphics_context()?;
+        self.validate_sprite_images(request.sprites)?;
         let (target_width, target_height) = self.current_target_dimensions();
         let premultiplied_color = skia_working_surface::authored_premultiplied_rgba(
             &self.surface_contract,
@@ -195,8 +236,7 @@ impl SkiaRenderer {
             // texture. Submit it before raw GL mutates the target again.
             gpu_context.direct_context.flush_and_submit();
             let result = scene_runtime.render_point(
-                request.scene,
-                request.transform,
+                request,
                 target_width,
                 target_height,
                 format,
@@ -217,5 +257,30 @@ impl SkiaRenderer {
             scene_texture,
             &self.surface_contract,
         )
+    }
+
+    #[cfg(feature = "gl")]
+    fn validate_sprite_images(
+        &self,
+        sprites: &[Arc<ManagedImageResource>],
+    ) -> Result<(), LibraryError> {
+        if sprites.is_empty() {
+            return Ok(());
+        }
+        let contract = self.surface_contract.working().ok_or_else(|| {
+            LibraryError::Render(
+                "GPU Sprite collections require a Project-linear working surface".to_string(),
+            )
+        })?;
+        for sprite in sprites {
+            if sprite.image().identity() != contract.identity() {
+                return Err(LibraryError::Render(format!(
+                    "GPU Sprite image {:?} does not match active Project working identity {:?}",
+                    sprite.image().identity(),
+                    contract.identity()
+                )));
+            }
+        }
+        Ok(())
     }
 }

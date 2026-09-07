@@ -27,6 +27,8 @@ fn grid_scene() -> PointSceneFrame {
             seed: 123,
         }),
         color: Color::white(),
+        sprites: Default::default(),
+        sprite_selection: crate::model::frame::point::SpriteSelection::Random,
         point_program: None,
     }
 }
@@ -123,6 +125,7 @@ fn gpu_grid_uses_shared_sprite_fields_and_retains_stable_point_attributes() {
         color_register: 5,
         position_register: None,
         size_register: None,
+        sprite_selection_register: None,
     });
     let colored = render_point_test_scene(&mut renderer, &scene).unwrap();
     let field_pipelines = renderer

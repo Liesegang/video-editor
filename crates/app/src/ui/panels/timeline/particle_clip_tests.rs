@@ -71,6 +71,18 @@ fn particle_library_drag_uses_the_authoritative_private_module_factory() {
     let definition = &after.module_definitions[&instance.definition_id];
     assert_eq!(definition.sharing, ModuleDefinitionSharing::Private);
     let expected = ParticleNodeClipFactory::create("Particle System").expect("factory");
+    assert_eq!(definition.interface.parameters.len(), 30);
+    assert_eq!(
+        definition
+            .interface
+            .parameters
+            .iter()
+            .rev()
+            .take(4)
+            .map(|parameter| parameter.name.as_str())
+            .collect::<Vec<_>>(),
+        ["Selection", "Selection Mode", "Sprites", "Tint"]
+    );
     assert_eq!(
         definition.graph.nodes.len(),
         expected.definition.graph.nodes.len()

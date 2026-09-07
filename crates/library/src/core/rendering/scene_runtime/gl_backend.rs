@@ -39,7 +39,7 @@ pub(super) fn probe_capabilities(gl: &glow::Context) -> Result<CapabilityProfile
             "GPU Particle requires desktop OpenGL 4.3 compute/SSBO support; active context is {label}"
         ));
     }
-    if storage_bindings < 5 || workgroup_invocations < PARTICLE_WORKGROUP_SIZE as i32 {
+    if storage_bindings < 6 || workgroup_invocations < PARTICLE_WORKGROUP_SIZE as i32 {
         return Err(format!(
             "GPU Particle cannot run on {label}: available SSBO bindings={storage_bindings}, compute workgroup invocations={workgroup_invocations}"
         ));
@@ -83,6 +83,18 @@ pub(super) struct RenderUniforms {
     pub focal_length: glow::UniformLocation,
     pub premultiplied_color: Option<glow::UniformLocation>,
     pub output_srgba: Option<glow::UniformLocation>,
+    pub sprite: Option<SpriteRenderUniforms>,
+}
+
+#[derive(Clone)]
+pub(super) struct SpriteRenderUniforms {
+    pub atlas: glow::UniformLocation,
+    pub count: glow::UniformLocation,
+    pub seed: Option<glow::UniformLocation>,
+    pub random: Option<glow::UniformLocation>,
+    pub selection: Option<glow::UniformLocation>,
+    pub rects: glow::UniformLocation,
+    pub aspects: glow::UniformLocation,
 }
 
 #[derive(Clone)]
@@ -108,6 +120,7 @@ impl PointPipeline {
         last_used: u64,
         source_kind: PointSourceKind,
         point_program: Option<&PointRenderProgram>,
+        sprites: bool,
     ) -> Result<Self, LibraryError> {
         let particle = match source_kind {
             PointSourceKind::Particle => Some(create_particle_pipeline(gl)?),
@@ -127,9 +140,16 @@ impl PointPipeline {
         };
         let has_geometry_output =
             point_program.is_some_and(|program| program.has_geometry_output());
-        let vertex_source =
-            point_vertex_source(source_kind, point_fields.is_some(), has_geometry_output);
-        let fragment_source = point_fragment_source(point_fields.is_some());
+        let sprite_selection_field =
+            point_program.is_some_and(|program| program.sprite_selection_register.is_some());
+        let vertex_source = point_vertex_source(
+            source_kind,
+            point_fields.is_some(),
+            has_geometry_output,
+            sprites,
+            sprite_selection_field,
+        );
+        let fragment_source = point_fragment_source(point_fields.is_some(), sprites);
         let render_program = match link_program(
             gl,
             &[
@@ -180,9 +200,29 @@ impl PointPipeline {
                         .is_none()
                         .then(|| required_uniform(gl, render_program, "uPremultipliedColor"))
                         .transpose()?,
-                    output_srgba: point_fields
-                        .is_some()
+                    output_srgba: (point_fields.is_some() && !sprites)
                         .then(|| required_uniform(gl, render_program, "uOutputSrgba"))
+                        .transpose()?,
+                    sprite: sprites
+                        .then(|| {
+                            Ok::<SpriteRenderUniforms, LibraryError>(SpriteRenderUniforms {
+                                atlas: required_uniform(gl, render_program, "uSpriteAtlas")?,
+                                count: required_uniform(gl, render_program, "uSpriteCount")?,
+                                seed: Some(required_uniform(gl, render_program, "uSpriteSeed")?),
+                                random: Some(required_uniform(
+                                    gl,
+                                    render_program,
+                                    "uSpriteRandom",
+                                )?),
+                                selection: (!sprite_selection_field)
+                                    .then(|| {
+                                        required_uniform(gl, render_program, "uSpriteSelection")
+                                    })
+                                    .transpose()?,
+                                rects: required_uniform(gl, render_program, "uSpriteRects[0]")?,
+                                aspects: required_uniform(gl, render_program, "uSpriteAspects[0]")?,
+                            })
+                        })
                         .transpose()?,
                 },
                 PointSourceUniforms::new(

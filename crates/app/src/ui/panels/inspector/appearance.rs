@@ -172,7 +172,7 @@ pub(super) fn node_clip_appearance_section(
                                 continue;
                             };
                             super::property_authoring::published_parameter_row(
-                                ui, state, context, parameter,
+                                ui, state, context, parameter, None, None,
                             );
                         }
                     },
@@ -519,6 +519,7 @@ fn property_entry(
                 keyframe_disabled_reason: None,
                 allow_expression: definition.default_value().supports_expression(),
                 pending_keyframe,
+                image_collection: None,
             },
         );
         (

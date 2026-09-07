@@ -62,6 +62,7 @@ fn result_program(
         color_register,
         position_register: None,
         size_register: None,
+        sprite_selection_register: None,
     }
 }
 

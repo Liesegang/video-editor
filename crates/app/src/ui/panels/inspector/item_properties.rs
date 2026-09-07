@@ -214,6 +214,7 @@ pub(super) fn show_item_property(
                         keyframe_disabled_reason: None,
                         allow_expression,
                         pending_keyframe,
+                        image_collection: None,
                     },
                 );
                 (
@@ -397,6 +398,7 @@ fn show_text_content_property(
                         ),
                         allow_expression: false,
                         pending_keyframe: None,
+                        image_collection: None,
                     },
                 );
                 (result.finished, value.clone(), value.clone())

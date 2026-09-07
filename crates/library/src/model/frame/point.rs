@@ -10,7 +10,7 @@ use uuid::Uuid;
 use super::{color::Color, particle::ParticleSceneParameters};
 use crate::model::authoring::{InstancePath, ModuleInstanceId, ModuleOutputId};
 use crate::model::point::{POINT_MAX_CAPACITY, PointInstruction, PointRenderProgram};
-use crate::model::property::Vec3;
+use crate::model::property::{ImageCollectionValue, Vec3};
 
 pub const POINT_GRID_AXIS_BITS: u32 = 10;
 pub const POINT_GRID_MAX_AXIS: u32 = 1 << POINT_GRID_AXIS_BITS;
@@ -135,6 +135,21 @@ impl PointSceneSource {
 
 /// Preview and export pass the same sampled command to the same renderer.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug, Hash)]
+#[serde(
+    tag = "kind",
+    content = "value",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum SpriteSelection {
+    Random,
+    /// Used when there is no per-point selection register. GPU selection
+    /// clamps finite factors to [0,1]; a factor of 1 chooses the last image.
+    Value(OrderedFloat<f64>),
+}
+
+/// Preview and export pass the same sampled command to the same renderer.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug, Hash)]
 #[serde(deny_unknown_fields)]
 pub struct PointSceneFrame {
     pub invocation: SceneInvocationKey,
@@ -144,6 +159,8 @@ pub struct PointSceneFrame {
     pub logical_height: u32,
     pub source: PointSceneSource,
     pub color: Color,
+    pub sprites: ImageCollectionValue,
+    pub sprite_selection: SpriteSelection,
     pub point_program: Option<PointRenderProgram>,
 }
 
@@ -153,6 +170,12 @@ impl PointSceneFrame {
             return Err("Point render dimensions must be positive".into());
         }
         self.source.validate()?;
+        self.sprites.validate().map_err(|error| error.to_string())?;
+        if let SpriteSelection::Value(value) = self.sprite_selection
+            && (!value.0.is_finite() || value.0.abs() > f64::from(f32::MAX))
+        {
+            return Err("Sprite selection must be finite and representable on the GPU".into());
+        }
         if let Some(program) = &self.point_program {
             program.validate()?;
             if !self.source.supports_age()

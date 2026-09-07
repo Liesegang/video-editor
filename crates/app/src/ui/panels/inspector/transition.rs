@@ -295,7 +295,9 @@ fn module_controls(
                 );
             }
             for parameter in parameters {
-                super::property_authoring::published_parameter_row(ui, state, &context, parameter);
+                super::property_authoring::published_parameter_row(
+                    ui, state, &context, parameter, None, None,
+                );
             }
             if has_additional_inputs {
                 ui.add_space(2.0);

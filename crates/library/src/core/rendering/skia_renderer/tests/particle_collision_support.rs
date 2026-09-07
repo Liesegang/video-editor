@@ -24,6 +24,7 @@ pub(super) fn color_program(color: Color) -> PointRenderProgram {
         color_register: 0,
         position_register: None,
         size_register: None,
+        sprite_selection_register: None,
     }
 }
 

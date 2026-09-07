@@ -35,7 +35,9 @@ pub(super) fn module_effect_controls(
         definition,
     };
     for parameter in &definition.interface.parameters {
-        super::super::property_authoring::published_parameter_row(ui, state, &context, parameter);
+        super::super::property_authoring::published_parameter_row(
+            ui, state, &context, parameter, None, None,
+        );
     }
 
     let additional_inputs = definition

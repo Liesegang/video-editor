@@ -356,7 +356,7 @@ fn authored_and_empty_published_lanes_share_one_discovery_contract() {
 }
 
 #[test]
-fn constant_only_particle_parameters_are_not_advertised_as_automation_lanes() {
+fn particle_lanes_include_only_frame_sampled_renderer_parameters() {
     let service = TimelineEditorService::create_default("particle lanes").expect("service");
     let project = service.snapshot().expect("project");
     let track_id = project.timelines[&project.root_timeline_id].track_order[0];
@@ -373,11 +373,29 @@ fn constant_only_particle_parameters_are_not_advertised_as_automation_lanes() {
 
     let project = service.snapshot().expect("Particle project");
     let lanes = collect_item_lanes(&project, created.item_id);
-    assert_eq!(lanes.len(), 1);
-    assert_eq!(lanes[0].label, "Color");
     assert_eq!(
-        lanes[0].id.target,
-        AutomationTarget::ModuleParameter(created.parameters.color)
+        lanes
+            .iter()
+            .map(|lane| (lane.label.as_str(), lane.id.target.clone()))
+            .collect::<Vec<_>>(),
+        [
+            (
+                "Tint",
+                AutomationTarget::ModuleParameter(created.parameters.color),
+            ),
+            (
+                "Sprites",
+                AutomationTarget::ModuleParameter(created.parameters.sprites),
+            ),
+            (
+                "Selection Mode",
+                AutomationTarget::ModuleParameter(created.parameters.selection_mode),
+            ),
+            (
+                "Selection",
+                AutomationTarget::ModuleParameter(created.parameters.selection),
+            ),
+        ]
     );
 }
 

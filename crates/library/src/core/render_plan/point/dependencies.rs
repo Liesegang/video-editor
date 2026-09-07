@@ -14,8 +14,8 @@ use crate::model::project::{PortDataType, PortDirection};
 
 use super::{
     POINT_AGE_OUTPUT_PORT, POINT_NORMALIZED_AGE_OUTPUT_PORT, POINT_POSITION_OUTPUT_PORT,
-    POINT_RANDOM_OUTPUT_PORT, SPRITE_COLOR_INPUT_PORT, address, particle_sprite, point_role,
-    single_input_source,
+    POINT_RANDOM_OUTPUT_PORT, SPRITE_COLOR_INPUT_PORT, SPRITE_SELECTION_INPUT_PORT, address,
+    particle_sprite, point_role, single_input_source,
 };
 
 /// Reject a varying Point value before the stateless value runtime can mistake
@@ -76,7 +76,11 @@ pub(in crate::core::render_plan) fn validate_point_field_consumers(
                         ),
                         Some(PointNodeRole::Info | PointNodeRole::Grid) => false,
                         None => {
-                            particle_sprite(target) && connection.to.port == SPRITE_COLOR_INPUT_PORT
+                            particle_sprite(target)
+                                && matches!(
+                                    connection.to.port.as_str(),
+                                    SPRITE_COLOR_INPUT_PORT | SPRITE_SELECTION_INPUT_PORT
+                                )
                         }
                     }
                 }

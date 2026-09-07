@@ -68,6 +68,9 @@ pub(super) fn show_module_document(
     plugins: &PluginManager,
     property_context: ModulePropertyContext,
     parameter_host: &mut super::parameter::NodeParameterHost<'_>,
+    image_collection: Option<
+        crate::ui::widgets::image_collection_editor::ImageCollectionEditorContext<'_>,
+    >,
 ) -> Vec<ModuleEditorAction> {
     let assets = &parameter_host.project.assets;
     let palette = &parameter_host.project.palette;
@@ -128,6 +131,7 @@ pub(super) fn show_module_document(
             to_global: &mut transform,
             canvas_clip: &mut canvas_clip,
             capture: Arc::clone(&capture),
+            image_collection,
         };
         let style = node_editor_snarl_style_for(ui.style());
         snarl.show(&mut viewer, &style, ("node_editor", definition.id), ui);

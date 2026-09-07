@@ -130,6 +130,7 @@ impl Paint {
             | PropertyValue::Vec3(_)
             | PropertyValue::Vec4(_)
             | PropertyValue::Path(_)
+            | PropertyValue::ImageCollection(_)
             | PropertyValue::Array(_)
             | PropertyValue::Map(_)
             | PropertyValue::OpaqueJson(_) => None,

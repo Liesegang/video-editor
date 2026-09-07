@@ -11,6 +11,7 @@ from qa_node_module_support import (
     connect_nodes,
     create_node_from_menu,
     enter_exact_numeric,
+    ensure_node_editor_authoring_scale,
     node_content_type,
     open_timeline_item_definition,
     place_created_node,
@@ -423,14 +424,9 @@ def run_suite(client):
         raise QaFailure("New Node Clip is not the clean Output-only production fixture")
     output_id = output_ids[0]
 
-    _, canvas_before = client.wait_component_settled("node_editor.canvas")
-    old_scale = float(canvas_before["metadata"]["scale"])
-    client.scroll_component(
-        "node_editor.canvas", 0.0, -100.0, modifiers={"command": True}
-    )
-    _, canvas = client.wait_component_settled("node_editor.canvas")
+    canvas = ensure_node_editor_authoring_scale(client)
     scale = float(canvas["metadata"]["scale"])
-    if scale >= old_scale or not 0.4 <= scale <= 0.75:
+    if not 0.4 <= scale <= 0.75:
         raise QaFailure("Node Editor did not reach Point conditional authoring overview")
     place_created_node(client, output_id, 0.95, vertical_offset=140.0)
 

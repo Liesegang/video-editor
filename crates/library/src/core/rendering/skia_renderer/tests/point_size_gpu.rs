@@ -54,6 +54,7 @@ fn varying_grid_size_program() -> PointRenderProgram {
         color_register: 4,
         position_register: None,
         size_register: Some(3),
+        sprite_selection_register: None,
     }
 }
 
@@ -81,6 +82,7 @@ fn varying_particle_size_program(scale: f64) -> PointRenderProgram {
         color_register: 5,
         position_register: None,
         size_register: Some(4),
+        sprite_selection_register: None,
     }
 }
 
@@ -97,6 +99,7 @@ fn constant_size_program(size: f64) -> PointRenderProgram {
         color_register: 1,
         position_register: None,
         size_register: Some(0),
+        sprite_selection_register: None,
     }
 }
 
@@ -125,6 +128,7 @@ fn invalid_size_program(
         color_register: 3,
         position_register: None,
         size_register: Some(2),
+        sprite_selection_register: None,
     }
 }
 
@@ -166,6 +170,7 @@ fn geometry_program(position: bool, size: bool, value: f64) -> PointRenderProgra
         color_register,
         position_register,
         size_register,
+        sprite_selection_register: None,
     }
 }
 

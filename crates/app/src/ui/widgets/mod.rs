@@ -1,5 +1,6 @@
 pub(crate) mod blend_mode_picker;
 pub(crate) mod color_value_picker;
+pub(crate) mod image_collection_editor;
 pub mod modal;
 pub(crate) mod name_editor;
 pub(crate) mod paint_value_editor;

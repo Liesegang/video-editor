@@ -17,8 +17,8 @@ use crate::state::authoring::{
     AssetBrowserViewMode, AuthoringLibraryDrag, AuthoringSelection, AuthoringUiState,
 };
 use crate::ui::media_preview::{
-    preview_request_size, representative_source_time, AuthoringMediaPreviewService,
-    MediaPreviewFrame,
+    paint_media_preview_texture, preview_request_size, representative_source_time,
+    AuthoringMediaPreviewService, MediaPreviewFrame,
 };
 use crate::ui::waveform::{paint_authoring_waveform, WaveformPaintRequest};
 

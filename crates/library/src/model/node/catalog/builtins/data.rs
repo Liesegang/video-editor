@@ -18,8 +18,25 @@ const GRADIENT_OUTPUT: &[PortSpec] = &[PortSpec::single(
     "Value",
     PortDataType::Gradient,
 )];
+const IMAGE_COLLECTION_OUTPUT: &[PortSpec] = &[PortSpec::single(
+    DATA_VALUE_OUTPUT_PORT,
+    "Value",
+    PortDataType::ImageCollection,
+)];
 
 const SPECS: &[DescriptorSpec] = &[
+    DescriptorSpec::implemented(
+        DescriptorIdentity::new(
+            "native.data.image-collection",
+            "Image Collection",
+            "Data",
+            "node_editor.menu.create.data:image_collection",
+            &["image", "collection", "sprites", "assets", "data", "value"],
+        ),
+        NativeNodeFactory::Data(DataContent::ImageCollection),
+        &[],
+        IMAGE_COLLECTION_OUTPUT,
+    ),
     DescriptorSpec::implemented(
         DescriptorIdentity::new(
             "native.data.gradient",

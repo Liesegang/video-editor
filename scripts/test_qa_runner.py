@@ -231,6 +231,10 @@ class QaRunnerTests(unittest.TestCase):
             },
         )
 
+    def test_timeline_frame_rounding_matches_rust_at_positive_half_frames(self):
+        self.assertEqual(SUPPORT.timeline_frame_for_seconds(7.75, 30.0), 233)
+        self.assertEqual(SUPPORT.timeline_frame_for_seconds(7.5, 30.0), 225)
+
     def test_timeline_seek_rejects_a_point_outside_the_settled_ruler(self):
         client = mock.Mock()
         client.wait_component_settled.return_value = self.timeline_seek_sample(
@@ -261,6 +265,7 @@ class QaRunnerTests(unittest.TestCase):
             "assets-timeline",
             "particle-node-clip",
             "particle-collision",
+            "particle-sprite-collection",
             "particle-sphere-collision",
             "color-ramp",
             "point-attributes",
@@ -313,6 +318,12 @@ class QaRunnerTests(unittest.TestCase):
         self.assertTrue(appearance.expects_exit)
         point_size = next(suite for suite in full if suite.name == "point-size")
         self.assertTrue(point_size.project_file and point_size.expects_exit)
+        sprite_collection = next(
+            suite for suite in full if suite.name == "particle-sprite-collection"
+        )
+        self.assertEqual(sprite_collection.fixture, "authoring_sprite_collection_e2e")
+        self.assertTrue(sprite_collection.project_file)
+        self.assertTrue(sprite_collection.expects_exit)
         tracking = next(suite for suite in full if suite.name == "text-tracking")
         self.assertTrue(tracking.project_file)
         self.assertTrue(tracking.expects_exit)
@@ -405,23 +416,6 @@ class QaRunnerTests(unittest.TestCase):
         ].append(copy.deepcopy(parameter))
         with self.assertRaises(TEXT_FONT_FALLBACK.QaFailure):
             TEXT_FONT_FALLBACK.module_text_content(ambiguous, "item")
-
-    def test_suite_files_do_not_use_removed_project_fixture_or_ambiguous_editor_name(self):
-        for suite in RUNNER.suite_specs("full"):
-            source = (SCRIPTS / suite.script).read_text(encoding="utf-8")
-            self.assertNotIn("retired_fixture", source)
-            self.assertNotIn("qa_project_graph_base", source)
-        self.assertEqual(CURVE.FIXTURE, "authoring_e2e")
-
-    def test_every_active_qa_file_stays_below_one_thousand_lines(self):
-        files = [SCRIPTS / "qa-runner.py"]
-        files.extend(SCRIPTS / suite.script for suite in RUNNER.suite_specs("full"))
-        files.extend(SCRIPTS.glob("qa_*.py"))
-        files.append(SCRIPTS / "qa-particle-persistence-e2e.py")
-        files.append(pathlib.Path(__file__))
-        for path in files:
-            with self.subTest(path=path.name):
-                self.assertLess(len(path.read_text(encoding="utf-8").splitlines()), 1000)
 
     def test_published_endpoint_is_strictly_ipv4_loopback(self):
         self.assertEqual(

@@ -79,6 +79,7 @@ fn comparison_program(
             color_register,
             position_register: None,
             size_register: None,
+            sprite_selection_register: None,
         },
         expected,
     )
@@ -200,6 +201,7 @@ fn selection_program(
             color_register,
             position_register: None,
             size_register: None,
+            sprite_selection_register: None,
         },
         expected,
     )
@@ -346,6 +348,7 @@ fn gpu_point_select_is_eager_and_does_not_hide_an_invalid_unselected_branch() {
         color_register: 7,
         position_register: None,
         size_register: None,
+        sprite_selection_register: None,
     });
     let mut renderer = SkiaRenderer::new(256, 144, transparent(), true, None, None).unwrap();
     let pixels = render_point_test_scene(&mut renderer, &scene).unwrap();

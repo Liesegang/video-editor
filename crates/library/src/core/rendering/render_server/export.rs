@@ -4,7 +4,7 @@ mod panic_guard;
 mod video_output;
 mod worker;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -17,6 +17,7 @@ use crate::error::LibraryError;
 use crate::model::authoring::{AuthoringProject, InstancePath, TimelineId};
 use crate::model::frame::entity::{FrameContent, FrameGroupKind, FrameItem};
 use crate::model::frame::frame::FrameInfo;
+use crate::model::property::ImageCollectionValue;
 use crate::plugin::{
     ExportDestination, ExportFormat, ExportFrame, ExportPlugin, ExportSettings, PluginManager,
 };
@@ -79,6 +80,7 @@ struct AuthoringExportRenderer {
 #[derive(Default)]
 struct AuthoringPointPreflight {
     target_sizes: BTreeSet<(u32, u32)>,
+    sprite_collections: HashSet<ImageCollectionValue>,
 }
 
 impl AuthoringPointPreflight {
@@ -92,7 +94,12 @@ impl AuthoringPointPreflight {
 
     fn include_frame(&mut self, frame_info: &FrameInfo) -> Result<(), LibraryError> {
         let root = authoring_export_dimensions(frame_info)?;
-        collect_point_target_sizes(&frame_info.items, root, &mut self.target_sizes)
+        collect_point_target_sizes(
+            &frame_info.items,
+            root,
+            &mut self.target_sizes,
+            &mut self.sprite_collections,
+        )
     }
 }
 
@@ -195,6 +202,17 @@ fn ensure_authoring_export_renderer(
             RenderDestination::Export,
             &point_preflight.target_sizes(),
         )?;
+        let mut collections = point_preflight
+            .sprite_collections
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        collections.sort_by(|left, right| left.assets.cmp(&right.assets));
+        renderer.service.preflight_authoring_sprite_collections(
+            project,
+            RenderDestination::Export,
+            &collections,
+        )?;
     }
     Ok(())
 }
@@ -214,12 +232,16 @@ fn collect_point_target_sizes(
     items: &[FrameItem],
     current_target: (u32, u32),
     targets: &mut BTreeSet<(u32, u32)>,
+    collections: &mut HashSet<ImageCollectionValue>,
 ) -> Result<(), LibraryError> {
     for item in items {
         match item {
             FrameItem::Object(object) => {
-                if matches!(&object.content, FrameContent::PointScene { .. }) {
+                if let FrameContent::PointScene { scene, .. } = &object.content {
                     targets.insert(current_target);
+                    if !scene.sprites.assets.is_empty() {
+                        collections.insert(scene.sprites.clone());
+                    }
                 }
             }
             FrameItem::Group(group) => {
@@ -234,18 +256,20 @@ fn collect_point_target_sizes(
                 } else {
                     current_target
                 };
-                collect_point_target_sizes(&group.items, child_target, targets)?;
+                collect_point_target_sizes(&group.items, child_target, targets, collections)?;
             }
             FrameItem::Transition(transition) => {
                 collect_point_target_sizes(
                     std::slice::from_ref(&transition.from.item),
                     current_target,
                     targets,
+                    collections,
                 )?;
                 collect_point_target_sizes(
                     std::slice::from_ref(&transition.to.item),
                     current_target,
                     targets,
+                    collections,
                 )?;
             }
         }

@@ -256,6 +256,7 @@ fn paste(
             require_project_asset(project, media.asset_id)?;
         }
     }
+    validate_clipboard_image_assets(project, clipboard)?;
     let invocation_owner = invocation_owner(project, instance_id, transition_instance_path)?;
     let definition_id = private_definition_for_instance(project, instance_id)?;
     let minimum = clipboard
@@ -343,6 +344,34 @@ fn paste(
         .collect::<Vec<_>>();
     pasted_ids.sort();
     Ok((definition_id, pasted_ids))
+}
+
+fn validate_clipboard_image_assets(
+    project: &AuthoringProject,
+    clipboard: &ModuleSelectionClipboard,
+) -> Result<(), String> {
+    let validate = |value: &PropertyValue| {
+        project.validate_property_asset_references(value, "Module clipboard")
+    };
+    for node in &clipboard.nodes {
+        for (_, property) in node.properties().iter() {
+            for value in property.properties.values() {
+                validate(value)?;
+            }
+        }
+    }
+    for parameter in &clipboard.parameters {
+        validate(&parameter.published.default_value)?;
+        if let Some(value) = &parameter.current_override {
+            validate(value)?;
+        }
+        if let Some(track) = &parameter.automation {
+            for keyframe in &track.keyframes {
+                validate(&keyframe.value)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn invocation_owner(

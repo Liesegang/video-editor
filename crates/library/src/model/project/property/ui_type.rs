@@ -31,6 +31,8 @@ pub enum PropertyUiType {
     Pattern,
     /// Lossless Solid, Gradient, or Pattern paint selector.
     Paint,
+    /// Ordered references to imported Image Assets.
+    ImageCollection,
     Color,
     Text,
     MultilineText,
@@ -75,7 +77,12 @@ impl PropertyUiType {
     pub const fn supports_expression(&self) -> bool {
         !matches!(
             self,
-            Self::ColorValue | Self::Path | Self::Gradient | Self::Pattern | Self::Paint
+            Self::ColorValue
+                | Self::Path
+                | Self::Gradient
+                | Self::Pattern
+                | Self::Paint
+                | Self::ImageCollection
         )
     }
 

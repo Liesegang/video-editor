@@ -13,6 +13,7 @@ use library::model::property::{
 use ordered_float::OrderedFloat;
 
 use super::color_value_picker::color_value_picker;
+use super::image_collection_editor::{image_collection_editor, ImageCollectionEditorContext};
 use super::paint_value_editor::{gradient_value_editor, paint_value_editor, pattern_value_editor};
 use super::property_drag_value::{
     numeric_edit_finished, FloatDragValueConfig, IntegerDragValueConfig,
@@ -30,6 +31,8 @@ pub(crate) struct PropertyValueEditorSpec<'a> {
     pub fallback_suffix: &'a str,
     pub fallback_speed: f64,
     pub palette: &'a ProjectPalette,
+    /// Project Asset authority required only by Image Collection values.
+    pub image_collection: Option<ImageCollectionEditorContext<'a>>,
 }
 
 /// Attach actions to a property value without sharing the popup identity used
@@ -68,6 +71,7 @@ pub(crate) fn property_value_editor(
         fallback_suffix,
         fallback_speed,
         palette,
+        image_collection,
     } = spec;
     let default = definition.map(PropertyDefinition::default_value);
     let mut edit = match value {
@@ -205,6 +209,28 @@ pub(crate) fn property_value_editor(
                 finished: edited.finished,
             }
         }
+        PropertyValue::ImageCollection(collection) => {
+            if let Some(context) = image_collection {
+                let edited = image_collection_editor(
+                    ui,
+                    id.with("image_collection"),
+                    qa_id,
+                    collection,
+                    context,
+                );
+                PropertyValueEdit {
+                    response: edited.response,
+                    changed: edited.changed,
+                    finished: edited.changed,
+                }
+            } else {
+                PropertyValueEdit {
+                    response: ui.weak("Project Images unavailable"),
+                    changed: false,
+                    finished: false,
+                }
+            }
+        }
         PropertyValue::Path(_)
         | PropertyValue::Array(_)
         | PropertyValue::Map(_)
@@ -258,6 +284,7 @@ pub(crate) fn property_ui_kind(ui_type: &PropertyUiType) -> &'static str {
         PropertyUiType::Integer { .. } => "integer",
         PropertyUiType::ColorValue => "managed_color",
         PropertyUiType::Paint => "paint",
+        PropertyUiType::ImageCollection => "image_collection",
         PropertyUiType::Gradient => "gradient",
         PropertyUiType::Pattern => "pattern",
         PropertyUiType::Path => "path",
@@ -568,6 +595,7 @@ mod tests {
                             fallback_suffix: "",
                             fallback_speed: 1.0,
                             palette: &palette,
+                            image_collection: None,
                         },
                     );
                     property_value_context_menu(&edit.response, |ui| {
@@ -639,6 +667,7 @@ mod tests {
                         fallback_suffix: " px",
                         fallback_speed: 1.0,
                         palette: &palette,
+                        image_collection: None,
                     },
                 )
                 .response
@@ -709,6 +738,7 @@ mod tests {
                             fallback_suffix: " px",
                             fallback_speed: 1.0,
                             palette: &palette,
+                            image_collection: None,
                         },
                     );
                 });

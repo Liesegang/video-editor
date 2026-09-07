@@ -21,6 +21,7 @@ from qa_support import (
     AUTHORING_AUDIO_FIXTURE,
     AUTHORING_FIXTURE,
     AUTHORING_PATH_FIXTURE,
+    AUTHORING_SPRITE_COLLECTION_FIXTURE,
     QA_APP_BINARY_ENV,
     QaClient,
     REPOSITORY_ROOT,
@@ -69,6 +70,13 @@ FULL_SUITES = (
     SuiteSpec(
         "particle-collision",
         "qa-particle-collision-e2e.py",
+        project_file=True,
+        expects_exit=True,
+    ),
+    SuiteSpec(
+        "particle-sprite-collection",
+        "qa-particle-sprite-collection-e2e.py",
+        AUTHORING_SPRITE_COLLECTION_FIXTURE,
         project_file=True,
         expects_exit=True,
     ),

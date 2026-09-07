@@ -45,6 +45,25 @@ default). Their Node graphs also support ordered, repeated Gravity, Drag,
 Turbulence, Vortex, and Point forces, evaluated by the shared GPU compute
 runtime.
 
+### Sprite image collections
+
+In a Particle System's Inspector, drag imported Image Assets onto **Sprites**
+or select them from its thumbnail popup. Reorder or remove entries there;
+removing an entry does not delete its Asset. Empty collections use the original
+disc. **Tint** multiplies each image's color and alpha; new renderers start white.
+
+**Selection Mode → random** gives each particle a stable image choice.
+**value** uses **Selection** from 0 to 1 across the ordered collection (1 picks
+the last image). Selection supports Timeline keyframes. For per-point choice,
+unpublish Selection from its Node input context menu and connect Point Info's
+Random, Normalized Age, or a stored Number attribute. An **Image Collection**
+Data Node can supply Sprites after that input is explicitly unpublished.
+Inspector and Nodes use the same collection editor and Project Asset previews.
+
+Collections support up to 64 unique still Image Assets. Image aspect ratio and
+transparency are preserved; collection edits do not restart the simulation.
+Video, Timeline output, and Composition collections are not supported yet.
+
 ### Per-point custom attributes
 
 Inside a Particle Node Clip, add **Point Info** and **Store Number Attribute**
@@ -52,8 +71,8 @@ from the context menu. Connect the final Force's Particles output to both
 Points inputs; connect Store's Points output to Sprite Renderer's Points
 input. Feed Normalized Age, Age, or Random from Point Info into Store's Value.
 Store's Attribute output can then drive ordinary arithmetic Nodes and a
-**Color Ramp**. The factory Sprite Color is initially published to the Inspector:
-right-click its Color value and choose **Unpublish parameter** before connecting
+**Color Ramp**. The factory Sprite Tint is initially published to the Inspector:
+right-click its Tint value and choose **Unpublish parameter** before connecting
 the Color Ramp's Color output to it. This replaces the single Inspector color
 control with per-point color logic explicitly.
 Gradient values and frame-uniform arithmetic inputs retain their usual editors

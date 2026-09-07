@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use library::editor::{
     TimelineEditorService, AUTHORING_AUDIO_E2E_FIXTURE, AUTHORING_E2E_FIXTURE,
-    AUTHORING_PATH_E2E_FIXTURE,
+    AUTHORING_PATH_E2E_FIXTURE, AUTHORING_SPRITE_COLLECTION_E2E_FIXTURE,
 };
 use library::model::authoring::TimelineId;
 use library::plugin::PluginManager;
@@ -19,6 +19,7 @@ enum KnownQaFixture {
     Authoring,
     Audio,
     Path,
+    SpriteCollection,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -67,6 +68,16 @@ pub(super) fn startup_service(
         } => {
             let media = e2e_media_directory();
             let fixture = library::editor::build_authoring_path_e2e_fixture(&media, plugins)?;
+            install_qa_project_path(&fixture.service, save_path.as_deref())?;
+            Ok((fixture.service, Some(fixture.info.timeline_id)))
+        }
+        StartupSource::BuildFixture {
+            fixture: KnownQaFixture::SpriteCollection,
+            save_path,
+        } => {
+            let media = e2e_media_directory();
+            let fixture =
+                library::editor::build_authoring_sprite_collection_e2e_fixture(&media, plugins)?;
             install_qa_project_path(&fixture.service, save_path.as_deref())?;
             Ok((fixture.service, Some(fixture.info.timeline_id)))
         }
@@ -138,6 +149,7 @@ fn known_qa_fixture(name: &str) -> Result<KnownQaFixture, LibraryError> {
         AUTHORING_E2E_FIXTURE => Ok(KnownQaFixture::Authoring),
         AUTHORING_AUDIO_E2E_FIXTURE => Ok(KnownQaFixture::Audio),
         AUTHORING_PATH_E2E_FIXTURE => Ok(KnownQaFixture::Path),
+        AUTHORING_SPRITE_COLLECTION_E2E_FIXTURE => Ok(KnownQaFixture::SpriteCollection),
         _ => Err(LibraryError::Validation(format!(
             "Unknown authoring QA fixture '{name}'"
         ))),
@@ -239,6 +251,18 @@ mod tests {
             StartupSource::BuildFixture {
                 fixture: KnownQaFixture::Authoring,
                 save_path: Some(PathBuf::from("qa-project.ruvie")),
+            }
+        );
+        assert_eq!(
+            startup_source(
+                Some(AUTHORING_SPRITE_COLLECTION_E2E_FIXTURE),
+                None,
+                Some(OsStr::new("sprite-collection.ruvie")),
+            )
+            .unwrap(),
+            StartupSource::BuildFixture {
+                fixture: KnownQaFixture::SpriteCollection,
+                save_path: Some(PathBuf::from("sprite-collection.ruvie")),
             }
         );
     }

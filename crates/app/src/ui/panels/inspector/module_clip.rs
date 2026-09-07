@@ -11,18 +11,24 @@ use library::model::authoring::{
 use library::model::node::native_node_descriptor_for_node;
 use library::plugin::PluginManager;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use crate::state::authoring::AuthoringUiState;
 use crate::ui::module_parameter_editor::ModuleParameterContext;
 
 use super::property_authoring::published_parameter_row;
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the Node Clip Inspector borrows the authoritative Project, editor services, preview service, and selected invocation without creating parallel ownership"
+)]
 pub(super) fn module_parameters(
     ui: &mut egui::Ui,
-    project: &AuthoringProject,
+    project: &Arc<AuthoringProject>,
     state: &mut AuthoringUiState,
     service: &TimelineEditorService,
     plugins: &PluginManager,
+    media_previews: &mut crate::ui::media_preview::AuthoringMediaPreviewService,
     item: &TimelineItem,
     invocation: &ModuleInvocation,
 ) {
@@ -80,7 +86,14 @@ pub(super) fn module_parameters(
                     .default_open(true)
                     .show(ui, |ui| {
                         for parameter in &group.parameters {
-                            published_parameter_row(ui, state, &context, parameter);
+                            published_parameter_row(
+                                ui,
+                                state,
+                                &context,
+                                parameter,
+                                Some(project),
+                                Some(media_previews),
+                            );
                         }
                     })
                     .header_response;
@@ -227,13 +240,17 @@ mod tests {
         assert!(!rate_allowed);
         assert!(rate_reason.is_some_and(|reason| reason.contains("fixed-step")));
 
-        assert_eq!(
-            published_parameter_keyframe_capability(
-                &particle.definition,
-                particle.parameters.color,
-            ),
-            (true, None)
-        );
+        for parameter_id in [
+            particle.parameters.color,
+            particle.parameters.sprites,
+            particle.parameters.selection_mode,
+            particle.parameters.selection,
+        ] {
+            assert_eq!(
+                published_parameter_keyframe_capability(&particle.definition, parameter_id),
+                (true, None)
+            );
+        }
     }
 
     #[test]

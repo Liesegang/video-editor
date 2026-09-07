@@ -38,6 +38,7 @@ fn heat_program() -> PointRenderProgram {
         color_register: 5,
         position_register: None,
         size_register: None,
+        sprite_selection_register: None,
     }
 }
 
@@ -143,6 +144,7 @@ fn typed_program(kind: PointAttributeElementType, value: PropertyValue) -> Point
         },
         position_register: None,
         size_register: None,
+        sprite_selection_register: None,
     }
 }
 
@@ -447,6 +449,7 @@ fn value_program(instructions: Vec<PointInstruction>, color_register: u16) -> Po
         color_register,
         position_register: None,
         size_register: None,
+        sprite_selection_register: None,
     }
 }
 
@@ -597,4 +600,26 @@ fn point_length_accepts_numeric_shapes_and_returns_number() {
             .unwrap_err()
             .contains("does not accept Color")
     );
+}
+
+#[test]
+fn sprite_selection_register_requires_an_existing_number_field() {
+    let mut program = value_program(
+        vec![
+            PointInstruction::Random { channel: 0 },
+            PointInstruction::Constant {
+                value: PointAttributeElementType::Color.default_value(),
+            },
+        ],
+        1,
+    );
+    program.sprite_selection_register = Some(0);
+    program.validate().unwrap();
+    let decoded: PointRenderProgram =
+        serde_json::from_str(&serde_json::to_string(&program).unwrap()).unwrap();
+    assert_eq!(decoded, program);
+    program.sprite_selection_register = Some(1);
+    assert!(program.validate().is_err());
+    program.sprite_selection_register = Some(2);
+    assert!(program.validate().is_err());
 }

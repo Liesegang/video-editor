@@ -28,7 +28,8 @@ TIMELINE_TAB_ID = "dock.tab:timeline"
 NODE_EDITOR_TAB_ID = "dock.tab:node_editor"
 NODE_EDITOR_CANVAS_ID = "node_editor.canvas"
 PUBLISHED_PARAMETERS = PARTICLE_PUBLISHED_PARAMETERS
-CONSTANT_ONLY_PARAMETERS = set(PUBLISHED_PARAMETERS) - {"Color"}
+FRAME_SAMPLED_PARAMETERS = {"Tint", "Sprites", "Selection Mode", "Selection"}
+CONSTANT_ONLY_PARAMETERS = set(PUBLISHED_PARAMETERS) - FRAME_SAMPLED_PARAMETERS
 PARTICLE_CATALOG_IDS = {
     "native.particle.emitter",
     "native.particle.shape-location",
@@ -498,7 +499,7 @@ def _assert_inspector_capabilities(client, instance_id, parameters):
     evidence = {}
     for name, control in controls.items():
         metadata = control.get("metadata") or {}
-        expected_keyframes = name == "Color"
+        expected_keyframes = name in FRAME_SAMPLED_PARAMETERS
         if metadata.get("mode") != "constant":
             raise QaFailure("{} did not start as a constant control".format(name))
         if metadata.get("allow_keyframe") is not expected_keyframes:
@@ -512,7 +513,9 @@ def _assert_inspector_capabilities(client, instance_id, parameters):
                 or metadata.get("locked") is not False
                 or control.get("enabled") is not True
             ):
-                raise QaFailure("Color did not retain frame-sampled authoring")
+                raise QaFailure(
+                    "{} did not retain frame-sampled authoring".format(name)
+                )
         else:
             reason = metadata.get("keyframe_disabled_reason")
             if (
@@ -531,7 +534,7 @@ def _assert_inspector_capabilities(client, instance_id, parameters):
         }
     if set(evidence) != set(PUBLISHED_PARAMETERS):
         raise QaFailure("Inspector and Published parameter names diverged")
-    if set(name for name in evidence if name != "Color") != CONSTANT_ONLY_PARAMETERS:
+    if set(evidence) - FRAME_SAMPLED_PARAMETERS != CONSTANT_ONLY_PARAMETERS:
         raise QaFailure("Inspector constant-only parameter set changed")
     return evidence
 

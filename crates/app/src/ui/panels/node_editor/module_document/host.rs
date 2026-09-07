@@ -17,12 +17,13 @@ use super::*;
 pub fn node_editor_panel(
     ui: &mut egui::Ui,
     project_frame: (
-        &AuthoringProject,
+        &std::sync::Arc<AuthoringProject>,
         library::model::authoring::ProjectRevision,
     ),
     state: &mut AuthoringUiState,
     service: &TimelineEditorService,
     plugins: &PluginManager,
+    media_previews: &mut crate::ui::media_preview::AuthoringMediaPreviewService,
 ) {
     let (project, revision) = project_frame;
     let Some(NodeEditorDocument::ModuleDefinition {
@@ -111,6 +112,13 @@ pub fn node_editor_panel(
         plugins,
         property_context,
         &mut parameter_host,
+        Some(
+            crate::ui::widgets::image_collection_editor::ImageCollectionEditorContext {
+                project,
+                media_previews,
+                library_drag: &mut state.library_drag,
+            },
+        ),
     );
     if state.node_editor.pending_command == Some(crate::command::CommandId::Delete) {
         state.node_editor.pending_command = None;

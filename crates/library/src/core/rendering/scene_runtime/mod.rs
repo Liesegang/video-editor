@@ -6,6 +6,8 @@ mod diagnostics;
 mod forces;
 mod gl_backend;
 mod invocation;
+mod point_field_data;
+mod point_field_dependencies;
 mod point_fields;
 #[cfg(test)]
 pub(crate) use diagnostics::PointInvocationStats;
@@ -17,11 +19,13 @@ mod render;
 mod shaders;
 mod simulation;
 mod source;
+mod sprites;
 mod vectors;
 
 use crate::rendering::gl_resources::SavedGlState;
 use invocation::PointInvocation;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::error::LibraryError;
 use crate::model::frame::particle::{
@@ -29,7 +33,7 @@ use crate::model::frame::particle::{
     ParticleEmitterShape, ParticleSceneParameters, particle_lifetime_steps,
 };
 use crate::model::frame::point::{PointSceneFrame, PointSceneSource, SceneInvocationKey};
-use crate::rendering::renderer::Affine2D;
+use crate::rendering::renderer::{Affine2D, ManagedImageResource, PointRasterRequest};
 
 pub(crate) use gl_backend::SceneTextureFormat;
 use gl_backend::{
@@ -82,6 +86,7 @@ pub(crate) struct SceneTexture {
 struct PointPipelineKey {
     source_kind: PointSourceKind,
     field_source_hash: Option<[u8; 32]>,
+    sprites: bool,
 }
 
 /// Owns every mutable Particle buffer and every raw-GL object created beside
@@ -91,6 +96,7 @@ pub(crate) struct SceneRuntime {
     capability: Result<gl_backend::CapabilityProfile, String>,
     pipelines: HashMap<PointPipelineKey, PointPipeline>,
     invocations: HashMap<SceneInvocationKey, PointInvocation>,
+    sprite_atlases: HashMap<sprites::SpriteAtlasKey, sprites::SpriteAtlas>,
     target: Option<SceneTarget>,
     use_tick: u64,
     limits: SceneRuntimeLimits,
@@ -110,6 +116,7 @@ impl SceneRuntime {
             capability,
             pipelines: HashMap::new(),
             invocations: HashMap::new(),
+            sprite_atlases: HashMap::new(),
             target: None,
             use_tick: 0,
             limits,
@@ -120,15 +127,14 @@ impl SceneRuntime {
 
     pub(crate) fn render_point(
         &mut self,
-        scene: &PointSceneFrame,
-        transform: &Affine2D,
+        request: PointRasterRequest<'_>,
         target_width: u32,
         target_height: u32,
         format: SceneTextureFormat,
         premultiplied_color: [f32; 4],
     ) -> Result<SceneTexture, LibraryError> {
-        scene.validate().map_err(LibraryError::Validation)?;
-        validate_transform(transform)?;
+        request.scene.validate().map_err(LibraryError::Validation)?;
+        validate_transform(request.transform)?;
         validate_color(premultiplied_color)?;
         let capability = self.capability.as_ref().map_err(|diagnostic| {
             LibraryError::Render(format!("GPU Particle unavailable: {diagnostic}"))
@@ -142,13 +148,38 @@ impl SceneRuntime {
         )?;
         self.with_isolated_gl(|runtime| {
             runtime.render_point_isolated(
-                scene,
-                transform,
+                request,
                 target_width,
                 target_height,
                 format,
                 premultiplied_color,
             )
+        })
+    }
+
+    pub(crate) fn preflight_sprites(
+        &mut self,
+        sprites: &[Arc<ManagedImageResource>],
+    ) -> Result<(), LibraryError> {
+        if sprites.is_empty() {
+            return Ok(());
+        }
+        self.capability.as_ref().map_err(|diagnostic| {
+            LibraryError::Render(format!("GPU Sprite collections unavailable: {diagnostic}"))
+        })?;
+        self.with_isolated_gl(|runtime| {
+            runtime.use_tick = runtime.use_tick.wrapping_add(1);
+            let use_tick = runtime.use_tick;
+            runtime.prepare_sprite_atlas(sprites, use_tick)?;
+            let pipeline = PointPipeline::create(
+                &runtime.gl,
+                use_tick,
+                PointSourceKind::Particle,
+                None,
+                true,
+            )?;
+            pipeline.destroy(&runtime.gl);
+            Ok(())
         })
     }
 
@@ -211,7 +242,8 @@ impl SceneRuntime {
         // Preflight has no authored executable identity. Keep its throwaway
         // program outside the executable cache so a legitimate all-zero hash
         // cannot collide with this synthetic probe.
-        let pipeline = PointPipeline::create(&self.gl, use_tick, PointSourceKind::Particle, None)?;
+        let pipeline =
+            PointPipeline::create(&self.gl, use_tick, PointSourceKind::Particle, None, false)?;
         self.ensure_target(target_width, target_height, format)?;
         let buffer = match allocate_particle_buffer(&self.gl, 1) {
             Ok(buffer) => buffer,
@@ -240,6 +272,9 @@ impl SceneRuntime {
                     transform: &Affine2D::IDENTITY,
                     logical_size: (target_width, target_height),
                     premultiplied_color: [0.0; 4],
+                    sprite_atlas: None,
+                    sprite_selection: &crate::model::frame::point::SpriteSelection::Random,
+                    sprite_seed: 0,
                 },
             )?;
             Ok(SceneTexture {
@@ -256,17 +291,32 @@ impl SceneRuntime {
 
     fn render_point_isolated(
         &mut self,
-        scene: &PointSceneFrame,
-        transform: &Affine2D,
+        request: PointRasterRequest<'_>,
         target_width: u32,
         target_height: u32,
         format: SceneTextureFormat,
         premultiplied_color: [f32; 4],
     ) -> Result<SceneTexture, LibraryError> {
+        let scene = request.scene;
+        let transform = request.transform;
+        let sprites = request.sprites;
         self.use_tick = self.use_tick.wrapping_add(1);
         let use_tick = self.use_tick;
         let source_kind = PointSourceKind::of(&scene.source);
-        let pipeline = self.pipeline(source_kind, scene.point_program.as_ref(), use_tick)?;
+        if scene.sprites.assets.len() != sprites.len() {
+            return Err(LibraryError::Validation(format!(
+                "Point Sprite collection declares {} assets but resolved {} images",
+                scene.sprites.assets.len(),
+                sprites.len()
+            )));
+        }
+        let sprite_atlas = self.prepare_sprite_atlas(sprites, use_tick)?;
+        let pipeline = self.pipeline(
+            source_kind,
+            scene.point_program.as_ref(),
+            sprite_atlas.is_some(),
+            use_tick,
+        )?;
         self.ensure_target(target_width, target_height, format)?;
 
         let capacity = scene.source.capacity();
@@ -347,6 +397,9 @@ impl SceneRuntime {
                     transform,
                     logical_size: (scene.logical_width, scene.logical_height),
                     premultiplied_color,
+                    sprite_atlas: sprite_atlas.as_ref(),
+                    sprite_selection: &scene.sprite_selection,
+                    sprite_seed: invocation_seed(scene),
                 },
             )?;
             Ok(SceneTexture {
@@ -366,11 +419,13 @@ impl SceneRuntime {
         &mut self,
         source_kind: PointSourceKind,
         point_program: Option<&crate::model::point::PointRenderProgram>,
+        sprites: bool,
         use_tick: u64,
     ) -> Result<PointPipeline, LibraryError> {
         let key = PointPipelineKey {
             source_kind,
             field_source_hash: point_fields::source_hash(source_kind, point_program)?,
+            sprites,
         };
         if let Some(pipeline) = self.pipelines.get_mut(&key) {
             pipeline.last_used = use_tick;
@@ -386,7 +441,8 @@ impl SceneRuntime {
         {
             pipeline.destroy(&self.gl);
         }
-        let pipeline = PointPipeline::create(&self.gl, use_tick, source_kind, point_program)?;
+        let pipeline =
+            PointPipeline::create(&self.gl, use_tick, source_kind, point_program, sprites)?;
         self.pipelines.insert(key, pipeline.clone());
         Ok(pipeline)
     }
@@ -421,6 +477,9 @@ impl Drop for SceneRuntime {
         }
         for (_, pipeline) in self.pipelines.drain() {
             pipeline.destroy(&self.gl);
+        }
+        for (_, atlas) in self.sprite_atlases.drain() {
+            atlas.destroy(&self.gl);
         }
         if let Some(target) = self.target.take() {
             target.destroy(&self.gl);

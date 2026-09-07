@@ -13,6 +13,7 @@ use crate::model::node::{
     NodeContent, POINT_ATTRIBUTE_OUTPUT_PORT, POINT_ATTRIBUTE_VALUE_PORT, POINT_OFFSET_INPUT_PORT,
     POINT_POSITION_INPUT_PORT, POINT_SCALE_INPUT_PORT, POINT_SELECTION_INPUT_PORT, POINT_SIZE_PORT,
     POINT_SOURCE_PORT, PointNodeRole, SELECT_FALSE_INPUT_PORT, SELECT_TRUE_INPUT_PORT,
+    SPRITE_COLOR_INPUT_PORT, SPRITE_SELECTION_INPUT_PORT,
 };
 use crate::model::point::{
     NumericBinaryOperation, POINT_MAX_INSTRUCTIONS, POINT_MAX_RAMPS, PointAttributeElementType,
@@ -34,8 +35,6 @@ const POINT_AGE_OUTPUT_PORT: &str = "age";
 const POINT_NORMALIZED_AGE_OUTPUT_PORT: &str = "normalized_age";
 const POINT_POSITION_OUTPUT_PORT: &str = "position";
 const POINT_RANDOM_OUTPUT_PORT: &str = "random";
-const SPRITE_COLOR_INPUT_PORT: &str = "color";
-
 #[derive(Clone, Copy)]
 struct PointSourceCapabilities {
     age: bool,
@@ -285,11 +284,15 @@ fn compile_point_program(
     let varying_color = color_source
         .as_ref()
         .is_some_and(|source| builder.depends_on_point(source));
+    let selection_target = address(renderer_node_id, SPRITE_SELECTION_INPUT_PORT);
+    let varying_selection = single_input_source(definition, &selection_target)
+        .as_ref()
+        .is_some_and(|source| builder.depends_on_point(source));
     let has_executable_stage = trace
         .stages
         .iter()
         .any(|stage| !matches!(stage, PointStage::Passthrough(_)));
-    if !has_executable_stage && !varying_color {
+    if !has_executable_stage && !varying_color && !varying_selection {
         return Ok(None);
     }
     let context = FieldContext {
@@ -299,12 +302,26 @@ fn compile_point_program(
         capabilities,
     };
     let color = builder.compile_input(&color_target, PointAttributeElementType::Color, &context)?;
+    let sprite_selection_register = if varying_selection {
+        Some(
+            builder
+                .compile_input(
+                    &selection_target,
+                    PointAttributeElementType::Number,
+                    &context,
+                )?
+                .register,
+        )
+    } else {
+        None
+    };
     let program = CompiledPointProgram {
         schema: builder.schema,
         instructions: builder.instructions,
         color_register: color.register,
         position_register,
         size_register,
+        sprite_selection_register,
     };
     Ok(Some(program))
 }

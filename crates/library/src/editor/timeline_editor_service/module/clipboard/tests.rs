@@ -430,6 +430,45 @@ fn media_clipboard_missing_from_destination_assets_rolls_back_atomically() {
 }
 
 #[test]
+fn image_collection_clipboard_validates_asset_kind_before_cow() {
+    use crate::model::node::DataContent;
+    use crate::model::project::asset::{Asset, AssetKind};
+    use crate::model::project::connection::DATA_VALUE_PROPERTY;
+    use crate::model::property::{ImageCollectionValue, Property};
+
+    let service = TimelineEditorService::create_default("Collection destination").unwrap();
+    let (_, instance_id) = paste_target_item(&service);
+    let audio = Asset::new("not image", "sound.wav", AssetKind::Audio);
+    let audio_id = audio.id;
+    service.add_asset(audio).unwrap();
+    let mut collection = Node::new_data("Sprites", DataContent::ImageCollection);
+    collection
+        .set_property(
+            DATA_VALUE_PROPERTY.into(),
+            Property::constant(PropertyValue::ImageCollection(
+                ImageCollectionValue::new(vec![audio_id]).unwrap(),
+            )),
+        )
+        .unwrap();
+    let clipboard = ModuleSelectionClipboard {
+        version: CLIPBOARD_VERSION,
+        nodes: vec![collection],
+        connections: Vec::new(),
+        parameters: Vec::new(),
+        signals: Vec::new(),
+        actions: Vec::new(),
+    };
+    let before = service.snapshot().unwrap();
+    let revision = service.revision().unwrap();
+    let error = service
+        .paste_instance_module_selection(instance_id, None, &clipboard, [40.0, 60.0])
+        .expect_err("Audio cannot enter an Image Collection");
+    assert!(error.to_string().contains("non-Image Asset"), "{error}");
+    assert_eq!(service.revision().unwrap(), revision);
+    assert_eq!(service.snapshot().unwrap(), before);
+}
+
+#[test]
 fn serde_clipboard_pastes_automation_into_item_attachment_and_transition_hosts() {
     let source = fixture();
     let source_project = source.service.snapshot().expect("source");

@@ -82,6 +82,30 @@ pub(crate) fn preview_request_size(context: &egui::Context, logical_size: egui::
     })
 }
 
+/// Paint a decoded Asset frame into a bounded editor thumbnail.
+///
+/// Asset cards, Inspectors, and typed Asset-backed property controls share
+/// this fit policy. Callers retain ownership of pending/error placeholders.
+pub(crate) fn paint_media_preview_texture(
+    ui: &egui::Ui,
+    rect: egui::Rect,
+    frame: &MediaPreviewFrame,
+) -> bool {
+    let (Some(texture), Some([width, height])) = (&frame.texture, frame.texture_size) else {
+        return false;
+    };
+    let source = egui::vec2(width as f32, height as f32);
+    let scale = (rect.width() / source.x.max(1.0)).min(rect.height() / source.y.max(1.0));
+    let fitted = egui::Rect::from_center_size(rect.center(), source * scale);
+    ui.painter().image(
+        texture.id(),
+        fitted,
+        egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+        egui::Color32::WHITE,
+    );
+    true
+}
+
 /// Chooses the stable representative frame used by non-timeline Asset cards.
 /// Timeline clips provide their own source-mapped time instead.
 pub(crate) fn representative_source_time(asset: &Asset) -> f64 {

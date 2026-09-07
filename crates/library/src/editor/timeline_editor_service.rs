@@ -457,6 +457,25 @@ impl TimelineEditorService {
             .map_err(LibraryError::Validation)
     }
 
+    /// Remove one unreferenced imported Asset. Project validation is part of
+    /// the transaction, so Timeline sources, Media Nodes, and typed Image
+    /// Collections all reject a dangling removal and roll back atomically.
+    pub fn remove_asset(&self, asset_id: uuid::Uuid) -> Result<ChangeSet, LibraryError> {
+        let mut session = self.write_session()?;
+        session
+            .transact(vec![ProjectInvalidation::ProjectStructure], |project| {
+                let index = project
+                    .assets
+                    .iter()
+                    .position(|asset| asset.id == asset_id)
+                    .ok_or_else(|| format!("Asset {asset_id} does not exist"))?;
+                project.assets.remove(index);
+                Ok(())
+            })
+            .map(|(_, changes)| changes)
+            .map_err(LibraryError::Validation)
+    }
+
     pub fn has_asset_with_path(&self, path: &Path) -> Result<bool, LibraryError> {
         let path = path
             .to_str()

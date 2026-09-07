@@ -35,7 +35,9 @@ use super::{
 pub const AUTHORING_E2E_FIXTURE: &str = "authoring_e2e";
 pub const AUTHORING_AUDIO_E2E_FIXTURE: &str = "authoring_audio_e2e";
 pub const AUTHORING_PATH_E2E_FIXTURE: &str = "authoring_path_e2e";
+pub const AUTHORING_SPRITE_COLLECTION_E2E_FIXTURE: &str = "authoring_sprite_collection_e2e";
 pub const AUTHORING_E2E_IMAGE: &str = "rgba.png";
+pub const AUTHORING_E2E_RGB_IMAGE: &str = "rgb.jpg";
 pub const AUTHORING_E2E_AUDIO: &str = "tone.mp3";
 pub const AUTHORING_E2E_VIDEO: &str = "h264_24.mp4";
 
@@ -62,6 +64,19 @@ pub struct AuthoringE2eFixtureInfo {
 pub struct AuthoringE2eFixture {
     pub service: TimelineEditorService,
     pub info: AuthoringE2eFixtureInfo,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct AuthoringSpriteCollectionE2eFixtureInfo {
+    pub timeline_id: TimelineId,
+    pub rgba_image_asset_id: uuid::Uuid,
+    pub rgb_image_asset_id: uuid::Uuid,
+}
+
+#[derive(Clone)]
+pub struct AuthoringSpriteCollectionE2eFixture {
+    pub service: TimelineEditorService,
+    pub info: AuthoringSpriteCollectionE2eFixtureInfo,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -268,6 +283,38 @@ pub fn build_authoring_e2e_fixture(
         required_input_transition_media_input_id: required_transition_input_id,
     };
     Ok(AuthoringE2eFixture { service, info })
+}
+
+/// Adds a second, visually distinct Image Asset without changing the stable
+/// asset counts used by the general-purpose authoring fixture.
+pub fn build_authoring_sprite_collection_e2e_fixture(
+    e2e_media_directory: &Path,
+    plugins: &PluginManager,
+) -> Result<AuthoringSpriteCollectionE2eFixture, LibraryError> {
+    let base = build_authoring_e2e_fixture(e2e_media_directory, plugins)?;
+    let rgb_path = e2e_media_directory.join(AUTHORING_E2E_RGB_IMAGE);
+    let (asset_ids, _) = base.service.import_file(&rgb_path, plugins)?;
+    let project = base.service.snapshot()?;
+    let rgb_image_asset_id = asset_ids
+        .into_iter()
+        .find(|asset_id| {
+            project
+                .assets
+                .iter()
+                .any(|asset| asset.id == *asset_id && asset.kind == AssetKind::Image)
+        })
+        .ok_or_else(|| {
+            LibraryError::Validation("Sprite collection QA import returned no Image Asset".into())
+        })?;
+    let service = TimelineEditorService::new((*project).clone())?;
+    Ok(AuthoringSpriteCollectionE2eFixture {
+        service,
+        info: AuthoringSpriteCollectionE2eFixtureInfo {
+            timeline_id: base.info.timeline_id,
+            rgba_image_asset_id: base.info.image_asset_id,
+            rgb_image_asset_id,
+        },
+    })
 }
 
 /// Adds a real decoded Audio placement without changing the general-purpose
@@ -753,6 +800,41 @@ mod tests {
                 })
         );
 
+        serde_json::to_string(&fixture.info).expect("serializable fixture info");
+    }
+
+    #[test]
+    fn sprite_collection_fixture_has_two_distinct_images_and_clean_history() {
+        let media_directory =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../test_data/e2e_media");
+        let fixture = build_authoring_sprite_collection_e2e_fixture(
+            &media_directory,
+            &PluginManager::default(),
+        )
+        .expect("sprite collection fixture");
+        let project = fixture.service.snapshot().expect("fixture snapshot");
+
+        project.validate().expect("valid sprite collection fixture");
+        assert_eq!(
+            fixture.service.revision().expect("fixture revision"),
+            ProjectRevision::initial()
+        );
+        assert!(!fixture.service.can_undo().expect("clean Undo state"));
+        assert_ne!(
+            fixture.info.rgba_image_asset_id,
+            fixture.info.rgb_image_asset_id
+        );
+        let image_paths = [
+            (fixture.info.rgba_image_asset_id, AUTHORING_E2E_IMAGE),
+            (fixture.info.rgb_image_asset_id, AUTHORING_E2E_RGB_IMAGE),
+        ];
+        for (asset_id, filename) in image_paths {
+            assert!(project.assets.iter().any(|asset| {
+                asset.id == asset_id
+                    && asset.kind == AssetKind::Image
+                    && Path::new(&asset.path).ends_with(filename)
+            }));
+        }
         serde_json::to_string(&fixture.info).expect("serializable fixture info");
     }
 

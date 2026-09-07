@@ -126,6 +126,7 @@ impl TabViewer for AuthoringTabViewer<'_> {
                     self.state,
                     self.service,
                     self.plugins.as_ref(),
+                    self.media_previews,
                 );
             }
         }

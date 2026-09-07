@@ -179,6 +179,8 @@ pub enum PortDataType {
     Pattern,
     /// Lossless union of Color, Gradient, and Pattern graph values.
     Paint,
+    /// Ordered references to imported Image Assets.
+    ImageCollection,
     Curve,
     ParticleSystem,
     Material,
@@ -241,6 +243,7 @@ impl PortDataType {
                 | Self::Gradient
                 | Self::Pattern
                 | Self::Paint
+                | Self::ImageCollection
                 | Self::Vec2
                 | Self::Vec3
                 | Self::Vec4

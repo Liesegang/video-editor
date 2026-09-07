@@ -12,6 +12,7 @@ use crate::ui::module_parameter_editor::{
     edit_module_parameter, ModuleParameterContext, ModuleParameterRowInteraction,
 };
 use crate::ui::panels::node_editor::property_label;
+use crate::ui::widgets::image_collection_editor::ImageCollectionEditorContext;
 use crate::ui::widgets::property_mode::property_mode_control_for_state;
 use crate::ui::widgets::property_value_editor::{property_value_editor, PropertyValueEditorSpec};
 
@@ -97,6 +98,7 @@ pub(super) fn show_published_input(
     parameter: &PublishedParameter,
     clock: ModulePropertyContext,
     transform: egui::emath::TSTransform,
+    image_collection: Option<ImageCollectionEditorContext<'_>>,
 ) -> (egui::Response, Vec<ModuleEditorAction>) {
     let owner = match &host.owner {
         Ok(id) => id.clone(),
@@ -142,6 +144,7 @@ pub(super) fn show_published_input(
                     PropertyValueEditorSpec {
                         definition: row.definition, fallback_suffix: "", fallback_speed: 0.05,
                         palette: &host.project.palette,
+                        image_collection,
                     },
                 )
             }).inner;

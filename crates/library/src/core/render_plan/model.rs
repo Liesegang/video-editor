@@ -172,6 +172,7 @@ pub(crate) struct CompiledPointProgram {
     pub color_register: u16,
     pub position_register: Option<u16>,
     pub size_register: Option<u16>,
+    pub sprite_selection_register: Option<u16>,
 }
 
 /// Compile-time constraint for a Point value. Numeric uniforms retain their

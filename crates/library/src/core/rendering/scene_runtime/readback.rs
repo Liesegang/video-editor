@@ -27,6 +27,68 @@ pub(crate) struct PointFieldReadback {
 }
 
 impl SceneRuntime {
+    /// Inspect one owned render-target pixel before any Ganesh format conversion.
+    pub(crate) fn read_target_pixel_f32(&self, x: u32, y: u32) -> Result<[f32; 4], LibraryError> {
+        let target = self.target.as_ref().ok_or_else(|| {
+            LibraryError::Render("Point pixel readback has no render target".into())
+        })?;
+        if x >= target.width || y >= target.height {
+            return Err(LibraryError::Render(
+                "Point pixel readback is outside the target".into(),
+            ));
+        }
+        let saved = SavedGlState::capture(&self.gl);
+        let mut pixel = [0.0_f32; 4];
+        // SAFETY: this test-only inspection owns the current context and reads
+        // exactly one pixel from its live framebuffer into four f32 components.
+        // Pack state and external framebuffer bindings are restored afterwards.
+        unsafe {
+            let pack_buffer = self
+                .gl
+                .get_parameter_buffer(glow::PIXEL_PACK_BUFFER_BINDING);
+            let pack_parameters = [
+                glow::PACK_ALIGNMENT,
+                glow::PACK_ROW_LENGTH,
+                glow::PACK_IMAGE_HEIGHT,
+                glow::PACK_SKIP_ROWS,
+                glow::PACK_SKIP_PIXELS,
+                glow::PACK_SKIP_IMAGES,
+                glow::PACK_SWAP_BYTES,
+                glow::PACK_LSB_FIRST,
+            ];
+            let pack_values = pack_parameters.map(|parameter| self.gl.get_parameter_i32(parameter));
+            self.gl.bind_buffer(glow::PIXEL_PACK_BUFFER, None);
+            for parameter in pack_parameters {
+                self.gl.pixel_store_i32(
+                    parameter,
+                    if parameter == glow::PACK_ALIGNMENT {
+                        4
+                    } else {
+                        0
+                    },
+                );
+            }
+            self.gl
+                .bind_framebuffer(glow::READ_FRAMEBUFFER, Some(target.framebuffer));
+            self.gl.read_pixels(
+                x as i32,
+                y as i32,
+                1,
+                1,
+                glow::RGBA,
+                glow::FLOAT,
+                glow::PixelPackData::Slice(Some(bytemuck::cast_slice_mut(&mut pixel))),
+            );
+            self.gl.bind_buffer(glow::PIXEL_PACK_BUFFER, pack_buffer);
+            for (parameter, value) in pack_parameters.into_iter().zip(pack_values) {
+                self.gl.pixel_store_i32(parameter, value);
+            }
+        }
+        saved.restore(&self.gl);
+        gl_operation_result(&self.gl, "Point pixel test readback")?;
+        Ok(pixel)
+    }
+
     pub(crate) fn read_point_fields(
         &self,
         key: &SceneInvocationKey,

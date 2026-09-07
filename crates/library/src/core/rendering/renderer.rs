@@ -11,6 +11,10 @@ use crate::model::frame::transform::Transform;
 use ruvie_color_management::{
     CpuColorProcessor, ManagedLinearWorkingImage, VerifiedSourceSpace, WorkingColorIdentity,
 };
+#[cfg(feature = "gl")]
+use sha2::{Digest, Sha256};
+#[cfg(feature = "gl")]
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 /// A render-time 2D affine mapping.
@@ -341,6 +345,76 @@ pub struct SkSLRasterRequest<'a> {
 pub struct PointRasterRequest<'a> {
     pub scene: &'a crate::model::frame::point::PointSceneFrame,
     pub transform: &'a Affine2D,
+    /// Ordered, Project-working images resolved by RenderService through the
+    /// ordinary managed media loader. An empty slice retains the analytic
+    /// disc Sprite fast path.
+    pub sprites: &'a [Arc<ManagedImageResource>],
+}
+
+/// Immutable managed image shared by RenderService's decoded-media cache and
+/// the raw-GL Point atlas cache.
+///
+/// The fingerprint is constructed from the authoritative working-color
+/// identity and exact premultiplied pixels once, when the managed still cache
+/// is populated. Callers cannot supply a digest which disagrees with the
+/// image; SceneRuntime can therefore key GPU resources without rehashing a
+/// large collection on every frame.
+#[derive(Clone, Debug)]
+pub struct ManagedImageResource {
+    image: ManagedLinearWorkingImage,
+    #[cfg(feature = "gl")]
+    fingerprint: [u8; 32],
+}
+
+impl ManagedImageResource {
+    pub fn new(image: ManagedLinearWorkingImage) -> Self {
+        #[cfg(feature = "gl")]
+        let mut fingerprint = ManagedImageFingerprint::default();
+        #[cfg(feature = "gl")]
+        image.identity().hash(&mut fingerprint);
+        #[cfg(feature = "gl")]
+        image.pixels().width().hash(&mut fingerprint);
+        #[cfg(feature = "gl")]
+        image.pixels().height().hash(&mut fingerprint);
+        #[cfg(feature = "gl")]
+        fingerprint.write(bytemuck::cast_slice(image.pixels().pixels()));
+        Self {
+            image,
+            #[cfg(feature = "gl")]
+            fingerprint: fingerprint.finalize(),
+        }
+    }
+
+    pub fn image(&self) -> &ManagedLinearWorkingImage {
+        &self.image
+    }
+
+    #[cfg(feature = "gl")]
+    pub(crate) fn fingerprint(&self) -> [u8; 32] {
+        self.fingerprint
+    }
+}
+
+#[cfg(feature = "gl")]
+#[derive(Default)]
+struct ManagedImageFingerprint(Sha256);
+
+#[cfg(feature = "gl")]
+impl ManagedImageFingerprint {
+    fn finalize(self) -> [u8; 32] {
+        self.0.finalize().into()
+    }
+}
+
+#[cfg(feature = "gl")]
+impl Hasher for ManagedImageFingerprint {
+    fn write(&mut self, bytes: &[u8]) {
+        self.0.update(bytes);
+    }
+
+    fn finish(&self) -> u64 {
+        0
+    }
 }
 
 pub trait Renderer {
@@ -568,6 +642,23 @@ pub trait Renderer {
             "GPU Point requires an OpenGL 4.3 SceneRuntime; this renderer cannot preflight that backend"
                 .to_string(),
         ))
+    }
+
+    /// Pre-upload and validate every managed Sprite collection reached by an
+    /// export before its encoder or destination file exists. An empty
+    /// collection uses the analytic disc path and needs no image resource.
+    fn preflight_point_sprites(
+        &mut self,
+        sprites: &[Arc<ManagedImageResource>],
+    ) -> Result<(), LibraryError> {
+        if sprites.is_empty() {
+            Ok(())
+        } else {
+            Err(LibraryError::Render(
+                "GPU Sprite collections require an OpenGL 4.3 SceneRuntime; this renderer has no compatible GPU boundary"
+                    .to_string(),
+            ))
+        }
     }
 
     /// Render and composite one Point scene into the active

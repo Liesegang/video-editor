@@ -215,6 +215,7 @@ fn module_surface_keeps_timeline_graph_expansion_out_of_the_document() {
                     &plugins,
                     property_context(),
                     &mut parameter_fixture.host(),
+                    None,
                 );
             });
         },
@@ -245,6 +246,10 @@ fn every_typed_data_leaf_exposes_its_canonical_value_in_the_node_body() {
             (data, property.value()),
             (DataContent::Color, Some(PropertyValue::ColorValue(_)))
                 | (DataContent::Gradient, Some(PropertyValue::Gradient(_)))
+                | (
+                    DataContent::ImageCollection,
+                    Some(PropertyValue::ImageCollection(_))
+                )
                 | (DataContent::Path, Some(PropertyValue::Path(_)))
         ));
         let contract = ModuleNodePortContract::resolve(&node).expect("typed Data port contract");
@@ -279,6 +284,7 @@ fn every_typed_data_leaf_exposes_its_canonical_value_in_the_node_body() {
         to_global: &mut transform,
         canvas_clip: &mut clip,
         capture: Arc::new(Mutex::new(ModuleSurfaceCapture::default())),
+        image_collection: None,
     };
     for id in data_ids {
         assert!(SnarlViewer::has_body(&mut viewer, &id));
@@ -327,6 +333,7 @@ fn selected_module_wire_paints_normal_and_highlight_on_one_shared_curve() {
                     &plugins,
                     property_context(),
                     &mut parameter_fixture.host(),
+                    None,
                 );
             });
         },
@@ -529,6 +536,7 @@ fn snarl_is_layout_and_paint_only_for_connection_gestures() {
             to_global: &mut transform,
             canvas_clip: &mut clip,
             capture: Arc::new(Mutex::new(ModuleSurfaceCapture::default())),
+            image_collection: None,
         };
         SnarlViewer::connect(&mut viewer, &from, &to, &mut snarl);
     }
@@ -562,6 +570,7 @@ fn production_snarl_consumes_the_authoritative_application_transform() {
         to_global: &mut captured,
         canvas_clip: &mut clip,
         capture: Arc::new(Mutex::new(ModuleSurfaceCapture::default())),
+        image_collection: None,
     };
     let mut snarl_proposal = egui::emath::TSTransform::new(egui::vec2(-900.0, 700.0), 1.25);
 

@@ -74,6 +74,9 @@ pub struct PointRenderProgram {
     /// Final derived size for the rendered stream. `None` preserves the
     /// producer's size.
     pub size_register: Option<u16>,
+    /// Optional normalized image-choice field for the shared Sprite renderer.
+    /// This is render-only and never changes simulation state.
+    pub sprite_selection_register: Option<u16>,
 }
 
 impl PointRenderProgram {
@@ -205,6 +208,9 @@ impl PointRenderProgram {
         }
         if let Some(size) = self.size_register {
             require_register(&registers, size, PointAttributeElementType::Number)?;
+        }
+        if let Some(selection) = self.sprite_selection_register {
+            require_register(&registers, selection, PointAttributeElementType::Number)?;
         }
         Ok(registers)
     }

@@ -850,6 +850,7 @@ pub(crate) fn property_value_type(value: &PropertyValue) -> PortDataType {
         PropertyValue::Gradient(_) => PortDataType::Gradient,
         PropertyValue::Pattern(_) => PortDataType::Pattern,
         PropertyValue::Paint(_) => PortDataType::Paint,
+        PropertyValue::ImageCollection(_) => PortDataType::ImageCollection,
         PropertyValue::Array(_) => PortDataType::List,
         PropertyValue::Map(_) | PropertyValue::OpaqueJson(_) => PortDataType::Any,
     }

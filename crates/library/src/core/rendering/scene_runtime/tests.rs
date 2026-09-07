@@ -64,6 +64,8 @@ fn scene(target_step: u64) -> PointSceneFrame {
             b: 60,
             a: 200,
         },
+        sprites: Default::default(),
+        sprite_selection: crate::model::frame::point::SpriteSelection::Random,
         point_program: None,
     }
 }
@@ -189,6 +191,7 @@ fn constant_color_program(use_last_stop: bool) -> PointRenderProgram {
         color_register: 0,
         position_register: None,
         size_register: None,
+        sprite_selection_register: None,
     }
 }
 
@@ -206,11 +209,13 @@ fn point_pipeline_keys_are_source_and_shader_shape_specific() {
         PointPipelineKey {
             source_kind: PointSourceKind::Particle,
             field_source_hash: particle_hash,
+            sprites: false,
         },
         PointPipelineKey {
             source_kind: PointSourceKind::Grid,
             field_source_hash: point_fields::source_hash(PointSourceKind::Grid, Some(&first))
                 .unwrap(),
+            sprites: false,
         },
         "one Module executable may contain both Particle and Grid producers"
     );

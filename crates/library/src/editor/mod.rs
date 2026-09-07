@@ -29,10 +29,13 @@ pub use authoring_factory::{
 };
 pub use authoring_qa_fixture::{
     AUTHORING_AUDIO_E2E_FIXTURE, AUTHORING_E2E_AUDIO, AUTHORING_E2E_FIXTURE, AUTHORING_E2E_IMAGE,
-    AUTHORING_E2E_VIDEO, AUTHORING_PATH_E2E_FIXTURE, AuthoringAudioE2eFixture,
+    AUTHORING_E2E_RGB_IMAGE, AUTHORING_E2E_VIDEO, AUTHORING_PATH_E2E_FIXTURE,
+    AUTHORING_SPRITE_COLLECTION_E2E_FIXTURE, AuthoringAudioE2eFixture,
     AuthoringAudioE2eFixtureInfo, AuthoringE2eFixture, AuthoringE2eFixtureInfo,
-    AuthoringPathE2eFixture, AuthoringPathE2eFixtureInfo, build_authoring_audio_e2e_fixture,
+    AuthoringPathE2eFixture, AuthoringPathE2eFixtureInfo, AuthoringSpriteCollectionE2eFixture,
+    AuthoringSpriteCollectionE2eFixtureInfo, build_authoring_audio_e2e_fixture,
     build_authoring_e2e_fixture, build_authoring_path_e2e_fixture,
+    build_authoring_sprite_collection_e2e_fixture,
 };
 pub use authoring_waveform_service::AuthoringWaveformService;
 pub use color_service::ColorSpaceManager as ColorService;

@@ -47,6 +47,8 @@ mod point_tests;
 #[cfg(test)]
 mod point_typed_tests;
 #[cfg(test)]
+mod sprite_collection_tests;
+#[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod transition_module_tests;

@@ -597,6 +597,7 @@ fn operation_entry(
                             keyframe_disabled_reason: None,
                             allow_expression: definition.default_value().supports_expression(),
                             pending_keyframe,
+                            image_collection: None,
                         },
                     );
                     (
@@ -790,7 +791,9 @@ fn node_clip_operation_entry(
                     );
                     continue;
                 };
-                super::property_authoring::published_parameter_row(ui, state, context, parameter);
+                super::property_authoring::published_parameter_row(
+                    ui, state, context, parameter, None, None,
+                );
             }
         },
     );

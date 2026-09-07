@@ -25,6 +25,7 @@ REPOSITORY_ROOT = pathlib.Path(__file__).resolve().parent.parent
 AUTHORING_FIXTURE = "authoring_e2e"
 AUTHORING_AUDIO_FIXTURE = "authoring_audio_e2e"
 AUTHORING_PATH_FIXTURE = "authoring_path_e2e"
+AUTHORING_SPRITE_COLLECTION_FIXTURE = "authoring_sprite_collection_e2e"
 QA_APP_BINARY_ENV = "RUVIE_QA_APP_BINARY"
 
 
@@ -563,6 +564,12 @@ def bring_timeline_component(client: QaClient, component_id: str, direction: flo
     raise QaFailure("could not bring {} into the Timeline viewport".format(component_id))
 
 
+def timeline_frame_for_seconds(seconds: float, fps: float) -> int:
+    """Match Rust's positive half-away-from-zero Timeline frame rounding."""
+
+    return max(0, int(math.floor(float(seconds) * float(fps) + 0.5)))
+
+
 def seek_timeline_seconds(client: QaClient, seconds: float, fps: float = 30.0):
     """Seek through the production Timeline ruler and wait for its exact frame."""
     activate_dock_tab(
@@ -601,7 +608,7 @@ def seek_timeline_seconds(client: QaClient, seconds: float, fps: float = 30.0):
             "coordinate_space": "points",
         },
     )
-    expected_frame = int(round(float(seconds) * float(fps)))
+    expected_frame = timeline_frame_for_seconds(seconds, fps)
     return client.wait_until(
         "Timeline seek to {:.3f}s".format(seconds),
         lambda: current

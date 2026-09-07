@@ -99,13 +99,22 @@ pub(crate) struct SavedGlState {
     read_framebuffer: Option<glow::Framebuffer>,
     texture_2d: Option<glow::Texture>,
     sampler: Option<glow::Sampler>,
+    texture_2d_unit0: Option<glow::Texture>,
+    sampler_unit0: Option<glow::Sampler>,
     texture_unit: u32,
     shader_storage_buffer: Option<glow::Buffer>,
-    shader_storage_bindings: [Option<glow::Buffer>; 5],
+    shader_storage_bindings: [Option<glow::Buffer>; 6],
     copy_read_buffer: Option<glow::Buffer>,
     copy_write_buffer: Option<glow::Buffer>,
     pixel_unpack_buffer: Option<glow::Buffer>,
     unpack_alignment: i32,
+    unpack_row_length: i32,
+    unpack_image_height: i32,
+    unpack_skip_rows: i32,
+    unpack_skip_pixels: i32,
+    unpack_skip_images: i32,
+    unpack_swap_bytes: i32,
+    unpack_lsb_first: i32,
     viewport: [i32; 4],
     scissor_box: [i32; 4],
     clear_color: [f32; 4],
@@ -137,20 +146,36 @@ impl SavedGlState {
                     gl.get_parameter_indexed_i32(glow::SHADER_STORAGE_BUFFER_BINDING, index as u32),
                 )
             });
+            let texture_unit = gl.get_parameter_i32(glow::ACTIVE_TEXTURE) as u32 - glow::TEXTURE0;
+            let texture_2d = gl.get_parameter_texture(glow::TEXTURE_BINDING_2D);
+            let sampler = gl.get_parameter_sampler(glow::SAMPLER_BINDING);
+            gl.active_texture(glow::TEXTURE0);
+            let texture_2d_unit0 = gl.get_parameter_texture(glow::TEXTURE_BINDING_2D);
+            let sampler_unit0 = gl.get_parameter_sampler(glow::SAMPLER_BINDING);
+            gl.active_texture(glow::TEXTURE0 + texture_unit);
             Self {
                 program: gl.get_parameter_program(glow::CURRENT_PROGRAM),
                 vertex_array: gl.get_parameter_vertex_array(glow::VERTEX_ARRAY_BINDING),
                 draw_framebuffer: gl.get_parameter_framebuffer(glow::DRAW_FRAMEBUFFER_BINDING),
                 read_framebuffer: gl.get_parameter_framebuffer(glow::READ_FRAMEBUFFER_BINDING),
-                texture_2d: gl.get_parameter_texture(glow::TEXTURE_BINDING_2D),
-                sampler: gl.get_parameter_sampler(glow::SAMPLER_BINDING),
-                texture_unit: gl.get_parameter_i32(glow::ACTIVE_TEXTURE) as u32 - glow::TEXTURE0,
+                texture_2d,
+                sampler,
+                texture_2d_unit0,
+                sampler_unit0,
+                texture_unit,
                 shader_storage_buffer: gl.get_parameter_buffer(glow::SHADER_STORAGE_BUFFER_BINDING),
                 shader_storage_bindings,
                 copy_read_buffer: gl.get_parameter_buffer(glow::COPY_READ_BUFFER_BINDING),
                 copy_write_buffer: gl.get_parameter_buffer(glow::COPY_WRITE_BUFFER_BINDING),
                 pixel_unpack_buffer: gl.get_parameter_buffer(glow::PIXEL_UNPACK_BUFFER_BINDING),
                 unpack_alignment: gl.get_parameter_i32(glow::UNPACK_ALIGNMENT),
+                unpack_row_length: gl.get_parameter_i32(glow::UNPACK_ROW_LENGTH),
+                unpack_image_height: gl.get_parameter_i32(glow::UNPACK_IMAGE_HEIGHT),
+                unpack_skip_rows: gl.get_parameter_i32(glow::UNPACK_SKIP_ROWS),
+                unpack_skip_pixels: gl.get_parameter_i32(glow::UNPACK_SKIP_PIXELS),
+                unpack_skip_images: gl.get_parameter_i32(glow::UNPACK_SKIP_IMAGES),
+                unpack_swap_bytes: gl.get_parameter_i32(glow::UNPACK_SWAP_BYTES),
+                unpack_lsb_first: gl.get_parameter_i32(glow::UNPACK_LSB_FIRST),
                 viewport,
                 scissor_box,
                 clear_color,
@@ -179,6 +204,12 @@ impl SavedGlState {
             self.texture_2d = None;
         }
         if self
+            .texture_2d_unit0
+            .is_some_and(|texture| texture.0.get() == target.texture_id)
+        {
+            self.texture_2d_unit0 = None;
+        }
+        if self
             .draw_framebuffer
             .is_some_and(|framebuffer| framebuffer.0.get() == target.framebuffer_id)
         {
@@ -201,6 +232,10 @@ impl SavedGlState {
             gl.bind_vertex_array(self.vertex_array);
             gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, self.draw_framebuffer);
             gl.bind_framebuffer(glow::READ_FRAMEBUFFER, self.read_framebuffer);
+            gl.active_texture(glow::TEXTURE0);
+            gl.bind_texture(glow::TEXTURE_2D, self.texture_2d_unit0);
+            gl.bind_sampler(0, self.sampler_unit0);
+            gl.active_texture(glow::TEXTURE0 + self.texture_unit);
             gl.bind_texture(glow::TEXTURE_2D, self.texture_2d);
             gl.bind_sampler(self.texture_unit, self.sampler);
             for (index, binding) in self.shader_storage_bindings.into_iter().enumerate() {
@@ -213,6 +248,13 @@ impl SavedGlState {
             gl.bind_buffer(glow::COPY_WRITE_BUFFER, self.copy_write_buffer);
             gl.bind_buffer(glow::PIXEL_UNPACK_BUFFER, self.pixel_unpack_buffer);
             gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, self.unpack_alignment);
+            gl.pixel_store_i32(glow::UNPACK_ROW_LENGTH, self.unpack_row_length);
+            gl.pixel_store_i32(glow::UNPACK_IMAGE_HEIGHT, self.unpack_image_height);
+            gl.pixel_store_i32(glow::UNPACK_SKIP_ROWS, self.unpack_skip_rows);
+            gl.pixel_store_i32(glow::UNPACK_SKIP_PIXELS, self.unpack_skip_pixels);
+            gl.pixel_store_i32(glow::UNPACK_SKIP_IMAGES, self.unpack_skip_images);
+            gl.pixel_store_i32(glow::UNPACK_SWAP_BYTES, self.unpack_swap_bytes);
+            gl.pixel_store_i32(glow::UNPACK_LSB_FIRST, self.unpack_lsb_first);
             gl.viewport(
                 self.viewport[0],
                 self.viewport[1],

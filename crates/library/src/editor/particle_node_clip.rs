@@ -47,6 +47,9 @@ pub struct ParticlePublishedParameters {
     pub collision_bounce: PublishedParameterId,
     pub collision_friction: PublishedParameterId,
     pub color: PublishedParameterId,
+    pub sprites: PublishedParameterId,
+    pub selection_mode: PublishedParameterId,
+    pub selection: PublishedParameterId,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -396,8 +399,29 @@ impl ParticleNodeClipFactory {
             &mut definition,
             renderer_id,
             "color",
-            "Color",
+            "Tint",
             PortDataType::Color,
+        )?;
+        let sprites = publish(
+            &mut definition,
+            renderer_id,
+            crate::model::node::SPRITE_COLLECTION_INPUT_PORT,
+            "Sprites",
+            PortDataType::ImageCollection,
+        )?;
+        let selection_mode = publish(
+            &mut definition,
+            renderer_id,
+            crate::model::node::SPRITE_SELECTION_MODE_INPUT_PORT,
+            "Selection Mode",
+            PortDataType::String,
+        )?;
+        let selection = publish(
+            &mut definition,
+            renderer_id,
+            crate::model::node::SPRITE_SELECTION_INPUT_PORT,
+            "Selection",
+            PortDataType::Number,
         )?;
         definition.topology_revision = 2;
         definition.interface_version = 2;
@@ -434,6 +458,9 @@ impl ParticleNodeClipFactory {
                 collision_bounce,
                 collision_friction,
                 color,
+                sprites,
+                selection_mode,
+                selection,
             },
         })
     }

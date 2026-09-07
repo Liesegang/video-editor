@@ -37,7 +37,10 @@ PARTICLE_PUBLISHED_PARAMETERS = [
     "Radius",
     "Bounce",
     "Friction",
-    "Color",
+    "Tint",
+    "Sprites",
+    "Selection Mode",
+    "Selection",
 ]
 
 

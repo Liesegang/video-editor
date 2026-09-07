@@ -13,7 +13,8 @@ use crate::model::frame::color::Color;
 use crate::model::path::{FillRule, PathValue};
 use crate::model::project::connection::DATA_VALUE_PROPERTY;
 use crate::model::property::{
-    ColorValue, GradientValue, PropertyDefinition, PropertyUiType, PropertyValue,
+    ColorValue, GradientValue, ImageCollectionValue, PropertyDefinition, PropertyUiType,
+    PropertyValue,
 };
 
 static COLOR_PROPERTY_DEFINITIONS: LazyLock<[PropertyDefinition; 1]> = LazyLock::new(|| {
@@ -48,21 +49,38 @@ static GRADIENT_PROPERTY_DEFINITIONS: LazyLock<[PropertyDefinition; 1]> = LazyLo
     )]
 });
 
+static IMAGE_COLLECTION_PROPERTY_DEFINITIONS: LazyLock<[PropertyDefinition; 1]> =
+    LazyLock::new(|| {
+        [PropertyDefinition::new(
+            DATA_VALUE_PROPERTY,
+            PropertyUiType::ImageCollection,
+            "Value",
+            PropertyValue::ImageCollection(ImageCollectionValue::default()),
+        )]
+    });
+
 /// Stable persisted identity for canonical authored data sources.
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum DataContent {
     Color,
     Gradient,
+    ImageCollection,
     Path,
 }
 
 impl DataContent {
-    pub const ALL: [Self; 3] = [Self::Color, Self::Gradient, Self::Path];
+    pub const ALL: [Self; 4] = [
+        Self::Color,
+        Self::Gradient,
+        Self::ImageCollection,
+        Self::Path,
+    ];
 
     pub const fn catalog_id(self) -> &'static str {
         match self {
             Self::Color => "native.data.color",
             Self::Gradient => "native.data.gradient",
+            Self::ImageCollection => "native.data.image-collection",
             Self::Path => "native.data.path",
         }
     }
@@ -71,6 +89,7 @@ impl DataContent {
         match self {
             Self::Color => "Color",
             Self::Gradient => "Gradient",
+            Self::ImageCollection => "Image Collection",
             Self::Path => "Path",
         }
     }
@@ -79,6 +98,7 @@ impl DataContent {
         match self {
             Self::Color => COLOR_PROPERTY_DEFINITIONS.as_slice(),
             Self::Gradient => GRADIENT_PROPERTY_DEFINITIONS.as_slice(),
+            Self::ImageCollection => IMAGE_COLLECTION_PROPERTY_DEFINITIONS.as_slice(),
             Self::Path => PATH_PROPERTY_DEFINITIONS.as_slice(),
         }
     }
@@ -88,6 +108,7 @@ impl DataContent {
             (self, value),
             (Self::Color, PropertyValue::ColorValue(_))
                 | (Self::Gradient, PropertyValue::Gradient(_))
+                | (Self::ImageCollection, PropertyValue::ImageCollection(_))
                 | (Self::Path, PropertyValue::Path(_))
         )
     }

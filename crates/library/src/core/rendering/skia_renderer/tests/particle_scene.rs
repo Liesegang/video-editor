@@ -13,6 +13,8 @@ pub(super) fn particle_vec3(x: f64, y: f64, z: f64) -> Vec3 {
 pub(super) fn particle_scene(target_step: u64) -> PointSceneFrame {
     PointSceneFrame {
         point_program: None,
+        sprites: Default::default(),
+        sprite_selection: crate::model::frame::point::SpriteSelection::Random,
         invocation: SceneInvocationKey {
             instance_path: InstancePath::root(TimelineId::from_uuid(Uuid::from_u128(1))),
             module_instance_id: ModuleInstanceId::from_uuid(Uuid::from_u128(2)),
@@ -73,7 +75,11 @@ pub(super) fn render_point_test_scene_with_transform(
     transform: &Affine2D,
 ) -> Result<Image, String> {
     let output = renderer
-        .rasterize_point_layer(PointRasterRequest { scene, transform })
+        .rasterize_point_layer(PointRasterRequest {
+            scene,
+            transform,
+            sprites: &[],
+        })
         .map_err(|error| error.to_string())?;
     match output {
         RenderOutput::Image(image) => Ok(image),

@@ -58,6 +58,8 @@ pub(super) struct ModuleNodeViewer<'a, 'host> {
     pub(super) to_global: &'a mut egui::emath::TSTransform,
     pub(super) canvas_clip: &'a mut egui::Rect,
     pub(super) capture: Arc<Mutex<ModuleSurfaceCapture>>,
+    pub(super) image_collection:
+        Option<crate::ui::widgets::image_collection_editor::ImageCollectionEditorContext<'a>>,
 }
 
 impl ModuleNodeViewer<'_, '_> {
@@ -376,6 +378,13 @@ impl SnarlViewer<Uuid> for ModuleNodeViewer<'_, '_> {
                         parameter,
                         self.property_context,
                         self.canvas_transform,
+                        self.image_collection.as_mut().map(|context| {
+                            crate::ui::widgets::image_collection_editor::ImageCollectionEditorContext {
+                                project: context.project,
+                                media_previews: &mut *context.media_previews,
+                                library_drag: &mut *context.library_drag,
+                            }
+                        }),
                     );
                     self.actions.extend(interface_actions);
                     self.capture_response(&response);
@@ -403,6 +412,13 @@ impl SnarlViewer<Uuid> for ModuleNodeViewer<'_, '_> {
                             .as_ref()
                             .map(|_| ())
                             .map_err(String::as_str),
+                        self.image_collection.as_mut().map(|context| {
+                            crate::ui::widgets::image_collection_editor::ImageCollectionEditorContext {
+                                project: context.project,
+                                media_previews: &mut *context.media_previews,
+                                library_drag: &mut *context.library_drag,
+                            }
+                        }),
                     );
                     self.capture_response(&response);
                     if let Some(action) = action {

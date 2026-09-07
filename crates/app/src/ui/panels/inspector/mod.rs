@@ -133,7 +133,7 @@ pub fn inspector_panel(
         }
         AuthoringSelection::Item(id) => {
             if let Some(item) = project.items.get(&id) {
-                item_inspector(ui, project, state, service, plugins, item);
+                item_inspector(ui, project, state, service, plugins, media_previews, item);
             }
         }
         AuthoringSelection::Transition(id) => {
@@ -263,10 +263,11 @@ fn editable_name(
 
 fn item_inspector(
     ui: &mut egui::Ui,
-    project: &AuthoringProject,
+    project: &Arc<AuthoringProject>,
     state: &mut AuthoringUiState,
     service: &TimelineEditorService,
     plugins: &PluginManager,
+    media_previews: &mut AuthoringMediaPreviewService,
     item: &TimelineItem,
 ) {
     let open_node_clip = section_title(
@@ -363,7 +364,16 @@ fn item_inspector(
     }
 
     if let SourceRef::Module(invocation) = &item.source {
-        module_clip::module_parameters(ui, project, state, service, plugins, item, invocation);
+        module_clip::module_parameters(
+            ui,
+            project,
+            state,
+            service,
+            plugins,
+            media_previews,
+            item,
+            invocation,
+        );
     }
 
     effect_stack::effect_stack(

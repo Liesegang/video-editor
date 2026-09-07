@@ -173,6 +173,9 @@ pub(in crate::ui::panels::node_editor) fn node_icon_for_node<'a>(
         Some(NodeContent::Data(DataContent::Gradient)) => {
             NodeEditorIcon::new(icons::PALETTE, "Reusable gradient value")
         }
+        Some(NodeContent::Data(DataContent::ImageCollection)) => {
+            NodeEditorIcon::new(icons::IMAGE, "Ordered image collection value")
+        }
         Some(NodeContent::Data(DataContent::Path)) => {
             NodeEditorIcon::new(icons::WAVE_SINE, "Canonical path value")
         }
@@ -227,7 +230,7 @@ pub(in crate::ui::panels::node_editor) fn node_icon_for_node<'a>(
 
 pub(in crate::ui::panels::node_editor) fn pin_color(data_type: PortDataType) -> Color32 {
     match data_type {
-        PortDataType::Image => Color32::from_rgb(238, 207, 109),
+        PortDataType::Image | PortDataType::ImageCollection => Color32::from_rgb(238, 207, 109),
         PortDataType::Shape => Color32::from_rgb(142, 132, 246),
         PortDataType::Audio => Color32::from_rgb(100, 200, 100),
         PortDataType::Spectrum => Color32::from_rgb(88, 207, 220),

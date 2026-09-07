@@ -621,6 +621,7 @@ fn every_data_catalog_factory_is_complete_typed_and_roundtrips_losslessly() {
                     == match data {
                         DataContent::Color => PortDataType::Color,
                         DataContent::Gradient => PortDataType::Gradient,
+                        DataContent::ImageCollection => PortDataType::ImageCollection,
                         DataContent::Path => PortDataType::Path,
                     }
         }));
@@ -647,6 +648,10 @@ fn every_data_catalog_factory_is_complete_typed_and_roundtrips_losslessly() {
     assert_eq!(
         DataContent::Gradient.property_definitions()[0].default_value(),
         &PropertyValue::Gradient(crate::model::property::GradientValue::default())
+    );
+    assert_eq!(
+        DataContent::ImageCollection.property_definitions()[0].default_value(),
+        &PropertyValue::ImageCollection(crate::model::property::ImageCollectionValue::default())
     );
     assert!(ColorValue::new(ColorSpaceRef::srgb(), [-1.0, 2.0, 3.0, 0.5]).is_ok());
 }

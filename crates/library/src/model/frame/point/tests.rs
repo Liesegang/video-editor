@@ -97,6 +97,8 @@ fn point_frame_rejects_particle_builtins_on_grid_before_gpu_dispatch() {
         logical_height: 480,
         source: PointSceneSource::Grid(grid()),
         color: Color::white(),
+        sprites: Default::default(),
+        sprite_selection: SpriteSelection::Random,
         point_program: None,
     };
     frame.validate().unwrap();
@@ -115,6 +117,7 @@ fn point_frame_rejects_particle_builtins_on_grid_before_gpu_dispatch() {
             color_register: 1,
             position_register: None,
             size_register: None,
+            sprite_selection_register: None,
         });
         assert!(frame.validate().unwrap_err().contains("require a Particle"));
     }

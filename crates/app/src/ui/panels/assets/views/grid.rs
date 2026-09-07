@@ -202,17 +202,10 @@ fn paint_grid_preview(
 }
 
 fn paint_media_frame(ui: &egui::Ui, rect: Rect, frame: MediaPreviewFrame) {
-    if let (Some(texture), Some([width, height])) = (frame.texture, frame.texture_size) {
-        let source = Vec2::new(width as f32, height as f32);
-        let scale = (rect.width() / source.x.max(1.0)).min(rect.height() / source.y.max(1.0));
-        let fitted = Rect::from_center_size(rect.center(), source * scale);
-        ui.painter().image(
-            texture.id(),
-            fitted,
-            Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
-            Color32::WHITE,
-        );
-    } else if frame.pending {
+    if paint_media_preview_texture(ui, rect, &frame) {
+        return;
+    }
+    if frame.pending {
         paint_preview_icon(
             ui,
             rect,

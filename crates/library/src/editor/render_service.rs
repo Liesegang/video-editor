@@ -31,6 +31,7 @@ use std::sync::Arc;
 
 mod color_pipeline_cache;
 mod image_groups;
+mod media;
 mod transition;
 use color_pipeline_cache::ProjectColorPipelineCache;
 
@@ -40,6 +41,7 @@ pub struct RenderService<T: Renderer> {
     plugin_manager: Arc<PluginManager>,
     color_pipeline_cache: ProjectColorPipelineCache,
     frame_image_bounds: FrameImageBoundsCache,
+    managed_image_cache: media::ManagedImageCache,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -131,6 +133,7 @@ impl<T: Renderer> RenderService<T> {
             cache_manager,
             color_pipeline_cache: ProjectColorPipelineCache::new(),
             frame_image_bounds: FrameImageBoundsCache::default(),
+            managed_image_cache: media::ManagedImageCache::default(),
         }
     }
 
@@ -539,6 +542,7 @@ impl<T: Renderer> RenderService<T> {
                 effects,
                 transform,
             } => {
+                let sprites = self.resolve_point_sprites(&scene.sprites, color_authority)?;
                 let render_transform = context.transform(transform);
                 if effects.is_empty() {
                     return measure_debug("Draw GPU Point scene", || {
@@ -546,6 +550,7 @@ impl<T: Renderer> RenderService<T> {
                             PointRasterRequest {
                                 scene,
                                 transform: &render_transform,
+                                sprites: &sprites,
                             },
                             transform.opacity,
                             crate::model::BlendMode::Normal,
@@ -556,6 +561,7 @@ impl<T: Renderer> RenderService<T> {
                     self.renderer.rasterize_point_layer(PointRasterRequest {
                         scene,
                         transform: &render_transform,
+                        sprites: &sprites,
                     })
                 })?;
                 let final_image = self.apply_effects(
@@ -680,33 +686,8 @@ impl<T: Renderer> RenderService<T> {
         current_time: f64,
         color_authority: &RenderColorAuthority<'_>,
     ) -> Result<(), LibraryError> {
-        let MediaRenderInput {
-            request,
-            surface,
-            expected_kind,
-        } = input;
-        let response = measure_debug(format!("Load {}", surface.file_path), || {
-            self.plugin_manager
-                .load_resource(request, &self.cache_manager)
-        })?;
-        let layer = match color_authority {
-            RenderColorAuthority::Managed {
-                assets, pipeline, ..
-            } => {
-                let working = ingest_loaded_media_from_assets(
-                    assets,
-                    pipeline,
-                    surface,
-                    expected_kind,
-                    response,
-                )?;
-                RenderOutput::Working(working)
-            }
-            RenderColorAuthority::UnmanagedAbi => {
-                require_unmanaged_abi_srgb(response.decoded(), response.pixels())?;
-                RenderOutput::Image(response.into_rgba8()?)
-            }
-        };
+        let surface = input.surface;
+        let layer = self.load_media_layer(input, color_authority)?;
 
         let final_image = self.apply_effects(
             layer,

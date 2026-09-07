@@ -483,6 +483,48 @@ def unpublish_node_input_parameter(
     return state
 
 
+def reset_published_node_input_parameter(
+    client, definition_id, instance_id, node_id, port_key, parameter, before
+):
+    """Reset one exact published Node input before changing its interface ownership."""
+
+    port_id = "node_editor.interface_port.node:{}.input:{}".format(node_id, port_key)
+    action_id = (
+        "node_editor.interface_action.node:{}.input:{}:reset_parameter".format(
+            node_id, port_key
+        )
+    )
+    client.click_component(port_id, button="secondary")
+    _, action = client.wait_component_settled(action_id)
+    metadata = action.get("metadata") or {}
+    if (
+        action.get("enabled") is not True
+        or metadata.get("action") != "reset_parameter"
+        or metadata.get("node_id") != node_id
+        or metadata.get("port") != port_key
+        or metadata.get("parameter_id") != parameter["id"]
+        or metadata.get("instance_id") != instance_id
+    ):
+        raise QaFailure("Published Node input Reset lost its exact identity")
+    client.click_component(action_id)
+
+    def reset():
+        state = client.state()
+        definition = state["project"]["module_definitions"].get(definition_id)
+        overrides = state["project"]["module_instances"][instance_id].get(
+            "parameter_overrides", {}
+        )
+        return (
+            state
+            if state["history"]["revision"] == before["history"]["revision"] + 1
+            and parameter["id"] not in overrides
+            and definition == before["project"]["module_definitions"][definition_id]
+            else None
+        )
+
+    return client.wait_until("reset exact published Node input", reset)
+
+
 def node_content_type(node):
     return str((node.get("content") or {}).get("type", "")).replace("_", "").lower()
 

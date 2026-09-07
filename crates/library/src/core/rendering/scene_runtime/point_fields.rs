@@ -7,13 +7,16 @@ use crate::error::LibraryError;
 use crate::model::ComparisonOperation;
 use crate::model::point::{
     NumericBinaryOperation, POINT_MAX_ATTRIBUTE_COUNT, POINT_MAX_INSTRUCTIONS,
-    POINT_MAX_RAMP_STOPS, POINT_MAX_RAMPS, PointAttributeElementType, PointAttributeGpuDefault,
-    PointColumnLayout, PointInstruction, PointRenderProgram,
+    POINT_MAX_RAMP_STOPS, PointAttributeElementType, PointColumnLayout, PointInstruction,
+    PointRenderProgram,
 };
-use crate::model::property::{GradientSpread, PropertyValue};
 use crate::rendering::gl_resources::link_program;
 
 use super::gl_backend::{PARTICLE_WORKGROUP_SIZE, required_uniform};
+use super::point_field_data::{
+    PROGRAM_DATA_BYTES, PROGRAM_HEADER_VEC4S, RAMP_STOP_VEC4S, program_data,
+};
+use super::point_field_dependencies::selector_exclusive;
 use super::shaders::{PARTICLE_RANDOM_FUNCTIONS, PARTICLE_STRUCT_GLSL};
 use super::source::{
     PointSourceBinding, PointSourceKind, PointSourceRequirements, PointSourceUniforms,
@@ -23,11 +26,7 @@ use super::{drain_gl_errors, gl_operation_result};
 
 const COLOR_STRIDE_BYTES: u64 = 16;
 const GEOMETRY_STRIDE_BYTES: u64 = 16;
-const PROGRAM_HEADER_VEC4S: usize = POINT_MAX_INSTRUCTIONS + POINT_MAX_RAMPS;
-const RAMP_STOP_VEC4S: usize = 2;
-const PROGRAM_DATA_VEC4S: usize =
-    PROGRAM_HEADER_VEC4S + POINT_MAX_RAMPS * POINT_MAX_RAMP_STOPS * RAMP_STOP_VEC4S;
-const PROGRAM_DATA_BYTES: usize = PROGRAM_DATA_VEC4S * 16;
+const SPRITE_SELECTION_STRIDE_BYTES: u64 = 4;
 
 pub(super) struct PointFieldBuffers {
     pub columns: glow::Buffer,
@@ -35,6 +34,10 @@ pub(super) struct PointFieldBuffers {
     /// One vec4 per point: producer-local position.xyz and size. Position and
     /// size fields share this optional allocation and the same render binding.
     pub geometry: Option<glow::Buffer>,
+    /// Optional normalized Sprite choice, produced by the same SSA program as
+    /// Color and geometry. The render shader consumes this only for image
+    /// collections; keeping it separate preserves exact integer columns.
+    pub sprite_selection: Option<glow::Buffer>,
     pub layout: PointColumnLayout,
 }
 
@@ -48,6 +51,7 @@ impl PointFieldBuffers {
             .map_err(LibraryError::Validation)?;
         let color_bytes = color_bytes(capacity)?;
         let geometry_bytes = geometry_bytes(program, capacity)?;
+        let sprite_selection_bytes = sprite_selection_bytes(program, capacity)?;
         let columns = allocate_buffer(gl, layout.byte_len, glow::DYNAMIC_COPY, "Point columns")?;
         let colors = match allocate_buffer(gl, color_bytes, glow::DYNAMIC_COPY, "Point colors") {
             Ok(buffer) => buffer,
@@ -72,10 +76,29 @@ impl PointFieldBuffers {
                 return Err(error);
             }
         };
+        let sprite_selection = match sprite_selection_bytes
+            .map(|bytes| allocate_buffer(gl, bytes, glow::DYNAMIC_COPY, "Point Sprite selection"))
+            .transpose()
+        {
+            Ok(buffer) => buffer,
+            Err(error) => {
+                // SAFETY: every earlier allocation remains exclusively owned
+                // by this failed constructor.
+                unsafe {
+                    gl.delete_buffer(columns);
+                    gl.delete_buffer(colors);
+                    if let Some(geometry) = geometry {
+                        gl.delete_buffer(geometry);
+                    }
+                }
+                return Err(error);
+            }
+        };
         Ok(Self {
             columns,
             colors,
             geometry,
+            sprite_selection,
             layout,
         })
     }
@@ -86,10 +109,14 @@ impl PointFieldBuffers {
             + self.geometry.map_or(0, |_| {
                 u64::from(self.layout.capacity) * GEOMETRY_STRIDE_BYTES
             })
+            + self.sprite_selection.map_or(0, |_| {
+                u64::from(self.layout.capacity) * SPRITE_SELECTION_STRIDE_BYTES
+            })
     }
 
     pub fn matches(&self, program: &PointRenderProgram) -> bool {
         self.geometry.is_some() == program.has_geometry_output()
+            && self.sprite_selection.is_some() == program.sprite_selection_register.is_some()
             && PointColumnLayout::derive(&program.schema, self.layout.capacity)
                 .is_ok_and(|layout| layout == self.layout)
     }
@@ -102,6 +129,9 @@ impl PointFieldBuffers {
             gl.delete_buffer(self.colors);
             if let Some(geometry) = self.geometry {
                 gl.delete_buffer(geometry);
+            }
+            if let Some(sprite_selection) = self.sprite_selection {
+                gl.delete_buffer(sprite_selection);
             }
         }
     }
@@ -150,12 +180,18 @@ impl PointFieldPipeline {
         let uniforms = (|| {
             Ok((
                 required_uniform(gl, compute_program, "uCapacity")?,
-                program
+                if program
                     .instructions
                     .iter()
                     .any(|instruction| matches!(instruction, PointInstruction::Random { .. }))
-                    .then(|| required_uniform(gl, compute_program, "uSeed"))
-                    .transpose()?,
+                {
+                    // SAFETY: `compute_program` linked successfully above.
+                    // A dead selector-only Random may be optimized away; in
+                    // that case no seed upload is required.
+                    unsafe { gl.get_uniform_location(compute_program, "uSeed") }
+                } else {
+                    None
+                },
                 if program.schema.attributes().is_empty() {
                     None
                 } else {
@@ -245,6 +281,9 @@ impl PointFieldPipeline {
             if let Some(geometry) = buffers.geometry {
                 gl.bind_buffer_base(glow::SHADER_STORAGE_BUFFER, 4, Some(geometry));
             }
+            if let Some(sprite_selection) = buffers.sprite_selection {
+                gl.bind_buffer_base(glow::SHADER_STORAGE_BUFFER, 5, Some(sprite_selection));
+            }
             point_source.bind(gl, &self.source)?;
             gl.uniform_1_u32(Some(&self.capacity), buffers.layout.capacity);
             if let Some(location) = &self.seed {
@@ -305,10 +344,12 @@ pub(super) fn required_invocation_bytes(
         PointColumnLayout::derive(&program.schema, capacity).map_err(LibraryError::Validation)?;
     let color_bytes = color_bytes(capacity)?;
     let geometry_bytes = geometry_bytes(program, capacity)?.unwrap_or(0);
+    let sprite_selection_bytes = sprite_selection_bytes(program, capacity)?.unwrap_or(0);
     particle_bytes
         .checked_add(layout.byte_len)
         .and_then(|bytes| bytes.checked_add(color_bytes))
         .and_then(|bytes| bytes.checked_add(geometry_bytes))
+        .and_then(|bytes| bytes.checked_add(sprite_selection_bytes))
         .ok_or_else(|| LibraryError::Render("GPU Point field state size overflow".to_string()))
 }
 
@@ -329,6 +370,23 @@ fn geometry_bytes(
                 .checked_mul(GEOMETRY_STRIDE_BYTES)
                 .ok_or_else(|| {
                     LibraryError::Render("GPU Point geometry buffer size overflow".to_string())
+                })
+        })
+        .transpose()
+}
+
+fn sprite_selection_bytes(
+    program: &PointRenderProgram,
+    capacity: u32,
+) -> Result<Option<u64>, LibraryError> {
+    program
+        .sprite_selection_register
+        .is_some()
+        .then(|| {
+            u64::from(capacity)
+                .checked_mul(SPRITE_SELECTION_STRIDE_BYTES)
+                .ok_or_else(|| {
+                    LibraryError::Render("GPU Point Sprite selection buffer size overflow".into())
                 })
         })
         .transpose()
@@ -387,31 +445,40 @@ fn compute_source(
         ));
     }
     let mut body = String::from("    bool valid = true;\n    pointColumns[slot] = point.serial;\n");
+    let mut attribute_validity = vec![None; program.schema.attributes().len()];
+    let selector_exclusive = selector_exclusive(program);
     for (index, instruction) in program.instructions.iter().enumerate() {
         let register = format!("r{index}");
         match instruction {
             PointInstruction::Constant { .. } => {
                 let kind = register_types[index];
                 body.push_str(&constant_register_source(&register, index, kind));
+                body.push_str(&format!("    bool {register}_valid = true;\n"));
             }
             PointInstruction::Age => body.push_str(&format!(
-                "    float {register} = 0.0;\n    if (!load_point_age(slot, {register})) valid = false;\n"
+                "    float {register} = 0.0;\n    bool {register}_valid = load_point_age(slot, {register});\n"
             )),
             PointInstruction::NormalizedAge => body.push_str(&format!(
-                "    float {register} = 0.0;\n    if (!load_point_normalized_age(slot, {register})) valid = false;\n"
+                "    float {register} = 0.0;\n    bool {register}_valid = load_point_normalized_age(slot, {register});\n"
             )),
             PointInstruction::Position => {
-                body.push_str(&format!("    vec3 {register} = point.position_size.xyz;\n"));
+                body.push_str(&format!("    vec3 {register} = point.position_size.xyz;\n    bool {register}_valid = true;\n"));
             }
             PointInstruction::Size => {
-                body.push_str(&format!("    float {register} = point.position_size.w;\n"));
+                body.push_str(&format!("    float {register} = point.position_size.w;\n    bool {register}_valid = true;\n"));
             }
             PointInstruction::Random { channel } => body.push_str(&format!(
-                "    float {register} = random_01(uSeed, point.serial, {channel}u);\n"
+                "    float {register} = random_01(uSeed, point.serial, {channel}u);\n    bool {register}_valid = true;\n"
             )),
             PointInstruction::LoadAttribute { attribute } => {
                 let kind = attribute_type(program, *attribute)?;
                 body.push_str(&load_attribute_source(&register, *attribute, kind));
+                let stored = attribute_validity[usize::from(*attribute)].ok_or_else(|| {
+                    LibraryError::Validation(
+                        "Point attribute must be stored before it is loaded".to_string(),
+                    )
+                })?;
+                body.push_str(&format!("    bool {register}_valid = r{stored}_valid;\n"));
             }
             PointInstruction::StoreAttribute { attribute, value } => {
                 let kind = attribute_type(program, *attribute)?;
@@ -421,6 +488,10 @@ fn compute_source(
                     *value,
                     kind,
                 ));
+                body.push_str(&format!(
+                    "    bool {register}_valid = valid && r{value}_valid;\n"
+                ));
+                attribute_validity[usize::from(*attribute)] = Some(index);
             }
             PointInstruction::Binary {
                 operation,
@@ -462,13 +533,16 @@ fn compute_source(
                 register_types[index],
             )),
             PointInstruction::ColorRamp { gradient, factor } => body.push_str(&format!(
-                "    vec4 {register} = valid ? sample_point_ramp({gradient}u, r{factor}) : vec4(0.0);\n"
+                "    vec4 {register} = r{factor}_valid ? sample_point_ramp({gradient}u, r{factor}) : vec4(0.0);\n    bool {register}_valid = r{factor}_valid && !any(isnan({register})) && !any(isinf({register}));\n"
             )),
+        }
+        if !selector_exclusive[index] {
+            body.push_str(&format!("    valid = valid && {register}_valid;\n"));
         }
     }
     body.push_str(&format!(
-        "    vec4 result = r{};\n    if (any(isnan(result)) || any(isinf(result))) valid = false;\n",
-        program.color_register
+        "    vec4 result = r{color};\n    bool resultValid = valid && r{color}_valid && !any(isnan(result)) && !any(isinf(result));\n",
+        color = program.color_register
     ));
     if program.has_geometry_output() {
         let position = program.position_register.map_or_else(
@@ -480,10 +554,28 @@ fn compute_source(
             |register| format!("r{register}"),
         );
         body.push_str(&format!(
-            "    vec4 resultGeometry = vec4({position}, {size});\n    if (any(isnan(resultGeometry)) || any(isinf(resultGeometry)) || resultGeometry.w < 0.0) valid = false;\n    pointGeometry[slot] = valid ? resultGeometry : vec4(0.0);\n"
+            "    vec4 resultGeometry = vec4({position}, {size});\n    bool geometryValid = valid && {position_valid} && {size_valid} && !any(isnan(resultGeometry)) && !any(isinf(resultGeometry)) && resultGeometry.w >= 0.0;\n    pointGeometry[slot] = geometryValid ? resultGeometry : vec4(0.0);\n    valid = valid && geometryValid;\n",
+            position_valid = program.position_register.map_or_else(|| "true".to_string(), |register| format!("r{register}_valid")),
+            size_valid = program.size_register.map_or_else(|| "true".to_string(), |register| format!("r{register}_valid")),
+        ));
+        body.push_str("    resultValid = resultValid && geometryValid;\n");
+    }
+    if let Some(selection) = program.sprite_selection_register {
+        body.push_str(&format!(
+            "    float resultSpriteSelection = r{selection};\n    bool spriteSelectionValid = valid && r{selection}_valid && !isnan(resultSpriteSelection) && !isinf(resultSpriteSelection);\n    pointSpriteSelection[slot] = spriteSelectionValid ? resultSpriteSelection : uintBitsToFloat(0x7fc00000u);\n"
         ));
     }
-    body.push_str("    pointColors[slot] = valid ? result : vec4(0.0);\n");
+    if !program.schema.attributes().is_empty() {
+        body.push_str("    if (!valid) {\n");
+        for (attribute, definition) in program.schema.attributes().iter().enumerate() {
+            body.push_str(&clear_attribute_source(
+                attribute as u16,
+                definition.element_type(),
+            ));
+        }
+        body.push_str("    }\n");
+    }
+    body.push_str("    pointColors[slot] = valid && resultValid ? result : vec4(0.0);\n");
     let ramp_function = program
         .instructions
         .iter()
@@ -503,8 +595,18 @@ fn compute_source(
     } else {
         ""
     };
+    let sprite_selection_buffer = if program.sprite_selection_register.is_some() {
+        "layout(std430, binding = 5) buffer PointSpriteSelection { float pointSpriteSelection[]; };"
+    } else {
+        ""
+    };
+    let hidden_sprite_selection = if program.sprite_selection_register.is_some() {
+        "        pointSpriteSelection[slot] = 0.0;"
+    } else {
+        ""
+    };
     Ok(format!(
-        "#version 430 core\nlayout(local_size_x = 64) in;\n{RENDER_POINT_GLSL}\n{point_source}\nlayout(std430, binding = 1) buffer PointColumns {{ uint pointColumns[]; }};\nlayout(std430, binding = 2) buffer PointColors {{ vec4 pointColors[]; }};\nlayout(std430, binding = 3) readonly buffer PointProgramData {{ uvec4 pointData[]; }};\n{geometry_buffer}\nuniform uint uCapacity;\nuniform uint uSeed;\nuniform uint uAttributeOffsets[{POINT_MAX_ATTRIBUTE_COUNT}];\n{PARTICLE_RANDOM_FUNCTIONS}\n{ramp_function}\nvoid main() {{\n    uint slot = gl_GlobalInvocationID.x;\n    if (slot >= uCapacity) return;\n    RenderPoint point = load_render_point(slot);\n    if (!point.alive) {{\n        pointColors[slot] = vec4(0.0);\n{hidden_geometry}\n        return;\n    }}\n{body}}}\n"
+        "#version 430 core\nlayout(local_size_x = 64) in;\n{RENDER_POINT_GLSL}\n{point_source}\nlayout(std430, binding = 1) buffer PointColumns {{ uint pointColumns[]; }};\nlayout(std430, binding = 2) buffer PointColors {{ vec4 pointColors[]; }};\nlayout(std430, binding = 3) readonly buffer PointProgramData {{ uvec4 pointData[]; }};\n{geometry_buffer}\n{sprite_selection_buffer}\nuniform uint uCapacity;\nuniform uint uSeed;\nuniform uint uAttributeOffsets[{POINT_MAX_ATTRIBUTE_COUNT}];\n{PARTICLE_RANDOM_FUNCTIONS}\n{ramp_function}\nvoid main() {{\n    uint slot = gl_GlobalInvocationID.x;\n    if (slot >= uCapacity) return;\n    RenderPoint point = load_render_point(slot);\n    if (!point.alive) {{\n        pointColors[slot] = vec4(0.0);\n{hidden_geometry}\n{hidden_sprite_selection}\n        return;\n    }}\n{body}}}\n"
     ))
 }
 
@@ -609,12 +711,15 @@ fn binary_register_source(
     let result_type = glsl_type(result_kind);
     let zero = zero_literal(result_kind)?;
     let mut source = String::new();
+    source.push_str(&format!(
+        "    bool {register}_valid = r{left}_valid && r{right}_valid;\n"
+    ));
     if matches!(
         operation,
         NumericBinaryOperation::Divide | NumericBinaryOperation::Fmod
     ) {
         source.push_str(&format!(
-            "    if (valid && {}) valid = false;\n",
+            "    if ({register}_valid && {}) {register}_valid = false;\n",
             any_zero(&format!("r{right}"), right_kind)?
         ));
     }
@@ -625,14 +730,14 @@ fn binary_register_source(
         NumericBinaryOperation::Divide => format!("r{left} / r{right}"),
         NumericBinaryOperation::Fmod => {
             source.push_str(&format!(
-                "    {result_type} {register}_quotient = valid ? trunc(r{left} / r{right}) : {zero};\n    if ({}) valid = false;\n",
+                "    {result_type} {register}_quotient = {register}_valid ? trunc(r{left} / r{right}) : {zero};\n    if ({}) {register}_valid = false;\n",
                 non_finite(&format!("{register}_quotient"), result_kind)?
             ));
             format!("r{left} - r{right} * {register}_quotient")
         }
     };
     source.push_str(&format!(
-        "    {result_type} {register}_value = valid ? {expression} : {zero};\n    if ({}) valid = false;\n    {result_type} {register} = valid ? {register}_value : {zero};\n",
+        "    {result_type} {register}_value = {register}_valid ? {expression} : {zero};\n    if ({}) {register}_valid = false;\n    {result_type} {register} = {register}_valid ? {register}_value : {zero};\n",
         non_finite(&format!("{register}_value"), result_kind)?
     ));
     Ok(source)
@@ -645,7 +750,7 @@ fn length_register_source(
 ) -> Result<String, LibraryError> {
     if kind == PointAttributeElementType::Number {
         return Ok(format!(
-            "    float {register}_value = valid ? abs(r{value}) : 0.0;\n    if (isnan({register}_value) || isinf({register}_value)) valid = false;\n    float {register} = valid ? {register}_value : 0.0;\n"
+            "    bool {register}_valid = r{value}_valid;\n    float {register}_value = {register}_valid ? abs(r{value}) : 0.0;\n    if (isnan({register}_value) || isinf({register}_value)) {register}_valid = false;\n    float {register} = {register}_valid ? {register}_value : 0.0;\n"
         ));
     }
     let scale = match kind {
@@ -666,7 +771,7 @@ fn length_register_source(
         }
     };
     Ok(format!(
-        "    float {register}_scale = valid ? {scale} : 0.0;\n    float {register}_value = {register}_scale == 0.0 ? 0.0 : {register}_scale * length(r{value} / {register}_scale);\n    if (isnan({register}_value) || isinf({register}_value)) valid = false;\n    float {register} = valid ? {register}_value : 0.0;\n"
+        "    bool {register}_valid = r{value}_valid;\n    float {register}_scale = {register}_valid ? {scale} : 0.0;\n    float {register}_value = {register}_scale == 0.0 ? 0.0 : {register}_scale * length(r{value} / {register}_scale);\n    if (isnan({register}_value) || isinf({register}_value)) {register}_valid = false;\n    float {register} = {register}_valid ? {register}_value : 0.0;\n"
     ))
 }
 
@@ -684,7 +789,9 @@ fn compare_register_source(
         ComparisonOperation::Equal => "==",
         ComparisonOperation::NotEqual => "!=",
     };
-    format!("    bool {register} = valid && r{left} {operation} r{right};\n")
+    format!(
+        "    bool {register}_valid = r{left}_valid && r{right}_valid;\n    bool {register} = {register}_valid && r{left} {operation} r{right};\n"
+    )
 }
 
 fn select_register_source(
@@ -704,7 +811,7 @@ fn select_register_source(
         | PointAttributeElementType::Color => format!("{}(0.0)", glsl_type(kind)),
     };
     format!(
-        "    {} {register} = valid ? (r{condition} ? r{when_true} : r{when_false}) : {zero};\n",
+        "    bool {register}_valid = r{condition}_valid && r{when_true}_valid && r{when_false}_valid;\n    {} {register} = {register}_valid ? (r{condition} ? r{when_true} : r{when_false}) : {zero};\n",
         glsl_type(kind)
     )
 }
@@ -774,16 +881,16 @@ fn store_attribute_source(
     let components = ["x", "y", "z", "w"];
     for (index, component) in components.iter().take(component_count(kind)).enumerate() {
         let value = if kind == PointAttributeElementType::Integer {
-            format!("uint(valid ? {register} : 0)")
+            format!("uint(valid && r{value}_valid ? {register} : 0)")
         } else if kind == PointAttributeElementType::Boolean {
-            format!("valid && {register} ? 1u : 0u")
+            format!("valid && r{value}_valid && {register} ? 1u : 0u")
         } else {
             let access = if component_count(kind) == 1 {
                 register.to_string()
             } else {
                 format!("{register}.{component}")
             };
-            format!("floatBitsToUint(valid ? {access} : 0.0)")
+            format!("floatBitsToUint(valid && r{value}_valid ? {access} : 0.0)")
         };
         let suffix = if index == 0 {
             String::new()
@@ -796,6 +903,14 @@ fn store_attribute_source(
         source.push_str(&format!("    pointColumns[{base} + 3u] = 0u;\n"));
     }
     source
+}
+
+fn clear_attribute_source(attribute: u16, kind: PointAttributeElementType) -> String {
+    let stride_words = kind.gpu_layout().1 / 4;
+    let base = format!("uAttributeOffsets[{attribute}] + slot * {stride_words}u");
+    (0..stride_words)
+        .map(|word| format!("        pointColumns[{base} + {word}u] = 0u;\n"))
+        .collect()
 }
 
 fn ramp_source() -> String {
@@ -837,63 +952,4 @@ vec4 sample_point_ramp(uint rampIndex, float factor) {{
 "#,
         ramp_stride = POINT_MAX_RAMP_STOPS * RAMP_STOP_VEC4S
     )
-}
-
-fn program_data(program: &PointRenderProgram) -> Result<Vec<u8>, LibraryError> {
-    let mut values = vec![[0_u32; 4]; PROGRAM_DATA_VEC4S];
-    for (index, instruction) in program.instructions.iter().enumerate() {
-        if let PointInstruction::Constant { value } = instruction {
-            values[index] = packed_value(value)?;
-        }
-    }
-    for (ramp_index, ramp) in program.ramps.iter().enumerate() {
-        values[POINT_MAX_INSTRUCTIONS + ramp_index] = [
-            ramp.stops().len() as u32,
-            match ramp.spread() {
-                GradientSpread::Pad => 0,
-                GradientSpread::Repeat => 1,
-                GradientSpread::Reflect => 2,
-            },
-            0,
-            0,
-        ];
-        let base = PROGRAM_HEADER_VEC4S + ramp_index * POINT_MAX_RAMP_STOPS * RAMP_STOP_VEC4S;
-        for (stop_index, stop) in ramp.stops().iter().enumerate() {
-            let color = packed_value(&PropertyValue::ColorValue(stop.color().clone()))?;
-            values[base + stop_index * 2] = [
-                (stop.offset() as f32).to_bits(),
-                color[0],
-                color[1],
-                color[2],
-            ];
-            values[base + stop_index * 2 + 1] = [color[3], 0, 0, 0];
-        }
-    }
-    let mut bytes = Vec::with_capacity(PROGRAM_DATA_BYTES);
-    for value in values {
-        for component in value {
-            bytes.extend_from_slice(&component.to_ne_bytes());
-        }
-    }
-    Ok(bytes)
-}
-
-fn packed_value(value: &PropertyValue) -> Result<[u32; 4], LibraryError> {
-    let kind =
-        PointAttributeElementType::from_property_value(value).map_err(LibraryError::Validation)?;
-    match kind.pack_value(value).map_err(LibraryError::Validation)? {
-        PointAttributeGpuDefault::Number(value) => Ok([value.to_bits(), 0, 0, 0]),
-        PointAttributeGpuDefault::Integer(value) => Ok([value as u32, 0, 0, 0]),
-        PointAttributeGpuDefault::Boolean(value) => Ok([u32::from(value), 0, 0, 0]),
-        PointAttributeGpuDefault::Vec2(value) => Ok([value[0].to_bits(), value[1].to_bits(), 0, 0]),
-        PointAttributeGpuDefault::Vec3(value) => Ok([
-            value[0].to_bits(),
-            value[1].to_bits(),
-            value[2].to_bits(),
-            0,
-        ]),
-        PointAttributeGpuDefault::Vec4(value) | PointAttributeGpuDefault::Color(value) => {
-            Ok(value.map(f32::to_bits))
-        }
-    }
 }

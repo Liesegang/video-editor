@@ -10,11 +10,15 @@ use crate::model::frame::color::Color;
 
 mod color_value;
 mod evaluation;
+mod image_collection;
 mod paint;
 mod ui_type;
 
 pub use color_value::{ColorSpaceRef, ColorValue, ColorValueError};
 pub use evaluation::PropertySampleError;
+pub use image_collection::{
+    IMAGE_COLLECTION_MAX_ASSETS, ImageCollectionValue, ImageCollectionValueError,
+};
 pub use paint::{
     GradientGeometry, GradientSpread, GradientStop, GradientValue, Paint, PaintValueError,
     PatternKind, PatternValue,
@@ -852,6 +856,11 @@ impl PropertyDefinition {
                     "Property '{}' dropdown value {:?} is not an option",
                     self.name, value
                 ));
+            }
+            (PropertyUiType::ImageCollection, PropertyValue::ImageCollection(value)) => {
+                value
+                    .validate()
+                    .map_err(|error| format!("Property '{}' {error}", self.name))?;
             }
             _ => {}
         }

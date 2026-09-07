@@ -433,6 +433,7 @@ fn property_value_kind(value: &PropertyValue) -> &'static str {
         PropertyValue::Gradient(_) => "Gradient",
         PropertyValue::Pattern(_) => "Pattern",
         PropertyValue::Paint(_) => "Paint",
+        PropertyValue::ImageCollection(_) => "ImageCollection",
         PropertyValue::Array(_) => "Array",
         PropertyValue::Map(_) => "Map",
         PropertyValue::OpaqueJson(_) => "opaque JSON",

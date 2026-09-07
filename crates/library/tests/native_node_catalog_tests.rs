@@ -498,6 +498,7 @@ fn parse_data_type(value: &str, node_label: &str, port_name: &str) -> (PortDataT
         "Gradient" => PortDataType::Gradient,
         "Pattern" => PortDataType::Pattern,
         "Paint" => PortDataType::Paint,
+        "ImageCollection" => PortDataType::ImageCollection,
         "Curve" => PortDataType::Curve,
         "ParticleSystem" => PortDataType::ParticleSystem,
         "Material" => PortDataType::Material,

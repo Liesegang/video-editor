@@ -557,6 +557,13 @@ impl Renderer for SkiaRenderer {
         self.preflight_point_output(target_sizes)
     }
 
+    fn preflight_point_sprites(
+        &mut self,
+        sprites: &[std::sync::Arc<crate::rendering::renderer::ManagedImageResource>],
+    ) -> Result<(), LibraryError> {
+        self.preflight_sprite_output(sprites)
+    }
+
     fn draw_point_layer(
         &mut self,
         request: PointRasterRequest<'_>,

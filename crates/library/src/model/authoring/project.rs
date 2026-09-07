@@ -230,6 +230,7 @@ impl AuthoringProject {
         let placements = ItemPlacementOverlay::empty();
         self.validate_timelines_and_tracks(&placements)?;
         self.validate_assets()?;
+        validate_image_asset_references(self)?;
         self.validate_definitions_and_instances()?;
         self.validate_items(&placements)?;
         validate_transitions(self, &placements)?;

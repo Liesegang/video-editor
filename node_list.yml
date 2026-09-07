@@ -87,6 +87,21 @@ Gradient:
       side: Right
       exposure: Graph
       multiplicity: Single
+Image Collection:
+  category: Data
+  catalog_status: native
+  catalog_id: native.data.image-collection
+  runtime_status: implemented
+  model: Data.ImageCollection
+  description: Ordered references to imported Image Assets for point sprite selection
+  outputs:
+    - name: value
+      key: value
+      label: Value
+      type: ImageCollection
+      side: Right
+      exposure: Graph
+      multiplicity: Single
 Color Ramp:
   category: Color
   catalog_status: native
@@ -2807,7 +2822,14 @@ Sprite Renderer:
       label: Points
       type: PointSource
     - name: color
+      label: Tint
       type: Color
+    - name: sprites
+      type: ImageCollection
+    - name: selection_mode
+      type: String
+    - name: selection
+      type: Scalar
   outputs:
     - name: image
       type: Image

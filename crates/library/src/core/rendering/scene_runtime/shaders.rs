@@ -195,10 +195,18 @@ pub(super) fn point_vertex_source(
     kind: PointSourceKind,
     point_fields: bool,
     geometry_output: bool,
+    sprites: bool,
+    sprite_selection_field: bool,
 ) -> String {
     let source = kind
         .shader()
         .replace("// PARTICLE_STRUCT", PARTICLE_STRUCT_GLSL);
+    let sprite_declarations = sprites.then(|| {
+        POINT_SPRITE_DECLARATIONS.replace(
+            "POINT_MAX_SPRITES",
+            &crate::model::property::IMAGE_COLLECTION_MAX_ASSETS.to_string(),
+        )
+    });
     POINT_VERTEX
         .replace("// RENDER_POINT_STRUCT", RENDER_POINT_GLSL)
         .replace("// POINT_SOURCE", &source)
@@ -213,6 +221,18 @@ pub(super) fn point_vertex_source(
             } else {
                 ""
             },
+        )
+        .replace(
+            "// POINT_SPRITE_BUFFER",
+            if sprite_selection_field {
+                POINT_SPRITE_SELECTION_BUFFER
+            } else {
+                ""
+            },
+        )
+        .replace(
+            "// POINT_SPRITE_DECLARATIONS",
+            sprite_declarations.as_deref().unwrap_or(""),
         )
         .replace(
             "// POINT_COLOR_OUTPUT",
@@ -246,6 +266,50 @@ pub(super) fn point_vertex_source(
                 ""
             },
         )
+        .replace(
+            "// POINT_SPRITE_HIDDEN",
+            if sprites {
+                "vSpriteUv = vec2(-1.0);"
+            } else {
+                ""
+            },
+        )
+        .replace(
+            "// POINT_SPRITE_SETUP",
+            if sprites {
+                if sprite_selection_field {
+                    POINT_SPRITE_FIELD_SETUP
+                } else {
+                    POINT_SPRITE_UNIFORM_SETUP
+                }
+            } else {
+                "vec2 spriteAspect = vec2(1.0);"
+            },
+        )
+        .replace(
+            "// POINT_SPRITE_UV",
+            if sprites {
+                "vSpriteUv = mix(spriteUv.xy, spriteUv.zw, unitCorner + vec2(0.5));"
+            } else {
+                ""
+            },
+        )
+        .replace(
+            "// PARTICLE_RANDOM_FUNCTIONS",
+            if sprites {
+                PARTICLE_RANDOM_FUNCTIONS
+            } else {
+                ""
+            },
+        )
+        .replace(
+            "// POINT_SPRITE_INVALID_COLOR",
+            if point_fields {
+                "vLinearColor = vec4(0.0);"
+            } else {
+                ""
+            },
+        )
 }
 
 const POINT_VERTEX: &str = r#"#version 430 core
@@ -253,6 +317,8 @@ const POINT_VERTEX: &str = r#"#version 430 core
 // POINT_SOURCE
 // POINT_COLOR_BUFFER
 // POINT_GEOMETRY_BUFFER
+// POINT_SPRITE_BUFFER
+// POINT_SPRITE_DECLARATIONS
 
 uniform vec2 uLogicalSize;
 uniform vec2 uTargetSize;
@@ -262,6 +328,7 @@ uniform float uFocalLength;
 
 out vec2 vSpriteCoord;
 // POINT_COLOR_OUTPUT
+// PARTICLE_RANDOM_FUNCTIONS
 
 const vec2 QUAD_CORNERS[6] = vec2[6](
     vec2(-0.5, -0.5), vec2(0.5, -0.5), vec2(0.5, 0.5),
@@ -276,13 +343,16 @@ void main() {
         gl_Position = vec4(2.0, 2.0, 1.0, 1.0);
         vSpriteCoord = vec2(-1.0);
         // POINT_COLOR_HIDDEN
+        // POINT_SPRITE_HIDDEN
         return;
     }
     // POINT_GEOMETRY_ASSIGN
 
     vec3 position = point.position_size.xyz;
     float perspective = uFocalLength / max(1.0, uFocalLength + position.z);
-    vec2 corner = QUAD_CORNERS[corner_index];
+    // POINT_SPRITE_SETUP
+    vec2 unitCorner = QUAD_CORNERS[corner_index];
+    vec2 corner = unitCorner * spriteAspect;
     vec2 local_center = uLogicalSize * 0.5 + position.xy * perspective;
     vec2 local = local_center + corner * point.position_size.w * perspective;
     vec2 screen = vec2(
@@ -296,15 +366,18 @@ void main() {
     float depth = clamp(position.z / (uFocalLength * 4.0), -0.99, 0.99);
     gl_Position = vec4(ndc, depth, 1.0);
     vSpriteCoord = corner + vec2(0.5);
+    // POINT_SPRITE_UV
     // POINT_COLOR_ASSIGN
 }
 "#;
 
-pub(super) fn point_fragment_source(point_fields: bool) -> String {
+pub(super) fn point_fragment_source(point_fields: bool, sprites: bool) -> String {
     PARTICLE_FRAGMENT
         .replace(
             "// COLOR_UNIFORMS",
-            if point_fields {
+            if sprites && point_fields {
+                "in vec4 vLinearColor;"
+            } else if point_fields {
                 "uniform bool uOutputSrgba;\nin vec4 vLinearColor;"
             } else {
                 "uniform vec4 uPremultipliedColor;"
@@ -312,14 +385,38 @@ pub(super) fn point_fragment_source(point_fields: bool) -> String {
         )
         .replace(
             "// COLOR_FUNCTION",
-            if point_fields { LINEAR_TO_SRGB } else { "" },
+            if point_fields && !sprites {
+                LINEAR_TO_SRGB
+            } else {
+                ""
+            },
         )
         .replace(
             "// COLOR_OUTPUT",
-            if point_fields {
+            if sprites && point_fields {
+                POINT_SPRITE_FIELD_COLOR_OUTPUT
+            } else if sprites {
+                POINT_SPRITE_UNIFORM_COLOR_OUTPUT
+            } else if point_fields {
                 POINT_COLOR_OUTPUT
             } else {
                 "output_color = uPremultipliedColor * coverage;"
+            },
+        )
+        .replace(
+            "// SPRITE_FRAGMENT_DECLARATIONS",
+            if sprites {
+                "uniform sampler2D uSpriteAtlas;\nin vec2 vSpriteUv;"
+            } else {
+                ""
+            },
+        )
+        .replace(
+            "// SPRITE_COVERAGE",
+            if sprites {
+                "vec4 spriteSample = texture(uSpriteAtlas, vSpriteUv);\n    float coverage = spriteSample.a;"
+            } else {
+                "float radius = length(vSpriteCoord - vec2(0.5)) * 2.0;\n    float coverage = 1.0 - smoothstep(0.82, 1.0, radius);"
             },
         )
 }
@@ -327,12 +424,12 @@ pub(super) fn point_fragment_source(point_fields: bool) -> String {
 const PARTICLE_FRAGMENT: &str = r#"#version 430 core
 // COLOR_UNIFORMS
 in vec2 vSpriteCoord;
+// SPRITE_FRAGMENT_DECLARATIONS
 layout(location = 0) out vec4 output_color;
 // COLOR_FUNCTION
 
 void main() {
-    float radius = length(vSpriteCoord - vec2(0.5)) * 2.0;
-    float coverage = 1.0 - smoothstep(0.82, 1.0, radius);
+    // SPRITE_COVERAGE
     if (coverage <= 0.0) {
         discard;
     }
@@ -346,6 +443,52 @@ const POINT_COLOR_BUFFER: &str = r#"layout(std430, binding = 2) readonly buffer 
 const POINT_GEOMETRY_BUFFER: &str = r#"layout(std430, binding = 4) readonly buffer PointGeometryBuffer {
     vec4 pointGeometry[];
 };"#;
+
+const POINT_SPRITE_SELECTION_BUFFER: &str = r#"layout(std430, binding = 5) readonly buffer PointSpriteSelectionBuffer {
+    float pointSpriteSelection[];
+};"#;
+
+const POINT_SPRITE_DECLARATIONS: &str = r#"
+uniform uint uSpriteCount;
+uniform uint uSpriteSeed;
+uniform bool uSpriteRandom;
+uniform float uSpriteSelection;
+uniform vec4 uSpriteRects[POINT_MAX_SPRITES];
+uniform vec2 uSpriteAspects[POINT_MAX_SPRITES];
+out vec2 vSpriteUv;
+"#;
+
+const POINT_SPRITE_FIELD_SETUP: &str = r#"
+    float spriteChoice = uSpriteRandom
+        ? random_01(uSpriteSeed, point.serial, 2u)
+        : pointSpriteSelection[particle_index];
+    if (!uSpriteRandom && (isnan(spriteChoice) || isinf(spriteChoice))) {
+        gl_Position = vec4(2.0, 2.0, 1.0, 1.0);
+        vSpriteCoord = vec2(-1.0);
+        vSpriteUv = vec2(-1.0);
+        // POINT_SPRITE_INVALID_COLOR
+        return;
+    }
+    uint spriteIndex = min(uint(floor(clamp(spriteChoice, 0.0, 1.0) * float(uSpriteCount))), uSpriteCount - 1u);
+    vec4 spriteUv = uSpriteRects[spriteIndex];
+    vec2 spriteAspect = uSpriteAspects[spriteIndex];
+"#;
+
+const POINT_SPRITE_UNIFORM_SETUP: &str = r#"
+    float spriteChoice = uSpriteRandom
+        ? random_01(uSpriteSeed, point.serial, 2u)
+        : uSpriteSelection;
+    if (!uSpriteRandom && (isnan(spriteChoice) || isinf(spriteChoice))) {
+        gl_Position = vec4(2.0, 2.0, 1.0, 1.0);
+        vSpriteCoord = vec2(-1.0);
+        vSpriteUv = vec2(-1.0);
+        // POINT_SPRITE_INVALID_COLOR
+        return;
+    }
+    uint spriteIndex = min(uint(floor(clamp(spriteChoice, 0.0, 1.0) * float(uSpriteCount))), uSpriteCount - 1u);
+    vec4 spriteUv = uSpriteRects[spriteIndex];
+    vec2 spriteAspect = uSpriteAspects[spriteIndex];
+"#;
 
 const LINEAR_TO_SRGB: &str = r#"
 float linear_to_srgb(float value) {
@@ -365,4 +508,17 @@ const POINT_COLOR_OUTPUT: &str = r#"
         )
         : vLinearColor.rgb;
     output_color = vec4(rgb * vLinearColor.a, vLinearColor.a) * coverage;
+"#;
+
+const POINT_SPRITE_FIELD_COLOR_OUTPUT: &str = r#"
+    if (spriteSample.a <= 0.0 || vLinearColor.a <= 0.0) discard;
+    output_color = vec4(
+        spriteSample.rgb * vLinearColor.rgb * vLinearColor.a,
+        spriteSample.a * vLinearColor.a
+    );
+"#;
+
+const POINT_SPRITE_UNIFORM_COLOR_OUTPUT: &str = r#"
+    if (spriteSample.a <= 0.0 || uPremultipliedColor.a <= 0.0) discard;
+    output_color = spriteSample * uPremultipliedColor;
 "#;

@@ -3,7 +3,7 @@ use crate::model::authoring::{ModuleConnection, ModuleConnectionId};
 use crate::model::node::{ColorContent, Node, NodeContent, ParticleNodeRole, PointNodeRole};
 use crate::model::point::PointAttributeElementType;
 
-fn grid_export_project() -> Arc<AuthoringProject> {
+pub(super) fn grid_export_project() -> Arc<AuthoringProject> {
     let mut project = particle_export_project().as_ref().clone();
     let definition = project.module_definitions.values_mut().next().unwrap();
     let renderer_id = definition

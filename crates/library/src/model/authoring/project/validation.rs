@@ -3,15 +3,217 @@ use std::collections::{HashMap, HashSet};
 use crate::model::property::{PropertyMap, PropertyValue};
 
 use super::super::{
-    AppearanceOperation, AttachmentOwner, AttachmentStage, AuthoringProject, AutomatableParameter,
-    AutomationTrack, BuiltinEffectInstance, CompositionParameter, DurationPolicy, MediaTime,
-    ProcessorParameterContract, PublishedParameter, TextEnsembleOperation, TimelineInterval,
-    TimelineItemId, Transition, TransitionMediaType, appearance_direct_contract_is_compatible,
-    authored_parameter_value_is_compatible, property_value_type,
-    text_ensemble_direct_contract_is_compatible,
+    AppearanceOperation, AttachmentOwner, AttachmentProcessor, AttachmentStage, AuthoringProject,
+    AutomatableParameter, AutomationTrack, BuiltinEffectInstance, CompositionParameter,
+    DurationPolicy, MediaTime, ProcessorParameterContract, PublishedParameter,
+    TextEnsembleOperation, TimelineInterval, TimelineItemId, Transition, TransitionMediaType,
+    appearance_direct_contract_is_compatible, authored_parameter_value_is_compatible,
+    property_value_type, text_ensemble_direct_contract_is_compatible,
 };
 use super::item_placement::{ItemPlacementOverlay, TimelineItemOrderIndex};
 use super::transition_module::validate_transition_processor;
+
+impl AuthoringProject {
+    pub(crate) fn validate_property_asset_references(
+        &self,
+        value: &PropertyValue,
+        owner: &str,
+    ) -> Result<(), String> {
+        validate_property_image_asset_references(self, value, owner)
+    }
+}
+
+pub(super) fn validate_property_image_asset_references(
+    project: &AuthoringProject,
+    value: &PropertyValue,
+    owner: &str,
+) -> Result<(), String> {
+    let mut result = Ok(());
+    value.visit_image_collections(&mut |collection| {
+        if let Err(error) = collection.validate() {
+            result = Err(format!("{owner} has invalid {error}"));
+        }
+    });
+    if let Err(error) = result {
+        return Err(error);
+    }
+    result = Ok(());
+    value.visit_image_asset_ids(&mut |asset_id| match project
+        .assets
+        .iter()
+        .find(|asset| asset.id == asset_id)
+    {
+        Some(asset) if asset.kind == crate::model::asset::AssetKind::Image => {}
+        Some(asset) => {
+            result = Err(format!(
+                "{owner} references non-Image Asset {asset_id} ({:?})",
+                asset.kind
+            ));
+        }
+        None => result = Err(format!("{owner} references missing Image Asset {asset_id}")),
+    });
+    result
+}
+
+pub(super) fn validate_image_asset_references(project: &AuthoringProject) -> Result<(), String> {
+    fn validate_property_map(
+        project: &AuthoringProject,
+        properties: &PropertyMap,
+        owner: &str,
+    ) -> Result<(), String> {
+        for (_, property) in properties.iter() {
+            for value in property.properties.values() {
+                validate_property_image_asset_references(project, value, owner)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_track(
+        project: &AuthoringProject,
+        track: &AutomationTrack,
+        owner: &str,
+    ) -> Result<(), String> {
+        for keyframe in &track.keyframes {
+            validate_property_image_asset_references(project, &keyframe.value, owner)?;
+        }
+        Ok(())
+    }
+
+    for timeline in project.timelines.values() {
+        validate_property_map(project, &timeline.authored_properties, "Timeline Property")?;
+        for parameter in &timeline.published_parameters {
+            validate_property_image_asset_references(
+                project,
+                &parameter.default_value,
+                "Composition parameter default",
+            )?;
+        }
+    }
+    for track in project.tracks.values() {
+        validate_property_map(project, &track.authored_properties, "Track Property")?;
+    }
+    for item in project.items.values() {
+        validate_property_map(project, &item.authored_properties, "Timeline item Property")?;
+        match &item.source {
+            super::super::SourceRef::Text {
+                appearance_operations,
+                ensemble_operations,
+                ..
+            } => {
+                for operation in appearance_operations {
+                    validate_property_map(
+                        project,
+                        &operation.properties,
+                        "Text Appearance Property",
+                    )?;
+                }
+                for operation in ensemble_operations {
+                    validate_property_map(
+                        project,
+                        &operation.properties,
+                        "Text Ensemble Property",
+                    )?;
+                }
+            }
+            super::super::SourceRef::Shape { shape } => {
+                for value in shape.parameters.values() {
+                    validate_property_image_asset_references(project, value, "Shape parameter")?;
+                }
+                for operation in &shape.appearance_operations {
+                    validate_property_map(
+                        project,
+                        &operation.properties,
+                        "Shape Appearance Property",
+                    )?;
+                }
+            }
+            super::super::SourceRef::Composition(instance) => {
+                for value in instance.parameter_overrides.values() {
+                    validate_property_image_asset_references(
+                        project,
+                        value,
+                        "Composition override",
+                    )?;
+                }
+                for overrides in &instance.transition_module_overrides {
+                    for value in overrides.parameter_overrides.values() {
+                        validate_property_image_asset_references(
+                            project,
+                            value,
+                            "Transition placement override",
+                        )?;
+                    }
+                    for track in overrides.automation_tracks.values().flatten() {
+                        validate_track(project, track, "Transition placement automation")?;
+                    }
+                }
+            }
+            super::super::SourceRef::Module(invocation) => {
+                for track in invocation.automation_tracks.values() {
+                    validate_track(project, track, "Module invocation automation")?;
+                }
+            }
+            super::super::SourceRef::Asset { .. } | super::super::SourceRef::Solid { .. } => {}
+        }
+    }
+    for definition in project.module_definitions.values() {
+        for node in definition.graph.nodes.values() {
+            validate_property_map(project, node.properties(), "Module Node Property")?;
+        }
+        for parameter in &definition.interface.parameters {
+            validate_property_image_asset_references(
+                project,
+                &parameter.default_value,
+                "Published parameter default",
+            )?;
+        }
+    }
+    for instance in project.module_instances.values() {
+        for value in instance.parameter_overrides.values() {
+            validate_property_image_asset_references(project, value, "Module instance override")?;
+        }
+    }
+    for attachment in project.attachments.values() {
+        match &attachment.processor {
+            AttachmentProcessor::BuiltinEffect(effect) => {
+                for parameter in effect.parameters.values() {
+                    validate_property_image_asset_references(
+                        project,
+                        &parameter.value,
+                        "Effect parameter",
+                    )?;
+                    if let Some(track) = &parameter.automation {
+                        validate_track(project, track, "Effect automation")?;
+                    }
+                }
+            }
+            AttachmentProcessor::Module(invocation) => {
+                for track in invocation.automation_tracks.values() {
+                    validate_track(project, track, "Module Effect automation")?;
+                }
+            }
+        }
+    }
+    for transition in project.transitions.values() {
+        for parameter in transition.parameters.values() {
+            validate_property_image_asset_references(
+                project,
+                &parameter.value,
+                "Transition parameter",
+            )?;
+            if let Some(track) = &parameter.automation {
+                validate_track(project, track, "Transition automation")?;
+            }
+        }
+        if let Some(module) = transition.processor.module_processor() {
+            for track in module.automation_tracks.values() {
+                validate_track(project, track, "Transition Module automation")?;
+            }
+        }
+    }
+    Ok(())
+}
 
 pub(super) fn validate_text_ensemble_operations(
     operations: &[TextEnsembleOperation],
